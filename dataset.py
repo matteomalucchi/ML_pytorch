@@ -4,18 +4,78 @@ import torch
 import math
 import logging
 import os
+import coffea
 
-from DNN_input_lists import (
-    DNN_input_variables,
-    signal_list,
-    background_list,
-    background_list_noVV,
-)
+from DNN_input_lists import *
 
 logger = logging.getLogger(__name__)
 
 
-def load_data(args):
+def get_variables(files, dimension, args, sample_list, sig_bkg, data_format="root"):
+    for i, file in enumerate(files):
+        logger.info(f"Loading file {file}")
+        if data_format == "root":
+            # open each file and get the Events tree using uproot
+            file = uproot.open(f"{file}:Events")
+            variables_array = np.array(
+                [file[input].array(library="np") for input in DNN_input_variables]
+            )
+        elif data_format == "coffea":
+            variables_dict = {}
+            file = coffea.load(file)
+            for sample in sample_list:
+                for dataset in file["columns"][sample].keys():
+                    for category in file["columns"][sample][dataset].keys():
+                        if sample in category:
+                            vars = file["columns"][sample][dataset][category]
+                            weights=file["columns"][sample][dataset][category]["weight"].value
+                            # break
+            for k in vars.keys():
+                if k in DNN_input_variables:
+                    variables_dict[k] = np.array(vars[k].value)
+            variables_array = np.array(
+                [variables_dict[input] for input in DNN_input_variables]
+            )
+            variables_array = np.append(variables_array, weights, axis=0)
+
+
+        # concatenate all the variables into a single torch tensor
+        if i == 0:
+            variables = torch.tensor(variables_array, dtype=torch.float32)[
+                :, : math.ceil(dimension)
+            ]
+        else:
+            variables = torch.cat(
+                (
+                    variables,
+                    torch.tensor(variables_array, dtype=torch.float32),
+                ),
+                dim=1,
+            )[:, : math.ceil(dimension)]
+
+    logger.info(f"number of {sig_bkg} events: {variables.shape[1]}")
+
+    # sum of weights
+    sumw = variables[-1].sum()
+    logger.info(f"sum of weights {sig_bkg}: {sumw}")
+
+    # multiply the weights by the weight factor
+    variables[-1] = variables[-1] * args.weights[0]
+
+    sumw = variables[-1].sum()
+    logger.info(f"sum of weights {sig_bkg}: {sumw}")
+
+    flag_tensor = (
+        torch.ones_like(variables[0], dtype=torch.float32).unsqueeze(0)
+        if sig_bkg == "signal"
+        else torch.zeros_like(variables[0], dtype=torch.float32).unsqueeze(0)
+    )
+
+    X = (variables, flag_tensor)
+    return X
+
+
+def load_data(args, data_format="root"):
     batch_size = args.batch_size
     logger.info(f"Batch size: {batch_size}")
 
@@ -27,90 +87,27 @@ def load_data(args):
     # list of signal and background files
     sig_files = []
     bkg_files = []
-    for x in dirs:
-        files = os.listdir(x)
-        for file in files:
-            for signal in signal_list:
-                if signal in file and "SR" in file:
-                    sig_files.append(x + file)
-            for background in background_list_noVV if args.noVV else background_list:
-                if background in file and "SR" in file:
-                    bkg_files.append(x + file)
 
-    # open each file and get the Events tree using uproot
-    for i, file in enumerate(sig_files):
-        logger.info(f"Loading file {file}")
-        sig_file = uproot.open(f"{file}:Events")
-        variables_sig_array = np.array(
-            [sig_file[input].array(library="np") for input in DNN_input_variables]
-        )
-        # concatenate all the variables into a single torch tensor
-        if i == 0:
-            variables_sig = torch.tensor(variables_sig_array, dtype=torch.float32)[
-                :, : math.ceil(dimension)
-            ]
-        else:
-            variables_sig = torch.cat(
-                (
-                    variables_sig,
-                    torch.tensor(variables_sig_array, dtype=torch.float32),
-                ),
-                dim=1,
-            )[:, : math.ceil(dimension)]
+    if data_format == "root":
+        for x in dirs:
+            files = os.listdir(x)
+            for file in files:
+                for signal in signal_list:
+                    if signal in file and "SR" in file:
+                        sig_files.append(x + file)
+                for background in (
+                    background_list_noVV if args.noVV else background_list
+                ):
+                    if background in file and "SR" in file:
+                        bkg_files.append(x + file)
+    elif data_format == "coffea":
+        sig_files.append(dirs + "/output_all.coffea")
+        bkg_files.append(dirs + "/output_all.coffea")
 
-    logger.info(f"number of signal events: {variables_sig.shape[1]}")
 
-    # sum of weights
-    sumw_sig = variables_sig[-1].sum()
-    logger.info(f"sum of weights sig: {sumw_sig}")
+    X_sig = get_variables(sig_files, dimension, args, signal_list, "signal", data_format)
+    X_bkg = get_variables(bkg_files, dimension, args, background_list, "background", data_format)
 
-    # multiply the weights by the weight factor
-    variables_sig[-1] = variables_sig[-1] * args.weights[0]
-
-    sumw_sig = variables_sig[-1].sum()
-    logger.info(f"sum of weights sig: {sumw_sig}")
-
-    ones_tensor = torch.ones_like(variables_sig[0], dtype=torch.float32).unsqueeze(0)
-
-    X_sig = (variables_sig, ones_tensor)
-
-    #######################################################
-    for i, file in enumerate(bkg_files):
-        logger.info(f"Loading file {file}")
-        bkg_file = uproot.open(f"{file}:Events")
-        variables_bkg_array = np.array(
-            [bkg_file[input].array(library="np") for input in DNN_input_variables]
-        )
-        if i == 0:
-            variables_bkg = torch.tensor(variables_bkg_array, dtype=torch.float32)[
-                :, : math.floor(dimension)
-            ]
-        else:
-            variables_bkg = torch.cat(
-                (
-                    variables_bkg,
-                    torch.tensor(variables_bkg_array, dtype=torch.float32),
-                ),
-                dim=1,
-            )[:, : math.floor(dimension)]
-
-    logger.info(f"number of background events: {variables_bkg.shape[1]}")
-
-    # sum of weights
-    sumw_bkg = variables_bkg[-1].sum()
-    logger.info(f"sum of weights bkg: {sumw_bkg}")
-
-    # multiply the weights by the weight factor
-    variables_bkg[-1] = variables_bkg[-1] * args.weights[1]
-
-    sumw_bkg = variables_bkg[-1].sum()
-    logger.info(f"sum of weights bkg: {sumw_bkg}")
-
-    zeros_tensor = torch.zeros_like(variables_bkg[0], dtype=torch.float32).unsqueeze(0)
-
-    X_bkg = (variables_bkg, zeros_tensor)
-
-    #######################################################
     X_fts = torch.cat((X_sig[0], X_bkg[0]), dim=1).transpose(1, 0)
     X_lbl = torch.cat((X_sig[1], X_bkg[1]), dim=1).transpose(1, 0)
 

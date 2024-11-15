@@ -8,7 +8,7 @@ import sys
 # PyTorch TensorBoard support
 #from torch.utils.tensorboard import SummaryWriter
 
-from dataset import load_data
+from dataset import load_data_root
 from tools import get_model_parameters_number, train_val_one_epoch, eval_model, export_onnx
 from DNN_model import get_model
 from args_train import args
@@ -62,7 +62,7 @@ if __name__ == "__main__":
         X_fts,
         X_lbl,
         batch_size,
-    ) = load_data(args)
+    ) = load_data_root(args)
 
     if args.gpus:
         gpus = [int(i) for i in args.gpus.split(',')]
