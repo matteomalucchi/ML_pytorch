@@ -8,13 +8,13 @@ import sys
 # PyTorch TensorBoard support
 #from torch.utils.tensorboard import SummaryWriter
 
-from dataset import load_data_root
+from dataset import load_data
 from tools import get_model_parameters_number, train_val_one_epoch, eval_model, export_onnx
 from configs.DNN_model import get_model
 from args_train import args
 
 sys.path.append('../')
-from logger import setup_logger
+from setup_logger import setup_logger
 
 
 if args.histos:
@@ -62,8 +62,7 @@ if __name__ == "__main__":
         X_fts,
         X_lbl,
         batch_size,
-    ) = load_data_root(args)
-
+    ) = load_data(args, "coffea")
     if args.gpus:
         gpus = [int(i) for i in args.gpus.split(',')]
         device = torch.device(gpus[0])

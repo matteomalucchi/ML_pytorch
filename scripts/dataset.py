@@ -5,7 +5,9 @@ import math
 import logging
 import os
 import coffea
+import sys
 
+sys.path.append("../")
 from configs.DNN_input_lists import *
 
 logger = logging.getLogger(__name__)
@@ -100,8 +102,8 @@ def load_data(args, data_format="root"):
                     if background in file and "SR" in file:
                         bkg_files.append(x + file)
     elif data_format == "coffea":
-        sig_files.append(dirs + "/output_all.coffea")
-        bkg_files.append(dirs + "/output_all.coffea")
+        sig_files=[dir + "/output_all.coffea" for dir in dirs]
+        bkg_files=[dir + "/output_all.coffea" for dir in dirs]
 
 
     X_sig = get_variables(sig_files, dimension, args, signal_list, "signal", data_format)

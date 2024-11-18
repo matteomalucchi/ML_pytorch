@@ -1,2 +1,4 @@
 *coffea
 *onnx
+__pycache__/
+*.log
