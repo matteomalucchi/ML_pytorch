@@ -6,7 +6,7 @@ import logging
 import os
 import coffea
 
-from DNN_input_lists import *
+from configs.DNN_input_lists import *
 
 logger = logging.getLogger(__name__)
 
@@ -24,12 +24,11 @@ def get_variables(files, dimension, args, sample_list, sig_bkg, data_format="roo
             variables_dict = {}
             file = coffea.load(file)
             for sample in sample_list:
-                for dataset in file["columns"][sample].keys():
-                    for category in file["columns"][sample][dataset].keys():
-                        if sample in category:
-                            vars = file["columns"][sample][dataset][category]
-                            weights=file["columns"][sample][dataset][category]["weight"].value
-                            # break
+                for dataset in list(file["columns"][sample].keys())[0]:
+                    for category in list(file["columns"][sample][dataset].keys())[0]:
+                        vars = file["columns"][sample][dataset][category]
+                        weights=file["columns"][sample][dataset][category]["weight"].value
+                        # break
             for k in vars.keys():
                 if k in DNN_input_variables:
                     variables_dict[k] = np.array(vars[k].value)

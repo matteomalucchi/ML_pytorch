@@ -10,7 +10,7 @@ import sys
 
 from dataset import load_data_root
 from tools import get_model_parameters_number, train_val_one_epoch, eval_model, export_onnx
-from DNN_model import get_model
+from configs.DNN_model import get_model
 from args_train import args
 
 sys.path.append('../')
