@@ -4,16 +4,24 @@ import numpy as np
 from datetime import datetime
 import time
 import sys
+from omegaconf import OmegaConf
+
 
 # PyTorch TensorBoard support
-#from torch.utils.tensorboard import SummaryWriter
+# from torch.utils.tensorboard import SummaryWriter
 
 from dataset import load_data
-from tools import get_model_parameters_number, train_val_one_epoch, eval_model, export_onnx
-from configs.DNN_model import get_model
+from tools import (
+    get_model_parameters_number,
+    train_val_one_epoch,
+    eval_model,
+    export_onnx,
+)
+
+# from configs.DNN_model import get_model
 from args_train import args
 
-sys.path.append('../')
+sys.path.append("../")
 from setup_logger import setup_logger
 
 
@@ -29,7 +37,7 @@ if __name__ == "__main__":
     start_time = time.time()
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    main_dir = f"out/{timestamp}_{args.name}_batchsize{args.batch_size}_weights{args.weights[0]}-{args.weights[1]}"
+    main_dir = f"out/{timestamp}_{args.name}_batchsize{args.batch_size}"+(f"_weights{args.weights[0]}-{args.weights[1]}" if args.weights else "")
 
     best_vloss = 1_000_000.0
     best_vaccuracy = 0.0
@@ -38,18 +46,26 @@ if __name__ == "__main__":
 
     loaded_epoch = -1
 
+    cfg = OmegaConf.load(args.config)
+    print("configuration: ", cfg)
+
+    exec(f"from {cfg.ML_model} import get_model")
+
     if args.load_model or args.eval_model:
         main_dir = os.path.dirname(
             args.load_model if args.load_model else args.eval_model
         ).replace("models", "")
 
     os.makedirs(main_dir, exist_ok=True)
-    #writer = SummaryWriter(f"runs/DNN_trainer_{timestamp}")
+    # writer = SummaryWriter(f"runs/DNN_trainer_{timestamp}")
     # Create the logger
     logger = setup_logger(f"{main_dir}/logger_{timestamp}.log")
 
-    logger.info('args:\n - %s', '\n - '.join(str(it) for it in args.__dict__.items()))
+    logger.info("args:\n - %s", "\n - ".join(str(it) for it in args.__dict__.items()))
 
+    input_variables = cfg.input_variables
+    signal_list = cfg.signal_list
+    background_list = cfg.background_list
 
     # Load data
     (
@@ -62,12 +78,12 @@ if __name__ == "__main__":
         X_fts,
         X_lbl,
         batch_size,
-    ) = load_data(args, "coffea")
+    ) = load_data(args, cfg.data_format, input_variables, signal_list, background_list)
     if args.gpus:
-        gpus = [int(i) for i in args.gpus.split(',')]
+        gpus = [int(i) for i in args.gpus.split(",")]
         device = torch.device(gpus[0])
     else:
-        gpus=None
+        gpus = None
         device = torch.device("cpu")
     logger.info(f"Using {device} device")
 
@@ -75,7 +91,7 @@ if __name__ == "__main__":
 
     # Get model
     model, loss_fn, optimizer = get_model(input_size, device)
-    num_parameters=get_model_parameters_number(model)
+    num_parameters = get_model_parameters_number(model)
 
     logger.info(f"Number of parameters: {num_parameters}")
 
@@ -114,7 +130,7 @@ if __name__ == "__main__":
             avg_loss, avg_accuracy, *_ = train_val_one_epoch(
                 True,
                 epoch,
-                #writer,
+                # writer,
                 model,
                 training_loader,
                 loss_fn,
@@ -136,7 +152,7 @@ if __name__ == "__main__":
             ) = train_val_one_epoch(
                 False,
                 epoch,
-                #writer,
+                # writer,
                 model,
                 val_loader,
                 loss_fn,

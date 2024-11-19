@@ -60,6 +60,13 @@ parser.add_argument(
     help="Directory for data",
 )
 parser.add_argument(
+    "--weights",
+    nargs="+",
+    default=[], #[100, 0.014],  # [50, 0.01] for csv, [50, 0.014] for flav
+    help="Weights for the loss function (signal, background)",
+    type=float,
+)
+parser.add_argument(
     "--eval",
     action="store_true",
     help="Evaluate the model",
@@ -101,24 +108,19 @@ parser.add_argument(
     action="store_true",
 )
 parser.add_argument(
-    "--weights",
-    nargs="+",
-    default=[100, 0.014],  # [50, 0.01] for csv, [50, 0.014] for flav
-    help="Weights for the loss function (signal, background)",
-    type=float,
-)
-parser.add_argument(
     "--name",
     default="",
     help="Name for the directory",
     type=str,
 )
 parser.add_argument(
-    "--noVV",
-    default=False,
-    help="Remove VV from the background",
-    action="store_true",
+    "-c",
+    "--config",
+    default="../configs/DNN_input_lists_ggF_VBF.yml",
+    help="Path to the configuration file",
+    type=str,
 )
+
 
 parser.print_help()
 args = parser.parse_args()
