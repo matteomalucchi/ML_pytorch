@@ -4,7 +4,7 @@ import torch
 import math
 import logging
 import os
-import coffea
+from coffea.util import load
 import sys
 
 sys.path.append("../")
@@ -24,7 +24,7 @@ def get_variables(files, dimension, args, sample_list, sig_bkg, data_format="roo
             )
         elif data_format == "coffea":
             variables_dict = {}
-            file = coffea.load(file)
+            file = load(file)
             for sample in sample_list:
                 for dataset in list(file["columns"][sample].keys())[0]:
                     for category in list(file["columns"][sample][dataset].keys())[0]:
