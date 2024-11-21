@@ -4,7 +4,10 @@ import mplhep as hep
 from scipy.ndimage import uniform_filter1d
 import os
 import numpy as np
+from glob import glob
 
+hep.style.use("CMS")
+hep.cms.label(loc=0)
 
 def read_from_txt(file):
     # get accuracy and loss and separate them between training and validation
@@ -55,7 +58,7 @@ def plot_history(
         "loss": "-",
     }
 
-    plt.figure(figsize=(13, 13))
+    plt.figure()
 
     for type, info in infos_dict.items():
         print("len info train: ", len(info["train"]))
@@ -83,17 +86,23 @@ def plot_history(
             linestyle=line_style[type],
         )
 
-    plt.xlabel("Epoch", fontsize=20, loc="right")
+    plt.xlabel("Epoch")
     # plt.ylabel(type.capitalize())
     # legend = ax.legend(frameon=False)
     plt.legend(
-        fontsize="15",
+        # fontsize="15",
         frameon=False,
         loc="center right",
     )
-    hep.style.use("CMS")
-    hep.cms.label("Preliminary")
-    hep.cms.label(year="UL18")
+
+    hep.cms.lumitext(
+        "2022 (13.6 TeV)",
+    )
+    hep.cms.text(
+        text="Simulation Preliminary",
+        loc=0,
+    )
+
     plt.grid()
     plt.savefig(f"{dir}/history.png", bbox_inches="tight")
     if show:
@@ -127,7 +136,12 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    train_accuracy, train_loss, val_accuracy, val_loss = read_from_txt(args.input_path)
+    #find the file starting with logger in args.input_path using os.listdir
+    log_file=glob(args.input_path+"/*logger*")[0]
+
+    print(log_file)
+
+    train_accuracy, train_loss, val_accuracy, val_loss = read_from_txt(log_file)
 
     plot_history(
         train_accuracy,

@@ -6,7 +6,7 @@ from scipy import stats
 from sklearn.metrics import roc_curve, roc_auc_score
 
 hep.style.use("CMS")
-
+hep.cms.label(loc=0)
 
 
 def handle_arrays(score_lbl_tensor):
@@ -26,7 +26,7 @@ def plot_sig_bkg_distributions(
     sig_score_train, bkg_score_train = handle_arrays(score_lbl_tensor_train)
     sig_score_test, bkg_score_test = handle_arrays(score_lbl_tensor_test)
 
-    plt.figure(figsize=(13, 13))
+    fig, ax = plt.subplots()
     sig_train = plt.hist(
         sig_score_train,
         bins=30,
@@ -50,6 +50,11 @@ def plot_sig_bkg_distributions(
         fill=False,
         hatch="\\\\",
     )
+
+
+    max_bin= max(max(sig_train[0]), max(bkg_train[0]))
+    #set limit on y-axis
+    ax.set_ylim(top=max_bin*1.5)
 
     legend_test_list = []
     for score, color, label in zip(
@@ -114,18 +119,18 @@ def plot_sig_bkg_distributions(
     # print the AUC on the plot
     plt.text(
         0.5,
-        0.725,
+        0.75,
         f"AUC = {roc_auc:.2f}",
         fontsize=20,
         transform=plt.gca().transAxes
     )
 
-    plt.xlabel("DNN output", fontsize=20, loc="right")
-    plt.ylabel("Normalized counts", fontsize=20, loc="top")
+    plt.xlabel("DNN output")
+    plt.ylabel("Normalized counts")
     plt.legend(
-        # loc="upper center",
-        loc="center",
-        bbox_to_anchor=(0.3, 0.9),
+        loc="upper left",
+        # loc="center",
+        # bbox_to_anchor=(0.3, 0.9),
         fontsize=20,
         handles=[
             sig_train[2][0],
@@ -137,15 +142,12 @@ def plot_sig_bkg_distributions(
     )
     # plt.plot([0.09, 0.88], [8.35, 8.35], color="lightgray", linestyle="-", transform=plt.gca().transAxes)
 
-    # hep.style.use("CMS")
-    # hep.cms.label("Preliminary")
-    # hep.cms.label(year="UL18")
     hep.cms.lumitext(
         "2022 (13.6 TeV)",
     )
     hep.cms.text(
-        text="Simulation\nPreliminary",
-        loc=2,
+        text="Simulation Preliminary",
+        loc=0,
     )
     plt.savefig(f"{dir}/sig_bkg_distributions.png", bbox_inches="tight", dpi=300)
     if show:
