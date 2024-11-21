@@ -26,17 +26,9 @@ def get_variables(files, dimension, args, input_variables,sample_list, sig_bkg, 
         elif data_format == "coffea":
             variables_dict = {}
             file = load(file_name)
-            # print(file)
             for sample in sample_list:
-                print("sample", sample)
                 for dataset in list(file["columns"][sample].keys()):
-                    print("dataset", dataset)
                     for category in list(file["columns"][sample][dataset].keys()):
-                        print("category", category)
-                        print(
-                            "variables",
-                            file["columns"][sample][dataset][category].keys(),
-                        )
                         vars = file["columns"][sample][dataset][category]
                         weights = file["columns"][sample][dataset][category][
                             "weight"
@@ -63,10 +55,10 @@ def get_variables(files, dimension, args, input_variables,sample_list, sig_bkg, 
                 0,
                 1,
             )
-            print("variables_array", variables_array.shape)
-            print("weights", weights.shape)
+            logger.info(f"variables_array {variables_array.shape}")
+            logger.info(f"weights {weights.shape}")
             variables_array = np.append(variables_array, weights, axis=0)
-            print("variables_array complete", variables_array.shape)
+            logger.info(f"variables_array complete {variables_array.shape}")
 
         # concatenate all the variables into a single torch tensor
         if i == 0:
@@ -131,53 +123,46 @@ def load_data(args, data_format, input_variables, signal_list, background_list):
     # sum of weights
     sumw_sig = X_sig[0][-1].sum()
     sumw_bkg = X_bkg[0][-1].sum()
-    print("sig weight", X_sig[0][-1][30:100], torch.all( (X_sig[0][-1]>=50.8362) & (X_sig[0][-1]<=50.8364), axis=0))
     logger.info(f"sum of weights before rescaling signal: {sumw_sig}")
-    print("bkg weight", X_bkg[0][-1])
     logger.info(f"sum of weights before rescaling backgound: {sumw_bkg}")
 
 
     if args.weights:
-        sig_weight = args.weights[0]
-        bkg_weight = args.weights[1]
+        sig_class_weights = args.weights[0]
+        bkg_class_weights = args.weights[1]
     else:
         #compute class weights such that sumw is the same for signal and background and each weight is order of 1
-        # sig_weight = num_events_sig/sumw_sig
-        # bkg_weight = num_events_bkg/sumw_bkg
-
-        # Compute the effective class count
-        # https://arxiv.org/pdf/1901.05555.pdf
-
         num_events_sig= X_sig[0].shape[1]
-        sig_event_weights=X_sig[0][-1]
-        beta_sig=1 - (1 /sig_event_weights.sum())
-        sig_class_weights = (1-beta_sig) / (1 - beta_sig**num_events_sig)
-
-        print(num_events_sig, sig_event_weights.sum(), beta_sig, sig_class_weights)
-
         num_events_bkg= X_bkg[0].shape[1]
-        bkg_event_weights=X_bkg[0][-1]
-        beta_bkg=1 - (1 /bkg_event_weights.sum())
-        bkg_class_weights = (1-beta_bkg) / (1 - beta_bkg**num_events_bkg)
+        if True:
+            sig_class_weights = (num_events_sig+num_events_bkg)/sumw_sig
+            bkg_class_weights = (num_events_sig+num_events_bkg)/sumw_bkg
+        else:
+            # Compute the effective class count
+            # https://arxiv.org/pdf/1901.05555.pdf
 
-        print(num_events_bkg, bkg_event_weights.sum(), beta_bkg, bkg_class_weights)
+            sig_event_weights=X_sig[0][-1]
+            beta_sig=1 - (1 /sig_event_weights.sum())
+            sig_class_weights = (1-beta_sig) / (1 - beta_sig**num_events_sig)
 
+            logger.info(f"num event sig {num_events_sig}, sig_event_weights {sig_event_weights.sum()}, beta_sig {beta_sig}, sig_class_weights {sig_class_weights}")
+
+            bkg_event_weights=X_bkg[0][-1]
+            beta_bkg=1 - (1 /bkg_event_weights.sum())
+            bkg_class_weights = (1-beta_bkg) / (1 - beta_bkg**num_events_bkg)
+
+            logger.info(f"num event bkg {num_events_bkg}, bkg_event_weights {bkg_event_weights.sum()}, beta_bkg {beta_bkg}, bkg_class_weights {bkg_class_weights}")
 
 
     X_sig[0][-1]=X_sig[0][-1]*sig_class_weights
     X_bkg[0][-1]=X_bkg[0][-1]*bkg_class_weights
 
-    print("\n rescale weights \n")
     # sum of weights
     sumw_sig = X_sig[0][-1].sum()
     sumw_bkg = X_bkg[0][-1].sum()
-    print("sig weight", X_sig[0][-1])
-    logger.info(f"sum of weights before rescaling signal: {sumw_sig}")
-    print("bkg weight", X_bkg[0][-1])
-    logger.info(f"sum of weights before rescaling backgound: {sumw_bkg}")
+    logger.info(f"sum of weights after rescaling signal: {sumw_sig}")
+    logger.info(f"sum of weights after rescaling backgound: {sumw_bkg}")
 
-
-    raise ValueError("stop here")
 
     X_fts = torch.cat((X_sig[0], X_bkg[0]), dim=1).transpose(1, 0)
     X_lbl = torch.cat((X_sig[1], X_bkg[1]), dim=1).transpose(1, 0)
@@ -203,11 +188,6 @@ def load_data(args, data_format, input_variables, signal_list, background_list):
     train_dataset, val_dataset, test_dataset = torch.utils.data.random_split(
         X, [train_size, val_size, test_size], generator=gen
     )
-
-    # check size of the dataset
-    print("Training dataset size:", len(train_dataset))
-    print("Validation dataset size:", len(val_dataset))
-    print("Test dataset size:", len(test_dataset))
 
     training_loader = None
     val_loader = None

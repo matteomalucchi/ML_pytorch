@@ -5,14 +5,147 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+
 def get_model_parameters_number(model):
     params_num = sum(p.numel() for p in model.parameters() if p.requires_grad)
     return params_num
 
+
+def loop_one_batch(
+    running_loss,
+    tot_loss,
+    running_correct,
+    tot_correct,
+    running_num,
+    tot_num,
+    count,
+    i,
+    data,
+    model,
+    optimizer,
+    loss_fn,
+    device,
+    train,
+    time_epoch,
+    num_batches,
+    num_prints,
+    epoch_index,
+    eval_model,
+    all_scores,
+    all_labels,
+    type_eval,
+):
+    inputs, labels = data
+    inputs = inputs.to(device)
+    weights = inputs[:, -1]
+    inputs = inputs[:, :-1]
+    labels = labels.to(device)
+    if train:
+        optimizer.zero_grad()
+
+    outputs = model(inputs)
+
+    # Compute the accuracy
+    y_pred = torch.round(outputs)
+
+    # print("outputs", torch.all(outputs>0.5))
+    # print("y_pred", torch.all(y_pred>0.5))
+    # print("labels", torch.all(labels>0.5))
+    # if i==5: raise Exception("stop")
+
+    correct = ((y_pred == labels).view(1, -1).squeeze() * weights).sum().item()
+    # correct_u = ((y_pred == labels).view(1, -1).squeeze()).sum().item()
+    # print("\n weights", weights)
+    # print("\ncorrect", correct,(y_pred == labels).view(1, -1).squeeze()*weights)
+    # print("\ncorrect_u", correct_u,(y_pred == labels).view(1, -1).squeeze())
+    # batch_size = labels.size(0)
+
+    # Compute the loss and its gradients
+    loss = loss_fn(outputs, labels)
+    # print("\n loss before", loss)
+    # reshape the loss
+    loss = loss.view(1, -1).squeeze()
+    # print("\n loss after", loss)
+    # weight the loss
+    loss = loss * weights
+    # weighted average of the loss
+    loss_average = loss.sum() / weights.sum()
+    # print("loss_average", loss_average.item() )
+
+    if train:
+        loss_average.backward()
+        # Adjust learning weights
+        optimizer.step()
+
+    # Gather data for reporting
+    running_loss += loss_average.item()
+    # print("running_loss", running_loss)
+    tot_loss += loss_average.item()
+
+    running_correct += correct
+    tot_correct += correct
+
+    running_num += weights.sum().item()
+    tot_num += weights.sum().item()
+
+    if i + 1 >= num_batches / num_prints * count:
+        count += 1
+
+        last_loss = running_loss * num_prints / num_batches  # loss per batch
+        last_accuracy = running_correct / running_num  # accuracy per batch
+        tb_x = epoch_index * num_batches + i + 1
+
+        logger.info(
+            "EPOCH # %d, time %.1f,  %s batch %.1f %% , %s        accuracy: %.4f      //      loss: %.4f"
+            % (
+                epoch_index,
+                time.time() - (time_epoch if time_epoch else 0),
+                (
+                    ("Training" if train else "Validation")
+                    if not eval_model
+                    else f"Evaluating ({type_eval})"
+                ),
+                (i + 1) / num_batches * 100,
+                f"step {tb_x}" if not eval_model else "",
+                last_accuracy,
+                last_loss,
+            )
+        )
+
+        # type = "train" if train else "val"
+        # tb_writer.add_scalar(f"Accuracy/{type}", last_accuracy, tb_x)
+        # tb_writer.add_scalar(f"Loss/{type}", last_loss, tb_x)
+
+        running_loss = 0.0
+        running_correct = 0
+        running_num = 0
+
+    if eval_model:
+        # Create array of scores and labels
+        if i == 0:
+            all_scores = outputs
+            all_labels = labels
+        else:
+            all_scores = torch.cat((all_scores, outputs))
+            all_labels = torch.cat((all_labels, labels))
+
+    return (
+        running_loss,
+        running_correct,
+        running_num,
+        tot_loss,
+        tot_correct,
+        tot_num,
+        count,
+        all_scores,
+        all_labels,
+    )
+
+
 def train_val_one_epoch(
     train,
     epoch_index,
-    #tb_writer,
+    # tb_writer,
     model,
     loader,
     loss_fn,
@@ -41,76 +174,120 @@ def train_val_one_epoch(
     num_batches = len(loader)
     count = 1
 
+    all_scores = None
+    all_labels = None
+
     # Loop over the training data
     for i, data in enumerate(loader):
-        inputs, labels = data
-        inputs = inputs.to(device)
-        weights = inputs[:, -1]
-        inputs = inputs[:, :-1]
-        labels = labels.to(device)
-        if train:
-            optimizer.zero_grad()
+        (
+            running_loss,
+            running_correct,
+            running_num,
+            tot_loss,
+            tot_correct,
+            tot_num,
+            count,
+            _,
+            _,
+        ) = loop_one_batch(
+            running_loss,
+            tot_loss,
+            running_correct,
+            tot_correct,
+            running_num,
+            tot_num,
+            count,
+            i,
+            data,
+            model,
+            optimizer,
+            loss_fn,
+            device,
+            train,
+            time_epoch,
+            num_batches,
+            num_prints,
+            epoch_index,
+            False,
+            all_scores,
+            all_labels,
+            None,
+        )
 
-        outputs = model(inputs)
+        # inputs, labels = data
+        # inputs = inputs.to(device)
+        # weights = inputs[:, -1]
+        # inputs = inputs[:, :-1]
+        # labels = labels.to(device)
+        # if train:
+        #     optimizer.zero_grad()
 
-        # Compute the accuracy
-        y_pred = torch.round(outputs)
-        correct = (y_pred == labels).sum().item()
-        batch_size = labels.size(0)
+        # outputs = model(inputs)
 
-        # Compute the loss and its gradients
-        loss = loss_fn(outputs, labels)
+        # # Compute the accuracy
+        # y_pred = torch.round(outputs)
+        # correct = ((y_pred == labels).view(1, -1).squeeze() * weights).sum().item()
+        # # correct_u = ((y_pred == labels).view(1, -1).squeeze()).sum().item()
+        # # print("\n weights", weights)
+        # # print("\ncorrect", correct,(y_pred == labels).view(1, -1).squeeze()*weights)
+        # # print("\ncorrect_u", correct_u,(y_pred == labels).view(1, -1).squeeze())
+        # # batch_size = labels.size(0)
 
-        # reshape the loss
-        loss = loss.view(1, -1).squeeze()
+        # # Compute the loss and its gradients
+        # loss = loss_fn(outputs, labels)
+        # # print("\n loss before", loss)
+        # # reshape the loss
+        # loss = loss.view(1, -1).squeeze()
+        # # print("\n loss after", loss)
+        # # weight the loss
+        # loss = loss * weights
+        # # weighted average of the loss
+        # loss_average = loss.sum() / weights.sum()
+        # print("loss_average", loss_average.item() )
 
-        # weight the loss
-        loss = loss * weights
-        # average the loss
-        loss = loss.mean()
+        # if train:
+        #     loss_average.backward()
+        #     # Adjust learning weights
+        #     optimizer.step()
 
-        if train:
-            loss.backward()
-            # Adjust learning weights
-            optimizer.step()
+        # # Gather data for reporting
+        # running_loss += loss_average.item()
+        # print("running_loss", running_loss)
+        # tot_loss += loss_average.item()
 
-        # Gather data for reporting
-        running_loss += loss.item()
-        tot_loss += loss.item()
+        # running_correct += correct
+        # tot_correct += correct
 
-        running_correct += correct
-        tot_correct += correct
+        # running_num += weights.sum().item()
+        # tot_num += weights.sum().item()
 
-        running_num += batch_size
-        tot_num += batch_size
+        # if i + 1 >= num_batches / num_prints * count:
+        #     count += 1
 
-        if i + 1 >= num_batches / num_prints * count:
-            count += 1
+        #     last_loss = running_loss * num_prints / num_batches  # loss per batch
+        #     last_accuracy = running_correct / running_num  # accuracy per batch
+        #     tb_x = epoch_index * num_batches + i + 1
 
-            last_loss = running_loss * num_prints / num_batches  # loss per batch
-            last_accuracy = running_correct / running_num  # accuracy per batch
-            tb_x = epoch_index * num_batches + i + 1
+        #     logger.info(
+        #         "EPOCH # %d, time %.1f,  %s batch %.1f %% , step %d        accuracy: %.4f      //      loss: %.4f"
+        #         % (
+        #             epoch_index,
+        #             time.time() - time_epoch,
+        #             "Training" if train else "Validation",
+        #             (i + 1) / num_batches * 100,
+        #             tb_x,
+        #             last_accuracy,
+        #             last_loss,
+        #         )
+        #     )
 
-            logger.info(
-                "EPOCH # %d, time %.1f,  %s batch %.1f %% , step %d        accuracy: %.4f      //      loss: %.4f"
-                % (
-                    epoch_index,
-                    time.time() - time_epoch,
-                    "Training" if train else "Validation",
-                    (i + 1) / num_batches * 100,
-                    tb_x,
-                    last_accuracy,
-                    last_loss,
-                )
-            )
+        #     type = "train" if train else "val"
+        #     # tb_writer.add_scalar(f"Accuracy/{type}", last_accuracy, tb_x)
+        #     # tb_writer.add_scalar(f"Loss/{type}", last_loss, tb_x)
 
-            type = "train" if train else "val"
-            #tb_writer.add_scalar(f"Accuracy/{type}", last_accuracy, tb_x)
-            #tb_writer.add_scalar(f"Loss/{type}", last_loss, tb_x)
-
-            running_loss = 0.0
-            running_correct = 0
-            running_num = 0
+        #     running_loss = 0.0
+        #     running_correct = 0
+        #     running_num = 0
 
     avg_loss = tot_loss / (i + 1)
     avg_accuracy = tot_correct / tot_num
@@ -156,66 +333,104 @@ def eval_model(model, loader, loss_fn, num_prints, type, device, best_epoch):
     num_batches = len(loader)
     count = 1
 
+    all_scores = None
+    all_labels = None
+
     for i, data in enumerate(loader):
-        inputs, labels = data
-        inputs = inputs.to(device)
-        weights = inputs[:, -1]
-        inputs = inputs[:, :-1]
-        labels = labels.to(device)
+        (
+            running_loss,
+            running_correct,
+            running_num,
+            tot_loss,
+            tot_correct,
+            tot_num,
+            count,
+            all_scores,
+            all_labels,
+        ) = loop_one_batch(
+            running_loss,
+            tot_loss,
+            running_correct,
+            tot_correct,
+            running_num,
+            tot_num,
+            count,
+            i,
+            data,
+            model,
+            None,
+            loss_fn,
+            device,
+            False,
+            None,
+            num_batches,
+            num_prints,
+            best_epoch,
+            True,
+            all_scores,
+            all_labels,
+            type,
+        )
 
-        outputs = model(inputs)
+        # inputs, labels = data
+        # inputs = inputs.to(device)
+        # weights = inputs[:, -1]
+        # inputs = inputs[:, :-1]
+        # labels = labels.to(device)
 
-        y_pred = torch.round(outputs)
-        correct = (y_pred == labels).sum().item()
-        batch_size = labels.size(0)
+        # outputs = model(inputs)
 
-        loss = loss_fn(outputs, labels)
+        # y_pred = torch.round(outputs)
+        # correct = (y_pred == labels).sum().item()
+        # batch_size = labels.size(0)
 
-        loss = loss.view(1, -1).squeeze()
+        # loss = loss_fn(outputs, labels)
 
-        # weight the loss
-        loss = loss * weights
-        # average the loss
-        loss = loss.mean()
+        # loss = loss.view(1, -1).squeeze()
 
-        # Gather data for reporting
-        running_loss += loss.item()
-        tot_loss += loss.item()
+        # # weight the loss
+        # loss = loss * weights
+        # # average the loss
+        # loss_average = loss.mean()
 
-        running_correct += correct
-        tot_correct += correct
+        # # Gather data for reporting
+        # running_loss += loss_average.item()
+        # tot_loss += loss_average.item()
 
-        running_num += batch_size
-        tot_num += batch_size
+        # running_correct += correct
+        # tot_correct += correct
 
-        if i + 1 >= num_batches / num_prints * count:
-            count += 1
+        # running_num += batch_size
+        # tot_num += batch_size
 
-            last_loss = running_loss * num_batches / num_prints  # loss per batch
-            last_accuracy = running_correct / running_num  # accuracy per batch
+        # if i + 1 >= num_batches / num_prints * count:
+        #     count += 1
 
-            logger.info(
-                "Evaluating epoch # %d (%s) batch %.1f %%         accuracy: %.4f      //      loss: %.4f"
-                % (
-                    best_epoch,
-                    type,
-                    (i + 1) / num_batches * 100,
-                    last_accuracy,
-                    last_loss,
-                )
-            )
+        #     last_loss = running_loss * num_batches / num_prints  # loss per batch
+        #     last_accuracy = running_correct / running_num  # accuracy per batch
 
-            running_loss = 0.0
-            running_correct = 0
-            running_num = 0
+        #     logger.info(
+        #         "Evaluating epoch # %d (%s) batch %.1f %%         accuracy: %.4f      //      loss: %.4f"
+        #         % (
+        #             best_epoch,
+        #             type,
+        #             (i + 1) / num_batches * 100,
+        #             last_accuracy,
+        #             last_loss,
+        #         )
+        #     )
 
-        # Create array of scores and labels
-        if i == 0:
-            all_scores = outputs
-            all_labels = labels
-        else:
-            all_scores = torch.cat((all_scores, outputs))
-            all_labels = torch.cat((all_labels, labels))
+        #     running_loss = 0.0
+        #     running_correct = 0
+        #     running_num = 0
+
+        # # Create array of scores and labels
+        # if i == 0:
+        #     all_scores = outputs
+        #     all_labels = labels
+        # else:
+        #     all_scores = torch.cat((all_scores, outputs))
+        #     all_labels = torch.cat((all_labels, labels))
 
     avg_loss = tot_loss / (i + 1)
     avg_accuracy = tot_correct / tot_num
@@ -248,5 +463,4 @@ def export_onnx(model, model_name, batch_size, input_size, device):
             "InputVariables": {0: "batch_size"},  # variable length axes
             "Sigmoid": {0: "batch_size"},
         },
-
     )

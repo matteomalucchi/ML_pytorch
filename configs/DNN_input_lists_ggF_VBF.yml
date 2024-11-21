@@ -1,5 +1,5 @@
 input_variables:
-    [JetGoodHiggs_pt, JetGoodHiggs_eta]
+    [JetGoodHiggs_provenance]
 
 signal_list:
     [VBF_HHto4B]

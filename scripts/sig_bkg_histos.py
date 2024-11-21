@@ -3,6 +3,10 @@ import argparse
 import numpy as np
 import mplhep as hep
 from scipy import stats
+from sklearn.metrics import roc_curve, roc_auc_score
+
+hep.style.use("CMS")
+
 
 
 def handle_arrays(score_lbl_tensor):
@@ -88,6 +92,7 @@ def plot_sig_bkg_distributions(
     ks_statistic_sig, p_value_sig = stats.ks_2samp(sig_score_train, sig_score_test)
     ks_statistic_bkg, p_value_bkg = stats.ks_2samp(bkg_score_train, bkg_score_test)
 
+
     # print the KS test results on the plot
     plt.text(
         0.5,
@@ -102,6 +107,17 @@ def plot_sig_bkg_distributions(
         f"KS test: p-value (bkg) = {p_value_bkg:.2f}",
         fontsize=20,
         transform=plt.gca().transAxes,
+    )
+
+    # compute the AUC of the ROC curve
+    roc_auc= roc_auc_score(score_lbl_tensor_test[:, 1], score_lbl_tensor_test[:, 0])
+    # print the AUC on the plot
+    plt.text(
+        0.5,
+        0.725,
+        f"AUC = {roc_auc:.2f}",
+        fontsize=20,
+        transform=plt.gca().transAxes
     )
 
     plt.xlabel("DNN output", fontsize=20, loc="right")
@@ -121,10 +137,17 @@ def plot_sig_bkg_distributions(
     )
     # plt.plot([0.09, 0.88], [8.35, 8.35], color="lightgray", linestyle="-", transform=plt.gca().transAxes)
 
-    hep.style.use("CMS")
-    hep.cms.label("Preliminary")
-    hep.cms.label(year="UL18")
-    plt.savefig(f"{dir}/sig_bkg_distributions.png", bbox_inches="tight")
+    # hep.style.use("CMS")
+    # hep.cms.label("Preliminary")
+    # hep.cms.label(year="UL18")
+    hep.cms.lumitext(
+        "2022 (13.6 TeV)",
+    )
+    hep.cms.text(
+        text="Simulation\nPreliminary",
+        loc=2,
+    )
+    plt.savefig(f"{dir}/sig_bkg_distributions.png", bbox_inches="tight", dpi=300)
     if show:
         plt.show()
 
