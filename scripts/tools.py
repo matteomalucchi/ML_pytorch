@@ -86,7 +86,7 @@ def loop_one_batch(
             "EPOCH # %d, time %.1f,  %s batch %.1f %% , %s        accuracy: %.4f      //      loss: %.4f"
             % (
                 epoch_index,
-                time.time() - (time_epoch if time_epoch else 0),
+                time.time() - time_epoch,
                 (
                     ("Training" if train else "Validation")
                     if not eval_model
@@ -274,7 +274,7 @@ def eval_model(model, loader, loss_fn, num_prints, type, device, best_epoch):
             loss_fn,
             device,
             False,
-            None,
+            time.time(),
             num_batches,
             num_prints,
             best_epoch,

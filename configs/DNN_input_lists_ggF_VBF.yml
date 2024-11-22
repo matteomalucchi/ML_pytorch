@@ -1,13 +1,9 @@
 input_variables:
-    [JetGoodHiggs_provenance]
+    [JetGood_pt, JetGood_eta, JetGood_phi, JetGood_mass, JetGood_btagPNetB]
 
-signal_list:
-    [VBF_HHto4B]
-background_list:
-    [GluGlutoHHto4B]
+signal_list: [VBF_HHto4B]
+background_list: [GluGlutoHHto4B]
 
-ML_model:
-    configs.DNN_model
+ML_model: configs.DNN_model
 
-data_format:
-    coffea
+data_format: coffea
