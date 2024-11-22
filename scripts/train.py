@@ -5,7 +5,7 @@ from datetime import datetime
 import time
 import sys
 from omegaconf import OmegaConf
-
+import importlib
 
 # PyTorch TensorBoard support
 # from torch.utils.tensorboard import SummaryWriter
@@ -21,7 +21,6 @@ from tools import (
 # from configs.DNN_model import get_model
 from args_train import args
 
-sys.path.append("../")
 from setup_logger import setup_logger
 
 
@@ -49,7 +48,8 @@ if __name__ == "__main__":
     cfg = OmegaConf.load(args.config)
     print("configuration: ", cfg)
 
-    exec(f"from {cfg.ML_model} import get_model")
+    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+    ML_model=importlib.import_module(cfg.ML_model)
 
     if args.load_model or args.eval_model:
         main_dir = os.path.dirname(
@@ -90,7 +90,7 @@ if __name__ == "__main__":
     input_size = X_fts.size(1) - 1
 
     # Get model
-    model, loss_fn, optimizer = get_model(input_size, device)
+    model, loss_fn, optimizer = ML_model.get_model(input_size, device)
     num_parameters = get_model_parameters_number(model)
 
     logger.info(f"Number of parameters: {num_parameters}")

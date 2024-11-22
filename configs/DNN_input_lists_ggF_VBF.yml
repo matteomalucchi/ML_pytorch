@@ -4,6 +4,6 @@ input_variables:
 signal_list: [VBF_HHto4B]
 background_list: [GluGlutoHHto4B]
 
-ML_model: configs.DNN_model
+ML_model: models.DNN_model
 
 data_format: coffea
