@@ -33,6 +33,7 @@ def loop_one_batch(
     eval_model,
     all_scores,
     all_labels,
+    all_weights,
     type_eval,
 ):
     inputs, labels = data
@@ -112,9 +113,11 @@ def loop_one_batch(
         if i == 0:
             all_scores = outputs
             all_labels = labels
+            all_weights = weights
         else:
             all_scores = torch.cat((all_scores, outputs))
             all_labels = torch.cat((all_labels, labels))
+            all_weights = torch.cat((all_weights, weights))
 
     return (
         running_loss,
@@ -126,6 +129,7 @@ def loop_one_batch(
         count,
         all_scores,
         all_labels,
+        all_weights,
     )
 
 
@@ -163,6 +167,7 @@ def train_val_one_epoch(
 
     all_scores = None
     all_labels = None
+    all_weights = None
 
     # Loop over the training data
     for i, data in enumerate(loader):
@@ -174,8 +179,7 @@ def train_val_one_epoch(
             tot_correct,
             tot_num,
             count,
-            _,
-            _,
+            *_,
         ) = loop_one_batch(
             running_loss,
             tot_loss,
@@ -198,6 +202,7 @@ def train_val_one_epoch(
             False,
             all_scores,
             all_labels,
+            all_weights,
             None,
         )
 
@@ -247,6 +252,7 @@ def eval_model(model, loader, loss_fn, num_prints, type, device, best_epoch):
 
     all_scores = None
     all_labels = None
+    all_weights = None
 
     for i, data in enumerate(loader):
         (
@@ -259,6 +265,7 @@ def eval_model(model, loader, loss_fn, num_prints, type, device, best_epoch):
             count,
             all_scores,
             all_labels,
+            all_weights
         ) = loop_one_batch(
             running_loss,
             tot_loss,
@@ -281,6 +288,7 @@ def eval_model(model, loader, loss_fn, num_prints, type, device, best_epoch):
             True,
             all_scores,
             all_labels,
+            all_weights,
             type,
         )
 
@@ -290,8 +298,9 @@ def eval_model(model, loader, loss_fn, num_prints, type, device, best_epoch):
     # concatenate all scores and labels
     all_scores = all_scores.view(-1, 1)
     all_labels = all_labels.view(-1, 1)
+    all_weights = all_weights.view(-1, 1)
 
-    score_lbl_tensor = torch.cat((all_scores, all_labels), 1)
+    score_lbl_tensor = torch.cat((all_scores, all_labels, all_weights), 1)
 
     # detach the tensor from the graph and convert to numpy array
     score_lbl_array = score_lbl_tensor.cpu().detach().numpy()

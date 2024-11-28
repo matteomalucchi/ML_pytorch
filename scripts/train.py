@@ -25,7 +25,7 @@ from setup_logger import setup_logger
 
 
 if args.histos:
-    from sig_bkg_histos import plot_sig_bkg_distributions
+    from sig_bkg_eval import plot_sig_bkg_distributions, plot_roc_curve
 if args.history:
     from plot_history import read_from_txt, plot_history
 
@@ -36,7 +36,9 @@ if __name__ == "__main__":
     start_time = time.time()
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    main_dir = f"out/{timestamp}_{args.name}_batchsize{args.batch_size}"+(f"_weights{args.weights[0]}-{args.weights[1]}" if args.weights else "")
+    main_dir = f"out/{timestamp}_{args.name}_batchsize{args.batch_size}" + (
+        f"_weights{args.weights[0]}-{args.weights[1]}" if args.weights else ""
+    )
 
     best_vloss = 1_000_000.0
     best_vaccuracy = 0.0
@@ -48,8 +50,8 @@ if __name__ == "__main__":
     cfg = OmegaConf.load(args.config)
     print("configuration: ", cfg)
 
-    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-    ML_model=importlib.import_module(cfg.ML_model)
+    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+    ML_model = importlib.import_module(cfg.ML_model)
 
     if args.load_model or args.eval_model:
         main_dir = os.path.dirname(
@@ -279,6 +281,13 @@ if __name__ == "__main__":
             % (eval_epoch, accuracy_eval_train, accuracy_eval_test)
         )
 
+        # save the score and label arrays
+        np.savez(
+            f"{main_dir}/score_lbl_array.npz",
+            score_lbl_array_train=score_lbl_array_train,
+            score_lbl_array_test=score_lbl_array_test,
+        )
+
         # plot the signal and background distributions
         if args.histos:
             print("\n\n\n")
@@ -286,13 +295,10 @@ if __name__ == "__main__":
             plot_sig_bkg_distributions(
                 score_lbl_array_train, score_lbl_array_test, main_dir, False
             )
-
-        # save the score and label arrays
-        np.savez(
-            f"{main_dir}/score_lbl_array.npz",
-            score_lbl_array_train=score_lbl_array_train,
-            score_lbl_array_test=score_lbl_array_test,
-        )
+        if args.roc:
+            print("\n\n\n")
+            logger.info("Plotting ROC curve")
+            plot_roc_curve(score_lbl_array_test, main_dir, False)
 
     logger.info("Saved output in %s" % main_dir)
 

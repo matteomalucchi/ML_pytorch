@@ -79,6 +79,9 @@ parser.add_argument(
     "--histos", default=False, help="Make histograms", action="store_true"
 )
 parser.add_argument(
+    "--roc", default=False, help="Make roc curve", action="store_true"
+)
+parser.add_argument(
     "--history", default=False, help="Plot history", action="store_true"
 )
 parser.add_argument(
