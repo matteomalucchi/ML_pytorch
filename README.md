@@ -15,7 +15,7 @@ To connect to a node with a gpu, you can use the following command:
 # connect to a node with a gpu
 salloc --account gpu_gres --job-name "InteractiveJob" --cpus-per-task 4 --mem-per-cpu 3000 --time 01:00:00  -p gpu
 # activate the environment
-microma activate ML_pytorch
+micromamba activate ML_pytorch
 ```
 
 # Examples
