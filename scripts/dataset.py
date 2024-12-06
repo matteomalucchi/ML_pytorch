@@ -8,13 +8,21 @@ from coffea.util import load
 import sys
 import awkward as ak
 
-sys.path.append("../")
-# from configs.DNN_input_lists_ggF_VBF import *
 
 logger = logging.getLogger(__name__)
 
 
-def get_variables(files, dimension, args, input_variables,sample_list, sig_bkg, data_format="root"):
+def get_variables(
+    files,
+    dimension,
+    args,
+    input_variables,
+    sample_list,
+    dataset_sample,
+    region,
+    sig_bkg,
+    data_format="root",
+):
     for i, file_name in enumerate(files):
         logger.info(f"Loading file {file_name}")
         if data_format == "root":
@@ -26,26 +34,46 @@ def get_variables(files, dimension, args, input_variables,sample_list, sig_bkg, 
         elif data_format == "coffea":
             variables_dict = {}
             file = load(file_name)
+            vars=None
+            weights=None
             for sample in sample_list:
                 for dataset in list(file["columns"][sample].keys()):
-                    for category in list(file["columns"][sample][dataset].keys()):
-                        vars = file["columns"][sample][dataset][category]
-                        weights = file["columns"][sample][dataset][category][
-                            "weight"
-                        ].value
-                        # break
+                    print(f"dataset {dataset}")
+                    if dataset == dataset_sample:
+                        for category in list(file["columns"][sample][dataset].keys()):
+                            print(f"category {category}")
+                            if category == region:
+                                vars = file["columns"][sample][dataset][category]
+                                weights = file["columns"][sample][dataset][category][
+                                    "weight"
+                                ].value
+            if not vars:
+                logger.error(
+                    f"region {region} not found in dataset {dataset_sample} for sample {sample_list}"
+                )
+                raise ValueError
+
             for k in vars.keys():
                 if k in input_variables:
                     # unflatten all the jet variables
                     collection = k.split("_")[0]
                     number_per_event = tuple(vars[f"{collection}_N"].value)
 
-                    #TODO: fix the padding here
-                    variables_dict[k] = ak.to_numpy(
-                        ak.pad_none(
-                            ak.unflatten(vars[k].value, number_per_event), 4, clip=True
+                    if ak.all(number_per_event == number_per_event[0]):
+                        variables_dict[k] = ak.to_numpy(
+                            ak.unflatten(vars[k].value, number_per_event)
                         )
-                    )
+                    else:
+                        logger.warning(
+                            f"number of {collection} jets per event is not the same for all events"
+                        )
+                        variables_dict[k] = ak.to_numpy(
+                            ak.pad_none(
+                                ak.unflatten(vars[k].value, number_per_event),
+                                6,
+                                clip=True,
+                            )
+                        )
 
             weights = np.expand_dims(vars["weight"].value, axis=0)
             variables_array = np.swapaxes(
@@ -86,38 +114,54 @@ def get_variables(files, dimension, args, input_variables,sample_list, sig_bkg, 
     return X
 
 
-def load_data(args, data_format, input_variables, signal_list, background_list):
-    batch_size = args.batch_size
+def load_data(args, cfg):
+    batch_size = args.batch_size if args.batch_size else cfg.batch_size
     logger.info(f"Batch size: {batch_size}")
 
     dirs = args.data_dirs
 
     dimension = (args.train_size + args.val_size + args.test_size) / 2
-    logger.info("Variables: %s", input_variables)
+    logger.info("Variables: %s", cfg.input_variables)
 
     # list of signal and background files
     sig_files = []
     bkg_files = []
 
-    if data_format == "root":
+    if cfg.data_format == "root":
         for x in dirs:
             files = os.listdir(x)
             for file in files:
-                for signal in signal_list:
+                for signal in cfg.signal_list:
                     if signal in file and "SR" in file:
                         sig_files.append(x + file)
-                for background in background_list:
+                for background in cfg.background_list:
                     if background in file and "SR" in file:
                         bkg_files.append(x + file)
-    elif data_format == "coffea":
+    elif cfg.data_format == "coffea":
         sig_files = [dir + "/output_all.coffea" for dir in dirs]
         bkg_files = [dir + "/output_all.coffea" for dir in dirs]
 
     X_sig = get_variables(
-        sig_files, dimension, args, input_variables, signal_list, "signal", data_format
+        sig_files,
+        dimension,
+        args,
+        cfg.input_variables,
+        cfg.signal_list,
+        cfg.dataset_signal,
+        cfg.region,
+        "signal",
+        cfg.data_format,
     )
     X_bkg = get_variables(
-        bkg_files, dimension, args,input_variables,  background_list, "background", data_format
+        bkg_files,
+        dimension,
+        args,
+        cfg.input_variables,
+        cfg.background_list,
+        cfg.dataset_background,
+        cfg.region,
+        "background",
+        cfg.data_format,
     )
 
     # sum of weights
@@ -126,43 +170,44 @@ def load_data(args, data_format, input_variables, signal_list, background_list):
     logger.info(f"sum of weights before rescaling signal: {sumw_sig}")
     logger.info(f"sum of weights before rescaling backgound: {sumw_bkg}")
 
-
     if args.weights:
         sig_class_weights = args.weights[0]
         bkg_class_weights = args.weights[1]
     else:
-        #compute class weights such that sumw is the same for signal and background and each weight is order of 1
-        num_events_sig= X_sig[0].shape[1]
-        num_events_bkg= X_bkg[0].shape[1]
+        # compute class weights such that sumw is the same for signal and background and each weight is order of 1
+        num_events_sig = X_sig[0].shape[1]
+        num_events_bkg = X_bkg[0].shape[1]
         if True:
-            sig_class_weights = (num_events_sig+num_events_bkg)/sumw_sig
-            bkg_class_weights = (num_events_sig+num_events_bkg)/sumw_bkg
+            sig_class_weights = (num_events_sig + num_events_bkg) / sumw_sig
+            bkg_class_weights = (num_events_sig + num_events_bkg) / sumw_bkg
         else:
             # Compute the effective class count
             # https://arxiv.org/pdf/1901.05555.pdf
 
-            sig_event_weights=X_sig[0][-1]
-            beta_sig=1 - (1 /sig_event_weights.sum())
-            sig_class_weights = (1-beta_sig) / (1 - beta_sig**num_events_sig)
+            sig_event_weights = X_sig[0][-1]
+            beta_sig = 1 - (1 / sig_event_weights.sum())
+            sig_class_weights = (1 - beta_sig) / (1 - beta_sig**num_events_sig)
 
-            logger.info(f"num event sig {num_events_sig}, sig_event_weights {sig_event_weights.sum()}, beta_sig {beta_sig}, sig_class_weights {sig_class_weights}")
+            logger.info(
+                f"num event sig {num_events_sig}, sig_event_weights {sig_event_weights.sum()}, beta_sig {beta_sig}, sig_class_weights {sig_class_weights}"
+            )
 
-            bkg_event_weights=X_bkg[0][-1]
-            beta_bkg=1 - (1 /bkg_event_weights.sum())
-            bkg_class_weights = (1-beta_bkg) / (1 - beta_bkg**num_events_bkg)
+            bkg_event_weights = X_bkg[0][-1]
+            beta_bkg = 1 - (1 / bkg_event_weights.sum())
+            bkg_class_weights = (1 - beta_bkg) / (1 - beta_bkg**num_events_bkg)
 
-            logger.info(f"num event bkg {num_events_bkg}, bkg_event_weights {bkg_event_weights.sum()}, beta_bkg {beta_bkg}, bkg_class_weights {bkg_class_weights}")
+            logger.info(
+                f"num event bkg {num_events_bkg}, bkg_event_weights {bkg_event_weights.sum()}, beta_bkg {beta_bkg}, bkg_class_weights {bkg_class_weights}"
+            )
 
-
-    X_sig[0][-1]=X_sig[0][-1]*sig_class_weights
-    X_bkg[0][-1]=X_bkg[0][-1]*bkg_class_weights
+    X_sig[0][-1] = X_sig[0][-1] * sig_class_weights
+    X_bkg[0][-1] = X_bkg[0][-1] * bkg_class_weights
 
     # sum of weights
     sumw_sig = X_sig[0][-1].sum()
     sumw_bkg = X_bkg[0][-1].sum()
     logger.info(f"sum of weights after rescaling signal: {sumw_sig}")
     logger.info(f"sum of weights after rescaling backgound: {sumw_bkg}")
-
 
     X_fts = torch.cat((X_sig[0], X_bkg[0]), dim=1).transpose(1, 0)
     X_lbl = torch.cat((X_sig[1], X_bkg[1]), dim=1).transpose(1, 0)

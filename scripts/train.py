@@ -80,7 +80,7 @@ if __name__ == "__main__":
         X_fts,
         X_lbl,
         batch_size,
-    ) = load_data(args, cfg.data_format, input_variables, signal_list, background_list)
+    ) = load_data(args, cfg)
     if args.gpus:
         gpus = [int(i) for i in args.gpus.split(",")]
         device = torch.device(gpus[0])

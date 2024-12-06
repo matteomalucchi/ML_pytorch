@@ -1,4 +1,4 @@
-name: ML_pytorch
+name: pytorch_test
 channels:
 - conda-forge
 - pkgs/main
@@ -169,9 +169,6 @@ dependencies:
 - lz4-c=1.9.4=hcb278e6_0
 - magma=2.5.4=hc72dce7_4
 - markupsafe=2.1.5=py38h01eb140_0
-- matplotlib=3.5.3=py38h578d9bd_2
-- matplotlib-base=3.5.3=py38h38b5ce0_2
-- matplotlib-inline=0.1.6=pyhd8ed1ab_0
 - mistune=3.0.2=pyhd8ed1ab_0
 - mkl=2022.1.0=hc2b9512_224
 - munkres=1.1.4=pyh9f0ad1d_0
@@ -294,4 +291,3 @@ dependencies:
 - zipp=3.17.0=pyhd8ed1ab_0
 - zlib=1.2.13=hd590300_5
 - zstd=1.5.5=hfc55251_0
-

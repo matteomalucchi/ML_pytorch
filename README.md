@@ -1,12 +1,13 @@
 # ML_pytorch
 
-Repository with basic machine learning algorithms implemented in PyTorch taken from my implementation in https://github.com/fcattafesta/hbb/tree/SigBkgDNN/sb_discriminator
+Repository with basic machine learning algorithms implemented in PyTorch based on my implementation in https://github.com/fcattafesta/hbb/tree/SigBkgDNN/sb_discriminator
 
 
 # Installation
 To create the micromamba environment, you can use the following command:
 ```bash
 micromamba env create -f ML_pytorch_env.yml
+pip install -r requirements.txt
 ```
 
 # Connect to node with a gpu
