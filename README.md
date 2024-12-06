@@ -22,5 +22,5 @@ micromamba activate ML_pytorch
 To execute a training, evaluate the model on the test set, plot the history and plot the signal/background histograms, you can use the following command:
 
 ```bash
-python  scripts/train.py -d /work/mmalucch/out_hh4b/out_vbf_ggf_dnn_full/ --eval -o --roc --histos --history --gpus 7 -n 4 -p 50 -b 512 -e 10 -c configs/DNN_config_ggF_VBF.yml
+python  scripts/train.py -d /work/mmalucch/out_hh4b/out_vbf_ggf_dnn_full/ --name name_of_training --eval -o --roc --histos --history --gpus 7 -n 4 -p 50 -b 512 -e 10 -c configs/DNN_config_ggF_VBF.yml
 ```
