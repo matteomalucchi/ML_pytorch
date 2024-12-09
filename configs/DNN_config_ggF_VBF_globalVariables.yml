@@ -1,5 +1,5 @@
 input_variables:
-    [JetVBFLeadingPtNotFromHiggs_pt, JetVBFLeadingPtNotFromHiggs_eta, JetVBFLeadingPtNotFromHiggs_phi, JetVBFLeadingPtNotFromHiggs_mass, JetVBFLeadingPtNotFromHiggs_btagPNetB, events_HH_deltaR, HH_pt]
+    [JetVBFLeadingPtNotFromHiggs_pt, JetVBFLeadingPtNotFromHiggs_eta, JetVBFLeadingPtNotFromHiggs_phi, JetVBFLeadingPtNotFromHiggs_mass, JetVBFLeadingPtNotFromHiggs_btagPNetB, events_HH_centrality, HH_pt]
 
 signal_list: [VBF_HHto4B]
 background_list: [GluGlutoHHto4B]

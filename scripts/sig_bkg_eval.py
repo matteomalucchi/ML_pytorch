@@ -19,52 +19,66 @@ def handle_arrays(score_lbl_tensor, column=0):
     return sig_value, bkg_value
 
 
-def my_roc_auc(classes : np.ndarray,
-               predictions : np.ndarray,
-               weights : np.ndarray = None) -> float:
+def my_roc_auc(
+    classes: np.ndarray, predictions: np.ndarray, sample_weight: np.ndarray = None
+) -> float:
     """
     Calculating ROC AUC score as the probability of correct ordering
     """
     # based on https://github.com/SiLiKhon/my_roc_auc/blob/master/my_roc_auc.py
 
-    if weights is None:
-        weights = np.ones_like(predictions)
+    if sample_weight is None:
+        sample_weight = np.ones_like(predictions)
 
-    assert len(classes) == len(predictions) == len(weights)
-    assert classes.ndim == predictions.ndim == weights.ndim == 1
+    assert len(classes) == len(predictions) == len(sample_weight)
+    assert classes.ndim == predictions.ndim == sample_weight.ndim == 1
     class0, class1 = sorted(np.unique(classes))
 
     data = np.empty(
-            shape=len(classes),
-            dtype=[('c', classes.dtype),
-                   ('p', predictions.dtype),
-                   ('w', weights.dtype)]
-        )
-    data['c'], data['p'], data['w'] = classes, predictions, weights
+        shape=len(classes),
+        dtype=[
+            ("c", classes.dtype),
+            ("p", predictions.dtype),
+            ("w", sample_weight.dtype),
+        ],
+    )
+    data["c"], data["p"], data["w"] = classes, predictions, sample_weight
 
-    data = data[np.argsort(data['c'])]
-    data = data[np.argsort(data['p'], kind='mergesort')] # here we're relying on stability as we need class orders preserved
+    data = data[np.argsort(data["c"])]
+    data = data[
+        np.argsort(data["p"], kind="mergesort")
+    ]  # here we're relying on stability as we need class orders preserved
 
-    correction = 0.
+    correction = 0.0
     # mask1 - bool mask to highlight collision areas
     # mask2 - bool mask with collision areas' start points
     mask1 = np.empty(len(data), dtype=bool)
     mask2 = np.empty(len(data), dtype=bool)
     mask1[0] = mask2[-1] = False
-    mask1[1:] = data['p'][1:] == data['p'][:-1]
+    mask1[1:] = data["p"][1:] == data["p"][:-1]
     if mask1.any():
         mask2[:-1] = ~mask1[:-1] & mask1[1:]
         mask1[:-1] |= mask1[1:]
-        ids, = mask2.nonzero()
-        correction = sum([((dsplit['c'] == class0) * dsplit['w'] * msplit).sum() *
-                          ((dsplit['c'] == class1) * dsplit['w'] * msplit).sum()
-                          for dsplit, msplit in zip(np.split(data, ids), np.split(mask1, ids))]) * 0.5
+        (ids,) = mask2.nonzero()
+        correction = (
+            sum(
+                [
+                    ((dsplit["c"] == class0) * dsplit["w"] * msplit).sum()
+                    * ((dsplit["c"] == class1) * dsplit["w"] * msplit).sum()
+                    for dsplit, msplit in zip(np.split(data, ids), np.split(mask1, ids))
+                ]
+            )
+            * 0.5
+        )
 
-    weights_0 = data['w'] * (data['c'] == class0)
-    weights_1 = data['w'] * (data['c'] == class1)
+    weights_0 = data["w"] * (data["c"] == class0)
+    weights_1 = data["w"] * (data["c"] == class1)
     cumsum_0 = weights_0.cumsum()
 
-    return ((cumsum_0 * weights_1).sum() - correction) / (weights_1.sum() * cumsum_0[-1])
+    return ((cumsum_0 * weights_1).sum() - correction) / (
+        weights_1.sum() * cumsum_0[-1]
+    )
+
 
 def plot_sig_bkg_distributions(
     score_lbl_tensor_train, score_lbl_tensor_test, dir, show
@@ -74,8 +88,15 @@ def plot_sig_bkg_distributions(
     sig_score_test, bkg_score_test = handle_arrays(score_lbl_tensor_test, 0)
 
     # get weights
-    sig_weight_train, bkg_weight_train = handle_arrays(score_lbl_tensor_train, 2)
-    sig_weight_test, bkg_weight_test = handle_arrays(score_lbl_tensor_test, 2)
+    try:
+        sig_weight_train, bkg_weight_train = handle_arrays(score_lbl_tensor_train, 2)
+        sig_weight_test, bkg_weight_test = handle_arrays(score_lbl_tensor_test, 2)
+    except IndexError:
+        print("WARNING: No weights found in the input file. Using equal weights.")
+        sig_weight_train = np.ones_like(sig_score_train)
+        bkg_weight_train = np.ones_like(bkg_score_train)
+        sig_weight_test = np.ones_like(sig_score_test)
+        bkg_weight_test = np.ones_like(bkg_score_test)
 
     fig, ax = plt.subplots()
     sig_train = plt.hist(
@@ -120,27 +141,23 @@ def plot_sig_bkg_distributions(
             weights=weight,
             bins=30,
             alpha=0,
-            density=True,
+            density=False,
             range=(0, 1),
         )
         bin_centers = 0.5 * (bins[:-1] + bins[1:])
-        # NOTE: are the errors correct?
         # Calculate bin widths
         bin_widths = bins[1:] - bins[:-1]
 
-        # Calculate counts per bin
-        counts_per_bin = counts * len(score) * bin_widths
-
         # Calculate standard deviation per bin
-        std_per_bin = np.sqrt(counts_per_bin)
-
+        std_per_bin = np.sqrt(counts)
         # Calculate error bars by rescaling standard deviation
-        errors = std_per_bin / np.sum(counts_per_bin)
+        errors = std_per_bin / np.sum(counts * bin_widths)
+        norm_counts = counts / np.sum(counts * bin_widths)
 
         legend_test_list.append(
             plt.errorbar(
                 bin_centers,
-                counts,
+                norm_counts,
                 yerr=errors,
                 marker="o",
                 color=color,
@@ -167,7 +184,6 @@ def plot_sig_bkg_distributions(
         transform=plt.gca().transAxes,
     )
 
-
     counts_test_list = []
     for score, weight in zip(
         [sig_score_test, bkg_score_test],
@@ -187,23 +203,16 @@ def plot_sig_bkg_distributions(
 
     # compute score for 80% VBF-HH signal efficiency
     sig_eff = 0.8
-    print(counts_test_list[0][::-1]*bin_widths)
-    signal_cumulative_integral = np.cumsum(counts_test_list[0][::-1]*bin_widths)
-    print("signal_cumulative", signal_cumulative_integral)
+    signal_cumulative_integral = np.cumsum(counts_test_list[0][::-1] * bin_widths)
     # find the bin with the signal efficiency closest to 80%
     bin_index = np.argmin(np.abs(signal_cumulative_integral[::-1] - sig_eff))
-    print("bin_index", bin_index)
     # get the DNN score for the 80% signal efficiency
     dnn_score_80 = bin_centers[bin_index]
-    print("dnn_score_80", dnn_score_80)
     # compute the background rejection at 80% signal efficiency
     bkg_rejection = np.sum(counts_test_list[1][:bin_index]) * bin_widths[bin_index]
-    print("bkg_rejection", bkg_rejection)
-
-
 
     # plot the vertical line for the 80% signal efficiency
-    line_80=plt.axvline(
+    line_80 = plt.axvline(
         dnn_score_80,
         color="grey",
         linestyle="--",
@@ -211,7 +220,6 @@ def plot_sig_bkg_distributions(
             bkg_rejection
         ),
     )
-
 
     plt.xlabel("DNN output")
     plt.ylabel("Normalized counts")
@@ -239,7 +247,7 @@ def plot_sig_bkg_distributions(
         loc=0,
     )
     plt.savefig(f"{dir}/sig_bkg_distributions.png", bbox_inches="tight", dpi=300)
-    ax.set_ylim(bottom=1e-2, top=max_bin **3)
+    ax.set_ylim(bottom=1e-2, top=max_bin**3)
     plt.yscale("log")
     plt.savefig(f"{dir}/sig_bkg_distributions_log.png", bbox_inches="tight", dpi=300)
     if show:
@@ -249,24 +257,39 @@ def plot_sig_bkg_distributions(
 def plot_roc_curve(score_lbl_tensor_test, dir, show):
     # plot the ROC curve
     fig, ax = plt.subplots()
-    print("score_lbl_tensor_test", score_lbl_tensor_test)
+    try:
+        sample_weights = score_lbl_tensor_test[:, 2]
+    except IndexError:
+        print("WARNING: No weights found in the input file. Using equal weights.")
+        sample_weights = np.ones_like(score_lbl_tensor_test[:, 0])
 
     fpr, tpr, _ = roc_curve(
         score_lbl_tensor_test[:, 1],
         score_lbl_tensor_test[:, 0],
-        sample_weight=score_lbl_tensor_test[:, 2],
+        sample_weight=sample_weights,
     )
-    roc_auc =my_roc_auc(score_lbl_tensor_test[:, 1], score_lbl_tensor_test[:, 0], (score_lbl_tensor_test[:, 2]))
+    roc_auc = my_roc_auc(
+        score_lbl_tensor_test[:, 1],
+        score_lbl_tensor_test[:, 0],
+        sample_weight=sample_weights,
+    )
     plt.plot(tpr, fpr, label="ROC curve (pos+neg weights AUC = %0.3f)" % roc_auc)
 
     abs_weights_fpr, abs_weights_tpr, _ = roc_curve(
         score_lbl_tensor_test[:, 1],
         score_lbl_tensor_test[:, 0],
-        sample_weight=abs(score_lbl_tensor_test[:, 2]),
+        sample_weight=abs(sample_weights),
     )
-    abs_weights_roc_auc =roc_auc_score(score_lbl_tensor_test[:, 1], score_lbl_tensor_test[:, 0], sample_weight=abs(score_lbl_tensor_test[:, 2]))
-    plt.plot(abs_weights_tpr, abs_weights_fpr, label="ROC curve (abs weights AUC = %0.3f)" % abs_weights_roc_auc)
-
+    abs_weights_roc_auc = roc_auc_score(
+        score_lbl_tensor_test[:, 1],
+        score_lbl_tensor_test[:, 0],
+        sample_weight=abs(sample_weights),
+    )
+    plt.plot(
+        abs_weights_tpr,
+        abs_weights_fpr,
+        label="ROC curve (abs weights AUC = %0.3f)" % abs_weights_roc_auc,
+    )
 
     plt.plot([0, 1], [0, 1], color="gray", linestyle="--")
     plt.xlabel("True positive rate")
