@@ -25,6 +25,7 @@ def my_roc_auc(classes : np.ndarray,
     """
     Calculating ROC AUC score as the probability of correct ordering
     """
+    # based on https://github.com/SiLiKhon/my_roc_auc/blob/master/my_roc_auc.py
 
     if weights is None:
         weights = np.ones_like(predictions)
@@ -166,17 +167,51 @@ def plot_sig_bkg_distributions(
         transform=plt.gca().transAxes,
     )
 
-    # compute the AUC of the ROC curve
-    # print("score_lbl_tensor_test", score_lbl_tensor_test)
-    # roc_auc= roc_auc_score(score_lbl_tensor_test[:, 1], score_lbl_tensor_test[:, 0], sample_weight=score_lbl_tensor_test[:, 2])
-    # # print the AUC on the plot
-    # plt.text(
-    #     0.5,
-    #     0.75,
-    #     f"AUC = {roc_auc:.2f}",
-    #     fontsize=20,
-    #     transform=plt.gca().transAxes
-    # )
+
+    counts_test_list = []
+    for score, weight in zip(
+        [sig_score_test, bkg_score_test],
+        [sig_weight_test, bkg_weight_test],
+    ):
+        counts, bins, _ = plt.hist(
+            score,
+            weights=weight,
+            bins=300,
+            alpha=0,
+            density=True,
+            range=(0, 1),
+        )
+        counts_test_list.append(counts)
+        bin_widths = bins[1:] - bins[:-1]
+        bin_centers = 0.5 * (bins[:-1] + bins[1:])
+
+    # compute score for 80% VBF-HH signal efficiency
+    sig_eff = 0.8
+    print(counts_test_list[0][::-1]*bin_widths)
+    signal_cumulative_integral = np.cumsum(counts_test_list[0][::-1]*bin_widths)
+    print("signal_cumulative", signal_cumulative_integral)
+    # find the bin with the signal efficiency closest to 80%
+    bin_index = np.argmin(np.abs(signal_cumulative_integral[::-1] - sig_eff))
+    print("bin_index", bin_index)
+    # get the DNN score for the 80% signal efficiency
+    dnn_score_80 = bin_centers[bin_index]
+    print("dnn_score_80", dnn_score_80)
+    # compute the background rejection at 80% signal efficiency
+    bkg_rejection = np.sum(counts_test_list[1][:bin_index]) * bin_widths[bin_index]
+    print("bkg_rejection", bkg_rejection)
+
+
+
+    # plot the vertical line for the 80% signal efficiency
+    line_80=plt.axvline(
+        dnn_score_80,
+        color="grey",
+        linestyle="--",
+        label="0.8 signal efficiency, {:.2f} background rejection".format(
+            bkg_rejection
+        ),
+    )
+
 
     plt.xlabel("DNN output")
     plt.ylabel("Normalized counts")
@@ -190,6 +225,7 @@ def plot_sig_bkg_distributions(
             legend_test_list[0],
             bkg_train[2][0],
             legend_test_list[1],
+            line_80,
         ],
         frameon=False,
     )
@@ -203,6 +239,9 @@ def plot_sig_bkg_distributions(
         loc=0,
     )
     plt.savefig(f"{dir}/sig_bkg_distributions.png", bbox_inches="tight", dpi=300)
+    ax.set_ylim(bottom=1e-2, top=max_bin **3)
+    plt.yscale("log")
+    plt.savefig(f"{dir}/sig_bkg_distributions_log.png", bbox_inches="tight", dpi=300)
     if show:
         plt.show()
 
@@ -217,20 +256,18 @@ def plot_roc_curve(score_lbl_tensor_test, dir, show):
         score_lbl_tensor_test[:, 0],
         sample_weight=score_lbl_tensor_test[:, 2],
     )
-    # roc_auc =auc(tpr, fpr)
-    # for i in range(len(tpr)):
-    #     for j in range(len(tpr)):
-    #         # if tpr[i]==tpr[j] and i>j:
-    #         #     print("same", tpr[i], tpr[j], fpr[i], fpr[j], i, j)
-    #         if tpr[i]>tpr[j] and i<j:
-    #             print("inverse", tpr[i], tpr[j], fpr[i], fpr[j], i, j)
-    #     if i%100==0:
-    #         print(i)
-
-
-    roc_auc =roc_auc_score(score_lbl_tensor_test[:, 1], score_lbl_tensor_test[:, 0], sample_weight=abs(score_lbl_tensor_test[:, 2]))
     roc_auc =my_roc_auc(score_lbl_tensor_test[:, 1], score_lbl_tensor_test[:, 0], (score_lbl_tensor_test[:, 2]))
-    plt.plot(tpr, fpr, label="ROC curve (AUC = %0.3f)" % roc_auc)
+    plt.plot(tpr, fpr, label="ROC curve (pos+neg weights AUC = %0.3f)" % roc_auc)
+
+    abs_weights_fpr, abs_weights_tpr, _ = roc_curve(
+        score_lbl_tensor_test[:, 1],
+        score_lbl_tensor_test[:, 0],
+        sample_weight=abs(score_lbl_tensor_test[:, 2]),
+    )
+    abs_weights_roc_auc =roc_auc_score(score_lbl_tensor_test[:, 1], score_lbl_tensor_test[:, 0], sample_weight=abs(score_lbl_tensor_test[:, 2]))
+    plt.plot(abs_weights_tpr, abs_weights_fpr, label="ROC curve (abs weights AUC = %0.3f)" % abs_weights_roc_auc)
+
+
     plt.plot([0, 1], [0, 1], color="gray", linestyle="--")
     plt.xlabel("True positive rate")
     plt.ylabel("False positive rate")
