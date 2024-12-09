@@ -1,0 +1,15 @@
+input_variables:
+    [JetVBFLeadingPtNotFromHiggs_pt, JetVBFLeadingPtNotFromHiggs_eta, JetVBFLeadingPtNotFromHiggs_phi, JetVBFLeadingPtNotFromHiggs_mass, JetVBFLeadingPtNotFromHiggs_btagPNetB, events_HH_deltaR, HH_pt]
+
+signal_list: [VBF_HHto4B]
+background_list: [GluGlutoHHto4B]
+
+region: 4b_region
+dataset_signal: VBFHHto4B_CV_1_C2V_1_C3_1_2022_postEE
+dataset_background: GluGlutoHHto4B_kl-1p00_kt-1p00_c2-0p00__2022_postEE
+
+ML_model: models.DNN_model
+
+data_format: coffea
+
+batch_size: 512

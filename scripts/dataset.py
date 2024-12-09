@@ -34,8 +34,8 @@ def get_variables(
         elif data_format == "coffea":
             variables_dict = {}
             file = load(file_name)
-            vars=None
-            weights=None
+            vars = None
+            weights = None
             for sample in sample_list:
                 for dataset in list(file["columns"][sample].keys()):
                     print(f"dataset {dataset}")
@@ -53,12 +53,13 @@ def get_variables(
                 )
                 raise ValueError
 
-            for k in vars.keys():
-                if k in input_variables:
-                    # unflatten all the jet variables
-                    collection = k.split("_")[0]
-                    number_per_event = tuple(vars[f"{collection}_N"].value)
+            for k in input_variables:
+                # unflatten all the jet variables
+                collection = k.split("_")[0]
 
+                # check if collection_N is present to unflatten the variables
+                if f"{collection}_N" in vars.keys():
+                    number_per_event = tuple(vars[f"{collection}_N"].value)
                     if ak.all(number_per_event == number_per_event[0]):
                         variables_dict[k] = ak.to_numpy(
                             ak.unflatten(vars[k].value, number_per_event)
@@ -74,6 +75,8 @@ def get_variables(
                                 clip=True,
                             )
                         )
+                else:
+                    variables_dict[k] = ak.to_numpy(ak.unflatten(vars[k].value, 1))
 
             weights = np.expand_dims(vars["weight"].value, axis=0)
             variables_array = np.swapaxes(
@@ -87,7 +90,7 @@ def get_variables(
             logger.info(f"weights {weights.shape}")
             variables_array = np.append(variables_array, weights, axis=0)
             logger.info(f"variables_array complete {variables_array.shape}")
-
+            print(variables_array)
         # concatenate all the variables into a single torch tensor
         if i == 0:
             variables = torch.tensor(variables_array, dtype=torch.float32)[
@@ -111,6 +114,7 @@ def get_variables(
     )
 
     X = (variables, flag_tensor)
+    print(X, X[0].shape)
     return X
 
 
@@ -211,6 +215,9 @@ def load_data(args, cfg):
 
     X_fts = torch.cat((X_sig[0], X_bkg[0]), dim=1).transpose(1, 0)
     X_lbl = torch.cat((X_sig[1], X_bkg[1]), dim=1).transpose(1, 0)
+
+    logger.info(f"X_fts shape: {X_fts.shape}")
+    logger.info(f"X_lbl shape: {X_lbl.shape}")
 
     # split the dataset into training and val sets
     if args.train_size != -1 and args.val_size != -1 and args.test_size != -1:
