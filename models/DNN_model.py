@@ -1,5 +1,10 @@
 from torch import nn
 import torch
+import sys
+
+sys.path.append("../")
+from scripts.learning_rate_schedules import get_lr_scheduler
+
 
 class DNN(nn.Module):
     def __init__(self, dim_in):
@@ -27,12 +32,12 @@ class DNN(nn.Module):
         return logits
 
 
-def get_model(input_size, device):
+def get_model(input_size, device, lr, lr_schedule, n_epochs):
     model = DNN(input_size).to(device)
     print(model)
 
     loss_fn = torch.nn.BCELoss(reduction="none")
-    #loss_fn = torch.nn.CategoricalCrossEntropy(reduction="none")
-    optimizer = torch.optim.Adam(model.parameters())
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    scheduler = get_lr_scheduler(lr_schedule, optimizer, n_epochs)
 
-    return model, loss_fn, optimizer
+    return model, loss_fn, optimizer, scheduler

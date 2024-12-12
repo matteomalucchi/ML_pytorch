@@ -17,27 +17,6 @@ parser.add_argument(
     type=int,
 )
 parser.add_argument(
-    "-t",
-    "--train-size",
-    default=-1,
-    help="Number of events to process during training",
-    type=int,
-)
-parser.add_argument(
-    "-v",
-    "--val-size",
-    default=-1,
-    help="Number of events to process during validation",
-    type=int,
-)
-parser.add_argument(
-    "-te",
-    "--test-size",
-    default=-1,
-    help="Number of events to process during testing",
-    type=int,
-)
-parser.add_argument(
     "-p",
     "--num-prints",
     default=50,
@@ -62,7 +41,7 @@ parser.add_argument(
 parser.add_argument(
     "--weights",
     nargs="+",
-    default=[], #[100, 0.014],  # [50, 0.01] for csv, [50, 0.014] for flav
+    default=[], 
     help="Weights for the loss function (signal, background)",
     type=float,
 )

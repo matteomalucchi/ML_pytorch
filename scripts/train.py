@@ -18,7 +18,6 @@ from tools import (
     export_onnx,
 )
 
-# from configs.DNN_model import get_model
 from args_train import args
 
 from setup_logger import setup_logger
@@ -30,15 +29,11 @@ if args.history:
     from plot_history import read_from_txt, plot_history
 
 
-# python train.py -e 200 -n 8 -d $in_dir/hbb_DNN_input/flav_el/btagscore_deepflav/Snapshots/  $in_dir/hbb_DNN_input/flav_mu/btagscore_deepflav/Snapshots/ --eval --histos -o --name deepflav_bit -g 0
-
 if __name__ == "__main__":
     start_time = time.time()
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    main_dir = f"out/{timestamp}_{args.name}_batchsize{args.batch_size}" + (
-        f"_weights{args.weights[0]}-{args.weights[1]}" if args.weights else ""
-    )
+    main_dir = f"out/{timestamp}_{args.name}"
 
     best_vloss = 1_000_000.0
     best_vaccuracy = 0.0
@@ -49,6 +44,12 @@ if __name__ == "__main__":
 
     cfg = OmegaConf.load(args.config)
     print("configuration: ", cfg)
+
+    n_epochs = args.epochs if args.epochs else cfg.epochs
+
+    if not cfg.learning_rate_schedule in ["constant", "linear"]:
+        raise ValueError("learning_rate_schedule must be either 'constant' or 'linear'")
+    assert cfg.learning_rate > 0, "learning_rate must be positive"
 
     sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
     ML_model = importlib.import_module(cfg.ML_model)
@@ -92,7 +93,9 @@ if __name__ == "__main__":
     input_size = X_fts.size(1) - 1
 
     # Get model
-    model, loss_fn, optimizer = ML_model.get_model(input_size, device)
+    model, loss_fn, optimizer, scheduler = ML_model.get_model(
+        input_size, device, cfg.learning_rate, cfg.learning_rate_schedule, n_epochs
+    )
     num_parameters = get_model_parameters_number(model)
 
     logger.info(f"Number of parameters: {num_parameters}")
@@ -122,17 +125,17 @@ if __name__ == "__main__":
         )
 
     if not args.eval_model:
-        for epoch in range(args.epochs):
+        for epoch in range(n_epochs):
             if epoch <= loaded_epoch:
                 continue
             time_epoch = time.time()
             # Turn on gradients for training
             print("\n\n\n")
 
+            # train
             avg_loss, avg_accuracy, *_ = train_val_one_epoch(
                 True,
                 epoch,
-                # writer,
                 model,
                 training_loader,
                 loss_fn,
@@ -140,10 +143,12 @@ if __name__ == "__main__":
                 args.num_prints,
                 device,
                 time_epoch,
+                scheduler,
             )
 
             logger.info("time elapsed: {:.2f}s".format(time.time() - time_epoch))
 
+            # validate
             (
                 avg_vloss,
                 avg_vaccuracy,
@@ -154,7 +159,6 @@ if __name__ == "__main__":
             ) = train_val_one_epoch(
                 False,
                 epoch,
-                # writer,
                 model,
                 val_loader,
                 loss_fn,
@@ -162,6 +166,7 @@ if __name__ == "__main__":
                 args.num_prints,
                 device,
                 time_epoch,
+                None,
                 main_dir,
                 best_vloss,
                 best_vaccuracy,

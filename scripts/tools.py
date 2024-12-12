@@ -41,14 +41,12 @@ def loop_one_batch(
     weights = inputs[:, -1]
     inputs = inputs[:, :-1]
     labels = labels.to(device)
-    if train:
-        optimizer.zero_grad()
 
+    # compute the outputs of the model
     outputs = model(inputs)
 
     # Compute the accuracy
     y_pred = torch.round(outputs)
-
 
     correct = ((y_pred == labels).view(1, -1).squeeze() * weights).sum().item()
 
@@ -62,6 +60,9 @@ def loop_one_batch(
     loss_average = loss.sum() / weights.sum()
 
     if train:
+        # Reset the gradients of all optimized torch.Tensor
+        optimizer.zero_grad()
+        # Compute the gradients of the loss w.r.t. the model parameters
         loss_average.backward()
         # Adjust learning weights
         optimizer.step()
@@ -136,7 +137,6 @@ def loop_one_batch(
 def train_val_one_epoch(
     train,
     epoch_index,
-    # tb_writer,
     model,
     loader,
     loss_fn,
@@ -144,6 +144,7 @@ def train_val_one_epoch(
     num_prints,
     device,
     time_epoch,
+    scheduler,
     main_dir=None,
     best_loss=None,
     best_accuracy=None,
@@ -206,6 +207,13 @@ def train_val_one_epoch(
             None,
         )
 
+    if train:
+        logger.info(
+            "EPOCH # %d, learning rate: %.6f"
+            % (epoch_index, optimizer.param_groups[0]["lr"])
+        )
+        scheduler.step()
+
     avg_loss = tot_loss / (i + 1)
     avg_accuracy = tot_correct / tot_num
 
@@ -226,6 +234,7 @@ def train_val_one_epoch(
         torch.save(checkpoint, model_name)
         best_model_name = model_name
 
+    print("best_epoch", best_epoch)
     return (
         avg_loss,
         avg_accuracy,
@@ -265,7 +274,7 @@ def eval_model(model, loader, loss_fn, num_prints, type, device, best_epoch):
             count,
             all_scores,
             all_labels,
-            all_weights
+            all_weights,
         ) = loop_one_batch(
             running_loss,
             tot_loss,

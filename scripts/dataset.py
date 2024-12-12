@@ -14,8 +14,7 @@ logger = logging.getLogger(__name__)
 
 def get_variables(
     files,
-    dimension,
-    args,
+    total_fraction_of_events,
     input_variables,
     sample_list,
     dataset_sample,
@@ -23,6 +22,7 @@ def get_variables(
     sig_bkg,
     data_format="root",
 ):
+    tot_lenght = 0
     for i, file_name in enumerate(files):
         logger.info(f"Loading file {file_name}")
         if data_format == "root":
@@ -91,10 +91,13 @@ def get_variables(
             variables_array = np.append(variables_array, weights, axis=0)
             logger.info(f"variables_array complete {variables_array.shape}")
             print(variables_array)
+
+        tot_lenght += variables_array.shape[1]
+
         # concatenate all the variables into a single torch tensor
         if i == 0:
             variables = torch.tensor(variables_array, dtype=torch.float32)[
-                :, : math.ceil(dimension)
+                :, : math.ceil(total_fraction_of_events * variables_array.shape[1])
             ]
         else:
             variables = torch.cat(
@@ -103,7 +106,7 @@ def get_variables(
                     torch.tensor(variables_array, dtype=torch.float32),
                 ),
                 dim=1,
-            )[:, : math.ceil(dimension)]
+            )[:, : math.ceil(total_fraction_of_events * variables_array.shape[1])]
 
     logger.info(f"number of {sig_bkg} events: {variables.shape[1]}")
 
@@ -115,7 +118,7 @@ def get_variables(
 
     X = (variables, flag_tensor)
     print(X, X[0].shape)
-    return X
+    return X, tot_lenght
 
 
 def load_data(args, cfg):
@@ -124,7 +127,10 @@ def load_data(args, cfg):
 
     dirs = args.data_dirs
 
-    dimension = (args.train_size + args.val_size + args.test_size) / 2
+    total_fraction_of_events = cfg.train_fraction + cfg.val_fraction + cfg.test_fraction
+
+    assert total_fraction_of_events <= 1.0, "Fractions must sum to less than 1.0"
+    
     logger.info("Variables: %s", cfg.input_variables)
 
     # list of signal and background files
@@ -144,11 +150,13 @@ def load_data(args, cfg):
     elif cfg.data_format == "coffea":
         sig_files = [dir + "/output_all.coffea" for dir in dirs]
         bkg_files = [dir + "/output_all.coffea" for dir in dirs]
+    else:
+        logger.error(f"Data format {cfg.data_format} not supported")
+        raise ValueError
 
-    X_sig = get_variables(
+    X_sig, tot_lenght_sig = get_variables(
         sig_files,
-        dimension,
-        args,
+        total_fraction_of_events,
         cfg.input_variables,
         cfg.signal_list,
         cfg.dataset_signal,
@@ -156,10 +164,9 @@ def load_data(args, cfg):
         "signal",
         cfg.data_format,
     )
-    X_bkg = get_variables(
+    X_bkg, tot_lenght_bkg = get_variables(
         bkg_files,
-        dimension,
-        args,
+        total_fraction_of_events,
         cfg.input_variables,
         cfg.background_list,
         cfg.dataset_background,
@@ -219,16 +226,20 @@ def load_data(args, cfg):
     logger.info(f"X_fts shape: {X_fts.shape}")
     logger.info(f"X_lbl shape: {X_lbl.shape}")
 
-    # split the dataset into training and val sets
-    if args.train_size != -1 and args.val_size != -1 and args.test_size != -1:
-        X_fts = X_fts[: args.train_size + args.val_size + args.test_size, :]
-        X_lbl = X_lbl[: args.train_size + args.val_size + args.test_size, :]
+    tot_events = math.ceil((tot_lenght_sig + tot_lenght_bkg) * total_fraction_of_events)
+
+    # keep only total_fraction_of_events
+    X_fts = X_fts[:tot_events]
+    X_lbl = X_lbl[:tot_events]
+
+    # TODO: look out for the fraction scaling
+    # the fraction is not of the tot number of evetns but of the number of evetns after some are already thrown away
 
     X = torch.utils.data.TensorDataset(X_fts, X_lbl)
 
-    train_size = int(0.8 * len(X)) if args.train_size == -1 else args.train_size
-    val_size = math.ceil((len(X) - train_size) / 2)
-    test_size = math.floor((len(X) - train_size) / 2)
+    train_size = math.ceil((tot_lenght_sig + tot_lenght_bkg) * cfg.train_fraction)
+    val_size = math.floor((tot_lenght_sig + tot_lenght_bkg) * cfg.val_fraction)
+    test_size = math.floor((tot_lenght_sig + tot_lenght_bkg) * cfg.test_fraction)
 
     logger.info(f"Total size: {len(X)}")
     logger.info(f"Training size: {train_size}")

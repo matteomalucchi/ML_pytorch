@@ -12,3 +12,11 @@ ML_model: models.DNN_model
 data_format: coffea
 
 batch_size: 512
+epochs: 100
+
+learning_rate: 1e-3
+learning_rate_schedule: constant
+
+train_fraction: 0.8
+val_fraction: 0.1
+test_fraction: 0.1
