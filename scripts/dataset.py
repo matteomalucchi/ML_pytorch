@@ -37,12 +37,13 @@ def get_variables(
             vars = None
             weights = None
             for sample in sample_list:
+                logger.info("sample %s", sample)
                 for dataset in list(file["columns"][sample].keys()):
-                    print(f"dataset {dataset}")
                     if dataset == dataset_sample:
+                        logger.info("dataset %s", dataset)
                         for category in list(file["columns"][sample][dataset].keys()):
-                            print(f"category {category}")
                             if category == region:
+                                logger.info("category %s", category)
                                 vars = file["columns"][sample][dataset][category]
                                 weights = file["columns"][sample][dataset][category][
                                     "weight"
@@ -130,7 +131,7 @@ def load_data(args, cfg):
     total_fraction_of_events = cfg.train_fraction + cfg.val_fraction + cfg.test_fraction
 
     assert total_fraction_of_events <= 1.0, "Fractions must sum to less than 1.0"
-    
+
     logger.info("Variables: %s", cfg.input_variables)
 
     # list of signal and background files
@@ -226,20 +227,18 @@ def load_data(args, cfg):
     logger.info(f"X_fts shape: {X_fts.shape}")
     logger.info(f"X_lbl shape: {X_lbl.shape}")
 
-    tot_events = math.ceil((tot_lenght_sig + tot_lenght_bkg) * total_fraction_of_events)
+    train_size = math.floor((tot_lenght_sig + tot_lenght_bkg) * cfg.train_fraction)
+    val_size = math.floor((tot_lenght_sig + tot_lenght_bkg) * cfg.val_fraction)
+    test_size = math.floor((tot_lenght_sig + tot_lenght_bkg) * cfg.test_fraction)
+
+    tot_events = train_size + val_size + test_size
 
     # keep only total_fraction_of_events
     X_fts = X_fts[:tot_events]
     X_lbl = X_lbl[:tot_events]
 
-    # TODO: look out for the fraction scaling
-    # the fraction is not of the tot number of evetns but of the number of evetns after some are already thrown away
-
     X = torch.utils.data.TensorDataset(X_fts, X_lbl)
 
-    train_size = math.ceil((tot_lenght_sig + tot_lenght_bkg) * cfg.train_fraction)
-    val_size = math.floor((tot_lenght_sig + tot_lenght_bkg) * cfg.val_fraction)
-    test_size = math.floor((tot_lenght_sig + tot_lenght_bkg) * cfg.test_fraction)
 
     logger.info(f"Total size: {len(X)}")
     logger.info(f"Training size: {train_size}")

@@ -214,7 +214,7 @@ def train_val_one_epoch(
         )
         scheduler.step()
 
-    avg_loss = tot_loss / (i + 1)
+    avg_loss = tot_loss / len(loader)
     avg_accuracy = tot_correct / tot_num
 
     # Track best performance, and save the model state
@@ -234,7 +234,6 @@ def train_val_one_epoch(
         torch.save(checkpoint, model_name)
         best_model_name = model_name
 
-    print("best_epoch", best_epoch)
     return (
         avg_loss,
         avg_accuracy,
@@ -301,7 +300,7 @@ def eval_model(model, loader, loss_fn, num_prints, type, device, best_epoch):
             type,
         )
 
-    avg_loss = tot_loss / (i + 1)
+    avg_loss = tot_loss / len(loader)
     avg_accuracy = tot_correct / tot_num
 
     # concatenate all scores and labels

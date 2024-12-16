@@ -1,4 +1,4 @@
-input_variables: [JetGood_provenance]
+input_variables: [Jet_index]
 
 signal_list: [VBF_HHto4B]
 background_list: [GluGlutoHHto4B]
@@ -17,6 +17,6 @@ epochs: 100
 learning_rate: 1e-3
 learning_rate_schedule: constant
 
-train_fraction: 0.8
-val_fraction: 0.1
-test_fraction: 0.1
+train_fraction: 0.11
+val_fraction: 0.014
+test_fraction: 0.014
