@@ -1,4 +1,4 @@
-name: pytorch_test
+name: ML_pytorch
 channels:
 - conda-forge
 - pkgs/main
