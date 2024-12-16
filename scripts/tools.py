@@ -28,7 +28,6 @@ def loop_one_batch(
     train,
     time_epoch,
     num_batches,
-    num_prints,
     epoch_index,
     eval_model,
     all_scores,
@@ -77,10 +76,12 @@ def loop_one_batch(
     running_num += weights.sum().item()
     tot_num += weights.sum().item()
 
-    if i + 1 >= num_batches / num_prints * count:
+    step_prints = max(1, 0.1 * num_batches)
+
+    if i + 1 >= step_prints * count:
         count += 1
 
-        last_loss = running_loss * num_prints / num_batches  # loss per batch
+        last_loss = running_loss / step_prints  # loss per batch
         last_accuracy = running_correct / running_num  # accuracy per batch
         tb_x = epoch_index * num_batches + i + 1
 
@@ -141,7 +142,6 @@ def train_val_one_epoch(
     loader,
     loss_fn,
     optimizer,
-    num_prints,
     device,
     time_epoch,
     scheduler,
@@ -198,7 +198,6 @@ def train_val_one_epoch(
             train,
             time_epoch,
             num_batches,
-            num_prints,
             epoch_index,
             False,
             all_scores,
@@ -244,7 +243,7 @@ def train_val_one_epoch(
     )
 
 
-def eval_model(model, loader, loss_fn, num_prints, type, device, best_epoch):
+def eval_model(model, loader, loss_fn, type, device, best_epoch):
     # Test the model by running it on the test set
     running_loss = 0.0
     tot_loss = 0.0
@@ -291,7 +290,6 @@ def eval_model(model, loader, loss_fn, num_prints, type, device, best_epoch):
             False,
             time.time(),
             num_batches,
-            num_prints,
             best_epoch,
             True,
             all_scores,

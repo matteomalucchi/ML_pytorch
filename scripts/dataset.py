@@ -45,9 +45,13 @@ def get_variables(
                             if category == region:
                                 logger.info("category %s", category)
                                 vars = file["columns"][sample][dataset][category]
-                                weights = file["columns"][sample][dataset][category][
-                                    "weight"
-                                ].value
+                                weights = (
+                                    file["columns"][sample][dataset][category][
+                                        "weight"
+                                    ].value
+                                    / file["sum_genweights"][dataset]
+                                )
+
             if not vars:
                 logger.error(
                     f"region {region} not found in dataset {dataset_sample} for sample {sample_list}"
@@ -182,35 +186,31 @@ def load_data(args, cfg):
     logger.info(f"sum of weights before rescaling signal: {sumw_sig}")
     logger.info(f"sum of weights before rescaling backgound: {sumw_bkg}")
 
-    if args.weights:
-        sig_class_weights = args.weights[0]
-        bkg_class_weights = args.weights[1]
+    # compute class weights such that sumw is the same for signal and background and each weight is order of 1
+    num_events_sig = X_sig[0].shape[1]
+    num_events_bkg = X_bkg[0].shape[1]
+    if True:
+        sig_class_weights = (num_events_sig + num_events_bkg) / sumw_sig
+        bkg_class_weights = (num_events_sig + num_events_bkg) / sumw_bkg
     else:
-        # compute class weights such that sumw is the same for signal and background and each weight is order of 1
-        num_events_sig = X_sig[0].shape[1]
-        num_events_bkg = X_bkg[0].shape[1]
-        if True:
-            sig_class_weights = (num_events_sig + num_events_bkg) / sumw_sig
-            bkg_class_weights = (num_events_sig + num_events_bkg) / sumw_bkg
-        else:
-            # Compute the effective class count
-            # https://arxiv.org/pdf/1901.05555.pdf
+        # Compute the effective class count
+        # https://arxiv.org/pdf/1901.05555.pdf
 
-            sig_event_weights = X_sig[0][-1]
-            beta_sig = 1 - (1 / sig_event_weights.sum())
-            sig_class_weights = (1 - beta_sig) / (1 - beta_sig**num_events_sig)
+        sig_event_weights = X_sig[0][-1]
+        beta_sig = 1 - (1 / sig_event_weights.sum())
+        sig_class_weights = (1 - beta_sig) / (1 - beta_sig**num_events_sig)
 
-            logger.info(
-                f"num event sig {num_events_sig}, sig_event_weights {sig_event_weights.sum()}, beta_sig {beta_sig}, sig_class_weights {sig_class_weights}"
-            )
+        logger.info(
+            f"num event sig {num_events_sig}, sig_event_weights {sig_event_weights.sum()}, beta_sig {beta_sig}, sig_class_weights {sig_class_weights}"
+        )
 
-            bkg_event_weights = X_bkg[0][-1]
-            beta_bkg = 1 - (1 / bkg_event_weights.sum())
-            bkg_class_weights = (1 - beta_bkg) / (1 - beta_bkg**num_events_bkg)
+        bkg_event_weights = X_bkg[0][-1]
+        beta_bkg = 1 - (1 / bkg_event_weights.sum())
+        bkg_class_weights = (1 - beta_bkg) / (1 - beta_bkg**num_events_bkg)
 
-            logger.info(
-                f"num event bkg {num_events_bkg}, bkg_event_weights {bkg_event_weights.sum()}, beta_bkg {beta_bkg}, bkg_class_weights {bkg_class_weights}"
-            )
+        logger.info(
+            f"num event bkg {num_events_bkg}, bkg_event_weights {bkg_event_weights.sum()}, beta_bkg {beta_bkg}, bkg_class_weights {bkg_class_weights}"
+        )
 
     X_sig[0][-1] = X_sig[0][-1] * sig_class_weights
     X_bkg[0][-1] = X_bkg[0][-1] * bkg_class_weights
@@ -238,7 +238,6 @@ def load_data(args, cfg):
     X_lbl = X_lbl[:tot_events]
 
     X = torch.utils.data.TensorDataset(X_fts, X_lbl)
-
 
     logger.info(f"Total size: {len(X)}")
     logger.info(f"Training size: {train_size}")

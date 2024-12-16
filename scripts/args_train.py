@@ -17,13 +17,6 @@ parser.add_argument(
     type=int,
 )
 parser.add_argument(
-    "-p",
-    "--num-prints",
-    default=50,
-    help="Number of prints for each epoch",
-    type=int,
-)
-parser.add_argument(
     "-n",
     "--num-workers",
     default=4,
@@ -37,13 +30,6 @@ parser.add_argument(
     default=[
     ],
     help="Directory for data",
-)
-parser.add_argument(
-    "--weights",
-    nargs="+",
-    default=[], 
-    help="Weights for the loss function (signal, background)",
-    type=float,
 )
 parser.add_argument(
     "--eval",

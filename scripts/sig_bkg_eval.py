@@ -81,7 +81,7 @@ def my_roc_auc(
 
 
 def plot_sig_bkg_distributions(
-    score_lbl_tensor_train, score_lbl_tensor_test, dir, show
+    score_lbl_tensor_train, score_lbl_tensor_test, dir, show, rescale
 ):
     # plot the signal and background distributions
     sig_score_train, bkg_score_train = handle_arrays(score_lbl_tensor_train, 0)
@@ -192,7 +192,7 @@ def plot_sig_bkg_distributions(
         counts, bins, _ = plt.hist(
             score,
             weights=weight,
-            bins=300,
+            bins=1000,
             alpha=0,
             density=True,
             range=(0, 1),
@@ -201,7 +201,7 @@ def plot_sig_bkg_distributions(
         bin_widths = bins[1:] - bins[:-1]
         bin_centers = 0.5 * (bins[:-1] + bins[1:])
 
-    # compute score for 80% VBF-HH signal efficiency
+    # compute score for 80% signal efficiency
     sig_eff = 0.8
     signal_cumulative_integral = np.cumsum(counts_test_list[0][::-1] * bin_widths)
     # find the bin with the signal efficiency closest to 80%
@@ -221,7 +221,33 @@ def plot_sig_bkg_distributions(
         ),
     )
 
-    plt.xlabel("DNN output")
+    # compute number of signal and background events in the test dataset above the 80% signal efficiency threshold
+    n_sig_above_80 = np.sum(sig_weight_test[sig_score_test > dnn_score_80]) * (
+        rescale[0] if rescale else 1
+    )
+    n_bkg_above_80 = np.sum(bkg_weight_test[bkg_score_test > dnn_score_80]) * (
+        rescale[1] if rescale else 1
+    )
+    significance = n_sig_above_80 / np.sqrt(n_bkg_above_80)
+
+    print(
+        f"Number of signal events above 80% signal efficiency threshold: {n_sig_above_80}"
+    )
+    print(
+        f"Number of background events above 80% signal efficiency threshold: {n_bkg_above_80}"
+    )
+    print(f"Significance (80% signal efficiency cut): {significance:.2f}")
+
+    # print the significance on the plot
+    plt.text(
+        0.5,
+        0.775,
+        f"Significance (80% cut) = {significance:.2f}",
+        fontsize=20,
+        transform=plt.gca().transAxes,
+    )
+
+    plt.xlabel("Output score")
     plt.ylabel("Normalized counts")
     plt.legend(
         loc="upper left",
@@ -317,6 +343,14 @@ if __name__ == "__main__":
     parser.add_argument(
         "-s", "--show", default=False, help="Show plots", action="store_true"
     )
+    parser.add_argument(
+        "-r",
+        "--rescale",
+        nargs="+",
+        type=float,
+        default=[], # 2.889e-6 4.567e-5 (=1/sumgenweights*10)
+        help="Rescale the signal and background when computing the significance (can involve the sum of gen weigthts and the fraction used for testing)",
+    )
     parser.print_help()
     args = parser.parse_args()
 
@@ -332,7 +366,11 @@ if __name__ == "__main__":
 
     # plot the signal and background distributions
     plot_sig_bkg_distributions(
-        score_lbl_tensor_train, score_lbl_tensor_test, args.input_dir, args.show
+        score_lbl_tensor_train,
+        score_lbl_tensor_test,
+        args.input_dir,
+        args.show,
+        args.rescale,
     )
 
     plot_roc_curve(score_lbl_tensor_test, args.input_dir, args.show)
