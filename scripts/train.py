@@ -32,8 +32,10 @@ if args.history:
 if __name__ == "__main__":
     start_time = time.time()
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    main_dir = f"out/{timestamp}_{args.name}"
+    # timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    # main_dir = f"out/{timestamp}_{args.name}"
+    main_dir = args.output_dir
+    name= main_dir.split("/")[-1]
 
     best_vloss = 1_000_000.0
     best_vaccuracy = 0.0
@@ -53,15 +55,33 @@ if __name__ == "__main__":
     sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
     ML_model = importlib.import_module(cfg.ML_model)
 
+
     if args.load_model or args.eval_model:
         main_dir = os.path.dirname(
             args.load_model if args.load_model else args.eval_model
         ).replace("models", "")
-
-    os.makedirs(main_dir, exist_ok=True)
+    else:
+        try:
+            os.makedirs(main_dir)
+        except FileExistsError:
+            #ask the user if they want to overwrite the directory
+            print(f"Directory {main_dir} already exists")
+            if args.overwrite:
+                print("Overwriting...")
+                os.system(f"rm -rf {main_dir}")
+                os.makedirs(main_dir)
+            else:
+                print("Do you want to overwrite it? (y/n)")
+                answer = input()
+                if answer == "y":
+                    os.system(f"rm -rf {main_dir}")
+                    os.makedirs(main_dir)
+                else:
+                    print("Exiting...")
+                    sys.exit(0)
     # writer = SummaryWriter(f"runs/DNN_trainer_{timestamp}")
     # Create the logger
-    logger = setup_logger(f"{main_dir}/logger_{timestamp}.log")
+    logger = setup_logger(f"{main_dir}/logger_{name}.log")
 
     logger.info("cfg:\n - %s", "\n - ".join(str(it) for it in cfg.items()))
 
@@ -111,7 +131,7 @@ if __name__ == "__main__":
         optimizer.load_state_dict(checkpoint["optimizer"])
         loaded_epoch = checkpoint["epoch"]
         best_model_name = args.load_model if args.load_model else args.eval_model
-        with open(f"{main_dir}/logger_{timestamp}.log", "r") as f:
+        with open(f"{main_dir}/logger_{name}.log", "r") as f:
             for line in reversed(f.readlines()):
                 if "Best epoch" in line:
                     # get line from Best epoch onwards
@@ -208,7 +228,7 @@ if __name__ == "__main__":
             print("\n\n\n")
             logger.info("Plotting training and validation loss and accuracy")
             train_accuracy, train_loss, val_accuracy, val_loss = read_from_txt(
-                f"{main_dir}/logger_{timestamp}.log"
+                f"{main_dir}/logger_{name}.log"
             )
 
             plot_history(

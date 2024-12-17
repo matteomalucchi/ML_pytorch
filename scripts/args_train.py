@@ -63,7 +63,6 @@ parser.add_argument(
     type=str,
 )
 parser.add_argument(
-    "-o",
     "--onnx",
     default=False,
     help="Save model in ONNX format",
@@ -76,9 +75,16 @@ parser.add_argument(
     action="store_true",
 )
 parser.add_argument(
-    "--name",
+    "--overwrite",
+    default=False,
+    help="Overwrite output directory",
+    action="store_true",
+)
+parser.add_argument(
+    "-o",
+    "--output-dir",
     default="",
-    help="Name for the directory",
+    help="Output directory",
     type=str,
 )
 parser.add_argument(
@@ -90,5 +96,5 @@ parser.add_argument(
 )
 
 
-parser.print_help()
+# parser.print_help()
 args = parser.parse_args()
