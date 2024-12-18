@@ -81,7 +81,12 @@ def my_roc_auc(
 
 
 def plot_sig_bkg_distributions(
-    score_lbl_tensor_train, score_lbl_tensor_test, dir, show, rescale
+    score_lbl_tensor_train,
+    score_lbl_tensor_test,
+    dir,
+    show,
+    rescale,
+    train_test_fractions,
 ):
     # plot the signal and background distributions
     sig_score_train, bkg_score_train = handle_arrays(score_lbl_tensor_train, 0)
@@ -221,14 +226,32 @@ def plot_sig_bkg_distributions(
         ),
     )
 
-    # compute number of signal and background events in the test dataset above the 80% signal efficiency threshold
-    n_sig_above_80 = np.sum(sig_weight_test[sig_score_test > dnn_score_80]) * (
-        rescale[0] if rescale else 1
+    n_sig=  (
+        np.sum(sig_weight_test)
+        / train_test_fractions[1]
+        * (rescale[0] if rescale else 1)
     )
-    n_bkg_above_80 = np.sum(bkg_weight_test[bkg_score_test > dnn_score_80]) * (
-        rescale[1] if rescale else 1
+    n_bkg = (
+        np.sum(bkg_weight_test)
+        / train_test_fractions[1]
+        * (rescale[1] if rescale else 1)
+    )
+    # compute number of signal and background events in the test dataset above the 80% signal efficiency threshold
+    n_sig_above_80 = (
+        np.sum(sig_weight_test[sig_score_test > dnn_score_80])
+        / train_test_fractions[1]
+        * (rescale[0] if rescale else 1)
+    )
+    n_bkg_above_80 = (
+        np.sum(bkg_weight_test[bkg_score_test > dnn_score_80])
+        / train_test_fractions[1]
+        * (rescale[1] if rescale else 1)
     )
     significance = n_sig_above_80 / np.sqrt(n_bkg_above_80)
+
+
+    print(f"Number of signal events in the test dataset: {n_sig}")
+    print(f"Number of background events in the test dataset: {n_bkg}")
 
     print(
         f"Number of signal events above 80% signal efficiency threshold: {n_sig_above_80}"
@@ -348,8 +371,10 @@ if __name__ == "__main__":
         "--rescale",
         nargs="+",
         type=float,
-        default=[9.71589e-7, 1.79814e-5], # 2.889e-6 4.567e-5 (=1/sumgenweights*10)
-        help="Rescale the signal and background when computing the significance (can involve the sum of gen weigthts and the fraction used for testing)",
+        default=[
+            0.3363, 0.3937 # this is the ratio of the (new xsec * BR) over the (old xsec)
+        ],  # 2.889e-6 4.567e-5 (=1/sumgenweights*10) #9.71589e-7, 1.79814e-5] #  3.453609602837785e-05,0.00017658439204048897,
+        help="Rescale the signal and background when computing the significance",
     )
     parser.print_help()
     args = parser.parse_args()
@@ -363,6 +388,9 @@ if __name__ == "__main__":
     score_lbl_tensor_test = np.load(input_file, allow_pickle=True)[
         "score_lbl_array_test"
     ]
+    train_test_fractions = np.load(input_file, allow_pickle=True)[
+        "train_test_fractions"
+    ]
 
     # plot the signal and background distributions
     plot_sig_bkg_distributions(
@@ -371,6 +399,7 @@ if __name__ == "__main__":
         args.input_dir,
         args.show,
         args.rescale,
+        train_test_fractions,
     )
 
     plot_roc_curve(score_lbl_tensor_test, args.input_dir, args.show)

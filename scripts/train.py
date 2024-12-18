@@ -35,7 +35,7 @@ if __name__ == "__main__":
     # timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     # main_dir = f"out/{timestamp}_{args.name}"
     main_dir = args.output_dir
-    name= main_dir.split("/")[-1]
+    name = main_dir.split("/")[-1]
 
     best_vloss = 1_000_000.0
     best_vaccuracy = 0.0
@@ -55,7 +55,6 @@ if __name__ == "__main__":
     sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
     ML_model = importlib.import_module(cfg.ML_model)
 
-
     if args.load_model or args.eval_model:
         main_dir = os.path.dirname(
             args.load_model if args.load_model else args.eval_model
@@ -64,7 +63,7 @@ if __name__ == "__main__":
         try:
             os.makedirs(main_dir)
         except FileExistsError:
-            #ask the user if they want to overwrite the directory
+            # ask the user if they want to overwrite the directory
             print(f"Directory {main_dir} already exists")
             if args.overwrite:
                 print("Overwriting...")
@@ -302,12 +301,14 @@ if __name__ == "__main__":
             "Eval epoch # %d,  acc train: %.4f,  acc test: %.4f"
             % (eval_epoch, accuracy_eval_train, accuracy_eval_test)
         )
+        train_test_fractions = np.array([cfg.train_fraction, cfg.test_fraction])
 
         # save the score and label arrays
         np.savez(
             f"{main_dir}/score_lbl_array.npz",
             score_lbl_array_train=score_lbl_array_train,
             score_lbl_array_test=score_lbl_array_test,
+            train_test_fractions=train_test_fractions,
         )
 
         # plot the signal and background distributions
@@ -315,7 +316,12 @@ if __name__ == "__main__":
             print("\n\n\n")
             logger.info("Plotting signal and background distributions")
             plot_sig_bkg_distributions(
-                score_lbl_array_train, score_lbl_array_test, main_dir, False
+                score_lbl_array_train,
+                score_lbl_array_test,
+                main_dir,
+                False,
+                [],
+                train_test_fractions,
             )
         if args.roc:
             print("\n\n\n")

@@ -49,8 +49,13 @@ def get_variables(
                                     file["columns"][sample][dataset][category][
                                         "weight"
                                     ].value
-                                    / (file["sum_genweights"][dataset] if False else 1)
+                                    / file["sum_genweights"][dataset]
                                 )
+                                logger.info(
+                                    f"original weight: {file['columns'][sample][dataset][category]['weight'].value[0]}"
+                                )
+                                logger.info(f"sum_genweights: {file['sum_genweights'][dataset]}")
+                                logger.info(f"weight: {weights[0]}")
 
             if not vars:
                 logger.error(
@@ -83,7 +88,7 @@ def get_variables(
                 else:
                     variables_dict[k] = ak.to_numpy(ak.unflatten(vars[k].value, 1))
 
-            weights = np.expand_dims(vars["weight"].value, axis=0)
+            weights = np.expand_dims(weights, axis=0)
             variables_array = np.swapaxes(
                 np.concatenate(
                     [variables_dict[input] for input in input_variables], axis=1
@@ -95,7 +100,6 @@ def get_variables(
             logger.info(f"weights {weights.shape}")
             variables_array = np.append(variables_array, weights, axis=0)
             logger.info(f"variables_array complete {variables_array.shape}")
-            print(variables_array)
 
         tot_lenght += variables_array.shape[1]
 
@@ -122,7 +126,6 @@ def get_variables(
     )
 
     X = (variables, flag_tensor)
-    print(X, X[0].shape)
     return X, tot_lenght
 
 
@@ -212,20 +215,34 @@ def load_data(args, cfg):
             f"num event bkg {num_events_bkg}, bkg_event_weights {bkg_event_weights.sum()}, beta_bkg {beta_bkg}, bkg_class_weights {bkg_class_weights}"
         )
 
-    X_sig[0][-1] = X_sig[0][-1] * sig_class_weights
-    X_bkg[0][-1] = X_bkg[0][-1] * bkg_class_weights
+    rescaled_sig_weights = X_sig[0][-1] * sig_class_weights
+    rescaled_bkg_weights = X_bkg[0][-1] * bkg_class_weights
+
+    logger.info(f"sig_class_weights: {sig_class_weights}")
+    logger.info(f"bkg_class_weights: {bkg_class_weights}")
 
     # sum of weights
-    sumw_sig = X_sig[0][-1].sum()
-    sumw_bkg = X_bkg[0][-1].sum()
+    sumw_sig = rescaled_sig_weights.sum()
+    sumw_bkg = rescaled_bkg_weights.sum()
     logger.info(f"sum of weights after rescaling signal: {sumw_sig}")
     logger.info(f"sum of weights after rescaling backgound: {sumw_bkg}")
 
+    sig_class_weights_tensor = (
+        torch.ones_like(X_sig[0][-1], dtype=torch.float32) * sig_class_weights
+    ).unsqueeze(0)
+    bkg_class_weights_tensor = (
+        torch.ones_like(X_bkg[0][-1], dtype=torch.float32) * bkg_class_weights
+    ).unsqueeze(0)
+
     X_fts = torch.cat((X_sig[0], X_bkg[0]), dim=1).transpose(1, 0)
     X_lbl = torch.cat((X_sig[1], X_bkg[1]), dim=1).transpose(1, 0)
+    X_clsw = torch.cat(
+        (sig_class_weights_tensor, bkg_class_weights_tensor), dim=1
+    ).transpose(1, 0)
 
     logger.info(f"X_fts shape: {X_fts.shape}")
     logger.info(f"X_lbl shape: {X_lbl.shape}")
+    logger.info(f"X_clsw shape: {X_clsw.shape}")
 
     train_size = math.floor((tot_lenght_sig + tot_lenght_bkg) * cfg.train_fraction)
     val_size = math.floor((tot_lenght_sig + tot_lenght_bkg) * cfg.val_fraction)
@@ -236,8 +253,9 @@ def load_data(args, cfg):
     # keep only total_fraction_of_events
     X_fts = X_fts[:tot_events]
     X_lbl = X_lbl[:tot_events]
+    X_clsw = X_clsw[:tot_events]
 
-    X = torch.utils.data.TensorDataset(X_fts, X_lbl)
+    X = torch.utils.data.TensorDataset(X_fts, X_lbl, X_clsw)
 
     logger.info(f"Total size: {len(X)}")
     logger.info(f"Training size: {train_size}")

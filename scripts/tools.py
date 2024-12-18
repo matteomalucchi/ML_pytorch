@@ -35,11 +35,14 @@ def loop_one_batch(
     all_weights,
     type_eval,
 ):
-    inputs, labels = data
+    inputs, labels, class_weights = data
     inputs = inputs.to(device)
-    weights = inputs[:, -1]
-    inputs = inputs[:, :-1]
     labels = labels.to(device)
+    class_weights = class_weights.to(device)
+
+    event_weights = inputs[:, -1]
+    inputs = inputs[:, :-1]
+    weights = event_weights * class_weights.flatten()
 
     # compute the outputs of the model
     outputs = model(inputs)
@@ -115,11 +118,11 @@ def loop_one_batch(
         if i == 0:
             all_scores = outputs
             all_labels = labels
-            all_weights = weights
+            all_weights = event_weights
         else:
             all_scores = torch.cat((all_scores, outputs))
             all_labels = torch.cat((all_labels, labels))
-            all_weights = torch.cat((all_weights, weights))
+            all_weights = torch.cat((all_weights, event_weights))
 
     return (
         running_loss,
