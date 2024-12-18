@@ -49,7 +49,7 @@ def get_variables(
                                     file["columns"][sample][dataset][category][
                                         "weight"
                                     ].value
-                                    / file["sum_genweights"][dataset]
+                                    / (file["sum_genweights"][dataset] if False else 1)
                                 )
 
             if not vars:
