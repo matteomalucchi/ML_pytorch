@@ -348,7 +348,7 @@ if __name__ == "__main__":
         "--rescale",
         nargs="+",
         type=float,
-        default=[], # 2.889e-6 4.567e-5 (=1/sumgenweights*10)
+        default=[2.889e-6, 4.567e-5], # 2.889e-6 4.567e-5 (=1/sumgenweights*10)
         help="Rescale the signal and background when computing the significance (can involve the sum of gen weigthts and the fraction used for testing)",
     )
     parser.print_help()
