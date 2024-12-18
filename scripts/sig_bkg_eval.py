@@ -209,7 +209,7 @@ def plot_sig_bkg_distributions(
     # get the DNN score for the 80% signal efficiency
     dnn_score_80 = bin_centers[bin_index]
     # compute the background rejection at 80% signal efficiency
-    bkg_rejection = np.sum(counts_test_list[1][:bin_index]) * bin_widths[bin_index]
+    bkg_rejection = np.sum(counts_test_list[1][:bin_index] * bin_widths[bin_index])
 
     # plot the vertical line for the 80% signal efficiency
     line_80 = plt.axvline(
@@ -348,7 +348,7 @@ if __name__ == "__main__":
         "--rescale",
         nargs="+",
         type=float,
-        default=[2.889e-6, 4.567e-5], # 2.889e-6 4.567e-5 (=1/sumgenweights*10)
+        default=[9.71589e-7, 1.79814e-5], # 2.889e-6 4.567e-5 (=1/sumgenweights*10)
         help="Rescale the signal and background when computing the significance (can involve the sum of gen weigthts and the fraction used for testing)",
     )
     parser.print_help()
