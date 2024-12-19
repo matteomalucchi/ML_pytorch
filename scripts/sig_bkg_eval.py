@@ -80,13 +80,57 @@ def my_roc_auc(
     )
 
 
+def compute_significance(
+    sig_eff,
+    counts_test_list,
+    bin_centers,
+    bin_widths,
+    sig_score_test,
+    bkg_score_test,
+    sig_weight_test,
+    bkg_weight_test,
+    test_fraction,
+    rescale,
+):
+
+    signal_cumulative_integral = np.cumsum(counts_test_list[0][::-1] * bin_widths)
+    # find the bin with the signal efficiency closest to target
+    bin_index = np.argmin(np.abs(signal_cumulative_integral[::-1] - sig_eff))
+    # get the DNN score for the target signal efficiency
+    dnn_score_target = bin_centers[bin_index]
+    # compute the background rejection at target signal efficiency
+    bkg_rejection = np.sum(counts_test_list[1][:bin_index] * bin_widths[bin_index])
+
+    # compute number of signal and background events in the test dataset above the target signal efficiency threshold
+    n_sig_above_target = (
+        np.sum(sig_weight_test[sig_score_test > dnn_score_target])
+        / test_fraction
+        * (rescale[0] if rescale else 1)
+    )
+    n_bkg_above_target = (
+        np.sum(bkg_weight_test[bkg_score_test > dnn_score_target])
+        / test_fraction
+        * (rescale[1] if rescale else 1)
+    )
+    significance_above_target = n_sig_above_target / np.sqrt(n_bkg_above_target)
+
+    return (
+        dnn_score_target,
+        bkg_rejection,
+        n_sig_above_target,
+        n_bkg_above_target,
+        significance_above_target,
+    )
+
+
 def plot_sig_bkg_distributions(
     score_lbl_tensor_train,
     score_lbl_tensor_test,
     dir,
     show,
     rescale,
-    train_test_fractions,
+    test_fraction,
+    get_max_significance=False,
 ):
     # plot the signal and background distributions
     sig_score_train, bkg_score_train = handle_arrays(score_lbl_tensor_train, 0)
@@ -135,15 +179,16 @@ def plot_sig_bkg_distributions(
     ax.set_ylim(top=max_bin * 1.5)
 
     legend_test_list = []
-    for score, weight, color, label in zip(
+    for score, weight, color, label, rescale_factor in zip(
         [sig_score_test, bkg_score_test],
         [sig_weight_test, bkg_weight_test],
         ["blue", "r"],
         ["Signal (test)", "Background (test)"],
+        rescale if rescale else [1, 1],
     ):
         counts, bins, _ = plt.hist(
             score,
-            weights=weight,
+            weights=np.sign(weight),
             bins=30,
             alpha=0,
             density=False,
@@ -190,13 +235,14 @@ def plot_sig_bkg_distributions(
     )
 
     counts_test_list = []
-    for score, weight in zip(
+    for score, weight, rescale_factor in zip(
         [sig_score_test, bkg_score_test],
         [sig_weight_test, bkg_weight_test],
+        rescale if rescale else [1, 1],
     ):
         counts, bins, _ = plt.hist(
             score,
-            weights=weight,
+            weights=weight * rescale_factor,
             bins=1000,
             alpha=0,
             density=True,
@@ -206,70 +252,83 @@ def plot_sig_bkg_distributions(
         bin_widths = bins[1:] - bins[:-1]
         bin_centers = 0.5 * (bins[:-1] + bins[1:])
 
-    # compute score for 80% signal efficiency
-    sig_eff = 0.8
-    signal_cumulative_integral = np.cumsum(counts_test_list[0][::-1] * bin_widths)
-    # find the bin with the signal efficiency closest to 80%
-    bin_index = np.argmin(np.abs(signal_cumulative_integral[::-1] - sig_eff))
-    # get the DNN score for the 80% signal efficiency
-    dnn_score_80 = bin_centers[bin_index]
-    # compute the background rejection at 80% signal efficiency
-    bkg_rejection = np.sum(counts_test_list[1][:bin_index] * bin_widths[bin_index])
+    n_sig = np.sum(sig_weight_test) / test_fraction * (rescale[0] if rescale else 1)
+    n_bkg = np.sum(bkg_weight_test) / test_fraction * (rescale[1] if rescale else 1)
+    significance = n_sig / np.sqrt(n_bkg)
+    print(f"\nNumber of signal events in the test dataset: {n_sig}")
+    print(f"Number of background events in the test dataset: {n_bkg}")
+    print(f"Significance: {significance:.2f}\n")
 
-    # plot the vertical line for the 80% signal efficiency
-    line_80 = plt.axvline(
-        dnn_score_80,
+    if get_max_significance:
+        max_significance = -1
+        for sig_eff_target in np.linspace(0.0, 1.0, 30):
+            # compute the significance for each signal efficiency
+            # and find the DNN cut that maximizes the significance
+            (infos_significance) = compute_significance(
+                sig_eff_target,
+                counts_test_list,
+                bin_centers,
+                bin_widths,
+                sig_score_test,
+                bkg_score_test,
+                sig_weight_test,
+                bkg_weight_test,
+                test_fraction,
+                rescale,
+            )
+            if infos_significance[-1] > max_significance:
+                max_significance = infos_significance[-1]
+                print("max_significance", max_significance)
+                (
+                    dnn_score_target,
+                    bkg_rejection,
+                    n_sig_above_target,
+                    n_bkg_above_target,
+                    significance_above_target,
+                ) = infos_significance
+                sig_eff = sig_eff_target
+    else:
+        sig_eff = 0.8
+        (
+            dnn_score_target,
+            bkg_rejection,
+            n_sig_above_target,
+            n_bkg_above_target,
+            significance_above_target,
+        ) = compute_significance(
+            sig_eff,
+            counts_test_list,
+            bin_centers,
+            bin_widths,
+            sig_score_test,
+            bkg_score_test,
+            sig_weight_test,
+            bkg_weight_test,
+            test_fraction,
+            rescale,
+        )
+
+    print(
+        f"\n###########\nNumber of signal events above {sig_eff:.3f} signal efficiency threshold: {n_sig_above_target:.3f}"
+    )
+    print(
+        f"Number of background events above {sig_eff:.3f} signal efficiency threshold: {n_bkg_above_target:.3f}"
+    )
+    print(
+        f"Significance ({dnn_score_target:.3f} DNN cut): {significance_above_target:.3f}"
+    )
+    # plot the vertical line for the signal efficiency
+    line_target = plt.axvline(
+        dnn_score_target,
         color="grey",
         linestyle="--",
-        label="0.8 signal efficiency, {:.2f} background rejection".format(
-            bkg_rejection
+        label="Sig efficiency {:.2f}\nBkg rejection {:.2f}\nDNN score {:.2f}\nSignificance {:.2f}".format(
+            sig_eff,
+            bkg_rejection,
+            dnn_score_target,
+            significance_above_target,
         ),
     )
-
-    n_sig=  (
-        np.sum(sig_weight_test)
-        / train_test_fractions[1]
-        * (rescale[0] if rescale else 1)
-    )
-    n_bkg = (
-        np.sum(bkg_weight_test)
-        / train_test_fractions[1]
-        * (rescale[1] if rescale else 1)
-    )
-    # compute number of signal and background events in the test dataset above the 80% signal efficiency threshold
-    n_sig_above_80 = (
-        np.sum(sig_weight_test[sig_score_test > dnn_score_80])
-        / train_test_fractions[1]
-        * (rescale[0] if rescale else 1)
-    )
-    n_bkg_above_80 = (
-        np.sum(bkg_weight_test[bkg_score_test > dnn_score_80])
-        / train_test_fractions[1]
-        * (rescale[1] if rescale else 1)
-    )
-    significance = n_sig_above_80 / np.sqrt(n_bkg_above_80)
-
-
-    print(f"Number of signal events in the test dataset: {n_sig}")
-    print(f"Number of background events in the test dataset: {n_bkg}")
-
-    print(
-        f"Number of signal events above 80% signal efficiency threshold: {n_sig_above_80}"
-    )
-    print(
-        f"Number of background events above 80% signal efficiency threshold: {n_bkg_above_80}"
-    )
-    print(f"Significance (80% signal efficiency cut): {significance:.2f}")
-
-    # print the significance on the plot
-    plt.text(
-        0.5,
-        0.775,
-        f"Significance (80% cut) = {significance:.2f}",
-        fontsize=20,
-        transform=plt.gca().transAxes,
-    )
-
     plt.xlabel("Output score")
     plt.ylabel("Normalized counts")
     plt.legend(
@@ -282,7 +341,7 @@ def plot_sig_bkg_distributions(
             legend_test_list[0],
             bkg_train[2][0],
             legend_test_list[1],
-            line_80,
+            line_target,
         ],
         frameon=False,
     )
@@ -372,9 +431,10 @@ if __name__ == "__main__":
         nargs="+",
         type=float,
         default=[
-            0.3363, 0.3937 # this is the ratio of the (new xsec * BR) over the (old xsec)
+            0.3363,
+            0.3937,  # this is the ratio of the (new xsec * BR) over the (old xsec)
         ],  # 2.889e-6 4.567e-5 (=1/sumgenweights*10) #9.71589e-7, 1.79814e-5] #  3.453609602837785e-05,0.00017658439204048897,
-        help="Rescale the signal and background when computing the significance",
+        help="Rescale the signal and background when computing the number of expected events",
     )
     parser.print_help()
     args = parser.parse_args()
@@ -399,7 +459,8 @@ if __name__ == "__main__":
         args.input_dir,
         args.show,
         args.rescale,
-        train_test_fractions,
+        train_test_fractions[1],
+        get_max_significance=False,
     )
 
     plot_roc_curve(score_lbl_tensor_test, args.input_dir, args.show)

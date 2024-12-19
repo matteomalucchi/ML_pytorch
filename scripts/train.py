@@ -320,8 +320,8 @@ if __name__ == "__main__":
                 score_lbl_array_test,
                 main_dir,
                 False,
-                [],
-                train_test_fractions,
+                [0.3363, 0.3937], #TODO:remove default values
+                train_test_fractions[1],
             )
         if args.roc:
             print("\n\n\n")
