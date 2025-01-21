@@ -448,9 +448,13 @@ if __name__ == "__main__":
     score_lbl_tensor_test = np.load(input_file, allow_pickle=True)[
         "score_lbl_array_test"
     ]
-    train_test_fractions = np.load(input_file, allow_pickle=True)[
-        "train_test_fractions"
-    ]
+
+    try:
+        train_test_fractions = np.load(input_file, allow_pickle=True)[
+            "train_test_fractions"
+        ]
+    except KeyError:
+        train_test_fractions=[0.8,0.1]
 
     # plot the signal and background distributions
     plot_sig_bkg_distributions(
