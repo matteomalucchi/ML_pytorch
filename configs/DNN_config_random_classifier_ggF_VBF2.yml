@@ -1,0 +1,22 @@
+input_variables: [Jet_index]
+
+signal_list: [VBF_HHto4B]
+background_list: [GluGlutoHHto4B]
+
+region: 4b_region
+dataset_signal: VBFHHto4B_CV_1_C2V_1_C3_1_2022_postEE
+dataset_background: GluGlutoHHto4B_kl-1p00_kt-1p00_c2-0p00__2022_postEE
+
+ML_model: models.DNN_model
+
+data_format: coffea
+
+batch_size: 512
+epochs: 100
+
+learning_rate: 1e-3
+learning_rate_schedule: constant
+
+train_fraction: 0.11
+val_fraction: 0.014
+test_fraction: 0.014

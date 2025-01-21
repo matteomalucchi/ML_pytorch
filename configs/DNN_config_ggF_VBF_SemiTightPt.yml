@@ -1,0 +1,29 @@
+input_variables:
+    [JetVBFLeadingPtNotFromHiggs_pt, JetVBFLeadingPtNotFromHiggs_eta, JetVBFLeadingPtNotFromHiggs_phi, JetVBFLeadingPtNotFromHiggs_mass,
+    JetGoodFromHiggsOrdered_pt, JetGoodFromHiggsOrdered_eta, JetGoodFromHiggsOrdered_phi, JetGoodFromHiggsOrdered_mass,
+    HiggsLeading_pt, HiggsLeading_eta, HiggsLeading_phi, HiggsLeading_mass,
+    HiggsSubLeading_pt, HiggsSubLeading_eta, HiggsSubLeading_phi, HiggsSubLeading_mass,
+    events_HH_deltaR, events_H1j1_deltaR, events_H1j2_deltaR, events_H2j1_deltaR, events_H2j2_deltaR, events_HH_centrality,
+    events_JetVBFLeadingPtNotFromHiggs_jjMass, events_JetVBFLeadingPtNotFromHiggs_deltaEta,
+    HH_pt, HH_eta, HH_phi, HH_mass]
+
+signal_list: [VBF_HHto4B]
+background_list: [GluGlutoHHto4B]
+
+region: 4b_semiTight_LeadingPt_region
+dataset_signal: VBFHHto4B_CV_1_C2V_1_C3_1_2022_postEE
+dataset_background: GluGlutoHHto4B_kl-1p00_kt-1p00_c2-0p00__2022_postEE
+
+ML_model: models.DNN_model
+
+data_format: coffea
+
+batch_size: 512
+epochs: 100
+
+learning_rate: 1e-3
+learning_rate_schedule: constant
+
+train_fraction: 0.8
+val_fraction: 0.1
+test_fraction: 0.1

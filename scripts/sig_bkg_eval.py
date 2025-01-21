@@ -112,7 +112,8 @@ def compute_significance(
         / test_fraction
         * (rescale[1] if rescale else 1)
     )
-    significance_above_target = n_sig_above_target / np.sqrt(n_bkg_above_target)
+    # significance_above_target = n_sig_above_target / np.sqrt(n_bkg_above_target)
+    significance_above_target = np.sqrt(2 * ((n_sig_above_target + n_bkg_above_target) * np.log(n_sig_above_target / n_bkg_above_target + 1) - n_sig_above_target))
 
     return (
         dnn_score_target,
