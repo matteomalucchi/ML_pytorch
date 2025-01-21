@@ -49,12 +49,13 @@ def get_variables(
                                     file["columns"][sample][dataset][category][
                                         "weight"
                                     ].value
-                                    / file["sum_genweights"][dataset]
+                                    / (file["sum_genweights"][dataset] if dataset in file["sum_genweights"] else 1)
                                 )
-                                logger.info(
-                                    f"original weight: {file['columns'][sample][dataset][category]['weight'].value[0]}"
-                                )
-                                logger.info(f"sum_genweights: {file['sum_genweights'][dataset]}")
+                                if dataset in file["sum_genweights"]:
+                                    logger.info(
+                                        f"original weight: {file['columns'][sample][dataset][category]['weight'].value[0]}"
+                                    )
+                                    logger.info(f"sum_genweights: {file['sum_genweights'][dataset]}")
                                 logger.info(f"weight: {weights[0]}")
 
             if not vars:
@@ -64,11 +65,12 @@ def get_variables(
                 raise ValueError
 
             for k in input_variables:
+                logger.info(k)
                 # unflatten all the jet variables
                 collection = k.split("_")[0]
 
                 # check if collection_N is present to unflatten the variables
-                if f"{collection}_N" in vars.keys():
+                if f"{collection}_N" in vars.keys() and k.split("_")[1] != "N":
                     number_per_event = tuple(vars[f"{collection}_N"].value)
                     if ak.all(number_per_event == number_per_event[0]):
                         variables_dict[k] = ak.to_numpy(
@@ -129,17 +131,17 @@ def get_variables(
     return X, tot_lenght
 
 
-def load_data(args, cfg):
-    batch_size = args.batch_size if args.batch_size else cfg.batch_size
-    logger.info(f"Batch size: {batch_size}")
-
-    dirs = args.data_dirs
+def load_data(cfg):
+    batch_size = cfg.batch_size
+    logger.debug(f"Batch size: {batch_size}")
+    
+    dirs = cfg.data_dirs
 
     total_fraction_of_events = cfg.train_fraction + cfg.val_fraction + cfg.test_fraction
 
     assert total_fraction_of_events <= 1.0, "Fractions must sum to less than 1.0"
 
-    logger.info("Variables: %s", cfg.input_variables)
+    logger.debug("Variables: %s", cfg.input_variables)
 
     # list of signal and background files
     sig_files = []
@@ -161,6 +163,11 @@ def load_data(args, cfg):
     else:
         logger.error(f"Data format {cfg.data_format} not supported")
         raise ValueError
+    
+    # Set signal region
+    sig_region = cfg.signal_region if "signal_region" in cfg else cfg.region
+    # Set background region
+    bck_region = cfg.background_region if "background_region" in cfg else cfg.region
 
     X_sig, tot_lenght_sig = get_variables(
         sig_files,
@@ -168,7 +175,7 @@ def load_data(args, cfg):
         cfg.input_variables,
         cfg.signal_list,
         cfg.dataset_signal,
-        cfg.region,
+        sig_region,
         "signal",
         cfg.data_format,
     )
@@ -178,7 +185,7 @@ def load_data(args, cfg):
         cfg.input_variables,
         cfg.background_list,
         cfg.dataset_background,
-        cfg.region,
+        bck_region,
         "background",
         cfg.data_format,
     )
@@ -276,31 +283,31 @@ def load_data(args, cfg):
         train_dataset,
         batch_size=batch_size,
         shuffle=True,
-        num_workers=args.num_workers,
+        num_workers=cfg.num_workers,
         drop_last=True,
-        pin_memory=args.pin_memory,
+        pin_memory=cfg.pin_memory,
     )
     logger.info("Training loader size: %d", len(training_loader))
 
-    if not args.eval_model:
+    if not cfg.eval_model:
         val_loader = torch.utils.data.DataLoader(
             val_dataset,
             batch_size=batch_size,
             shuffle=False,
-            num_workers=args.num_workers,
+            num_workers=cfg.num_workers,
             drop_last=True,
-            pin_memory=args.pin_memory,
+            pin_memory=cfg.pin_memory,
         )
         logger.info("Validation loader size: %d", len(val_loader))
 
-    if args.eval or args.eval_model:
+    if cfg.eval or cfg.eval_model:
         test_loader = torch.utils.data.DataLoader(
             test_dataset,
             batch_size=batch_size,
             shuffle=False,
-            num_workers=args.num_workers,
+            num_workers=cfg.num_workers,
             drop_last=True,
-            pin_memory=args.pin_memory,
+            pin_memory=cfg.pin_memory,
         )
         logger.info("Test loader size: %d", len(test_loader))
 

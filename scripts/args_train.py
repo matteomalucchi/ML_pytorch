@@ -5,21 +5,21 @@ parser = argparse.ArgumentParser()
 parser.add_argument(
     "-b",
     "--batch-size",
-    default=0,
+    default=None,
     help="Batch size",
     type=int,
 )
 parser.add_argument(
     "-e",
     "--epochs",
-    default=10,
+    default=None,
     help="Number of epochs",
     type=int,
 )
 parser.add_argument(
     "-n",
     "--num-workers",
-    default=4,
+    default=None,
     help="Number of workers for data loading",
     type=int,
 )
@@ -27,8 +27,7 @@ parser.add_argument(
     "-d",
     "--data-dirs",
     nargs="+",
-    default=[
-    ],
+    default=None,
     help="Directory for data",
 )
 parser.add_argument(
@@ -38,59 +37,59 @@ parser.add_argument(
     default=False,
 )
 parser.add_argument(
-    "-g", "--gpus", default="", help="GPU numbers separated by a comma", type=str
+    "-g", "--gpus", default=None, help="GPU numbers separated by a comma", type=str
 )
 parser.add_argument(
-    "--histos", default=False, help="Make histograms", action="store_true"
+    "--histos", default=None, help="Make histograms", action="store_true"
 )
 parser.add_argument(
-    "--roc", default=False, help="Make roc curve", action="store_true"
+    "--roc", default=None, help="Make roc curve", action="store_true"
 )
 parser.add_argument(
-    "--history", default=False, help="Plot history", action="store_true"
+    "--history", default=None, help="Plot history", action="store_true"
 )
 parser.add_argument(
     "--eval-model",
-    default="",
+    default=None,
     help="Path to model to evaluate",
     type=str,
 )
 parser.add_argument(
     "-l",
     "--load-model",
-    default="",
+    default=None,
     help="Path to model to load and continue training",
     type=str,
 )
 parser.add_argument(
     "--onnx",
-    default=False,
+    default=None,
     help="Save model in ONNX format",
     action="store_true",
 )
 parser.add_argument(
     "--pin-memory",
-    default=False,
+    default=None,
     help="Pin memory for data loading",
     action="store_true",
 )
 parser.add_argument(
     "--overwrite",
-    default=False,
+    default=None,
     help="Overwrite output directory",
     action="store_true",
 )
 parser.add_argument(
     "-o",
     "--output-dir",
-    default="",
+    default=None,
     help="Output directory",
     type=str,
 )
 parser.add_argument(
     "-c",
     "--config",
-    default="../configs/DNN_input_lists_ggF_VBF.yml",
+    default=None,
     help="Path to the configuration file",
     type=str,
 )
