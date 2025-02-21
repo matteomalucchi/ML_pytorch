@@ -64,7 +64,7 @@ def plot_history(
         print("len info train: ", len(info["train"]))
         print("len info val: ", len(info["val"]))
         plt.plot(
-            np.linspace(0, len(info["train"]) / 50, len(info["train"])),
+            np.linspace(0, len(info["train"]) / 10, len(info["train"])),
             # range(len(info["train"])),
             uniform_filter1d(info["train"], size=uniform_filter),
             label=f"Training {type}",
@@ -74,9 +74,9 @@ def plot_history(
         plt.plot(
             np.linspace(
                 0,
-                len(info["val"]) / 50
-                if len(info["val"]) / 50 == len(info["train"]) / 50
-                else len(info["train"]) / 50,
+                len(info["val"]) / 10
+                if len(info["val"]) / 10 == len(info["train"]) / 10
+                else len(info["train"]) / 10,
                 len(info["val"]),
             ),
             # range(len(info["val"])),
