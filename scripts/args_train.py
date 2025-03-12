@@ -93,6 +93,13 @@ parser.add_argument(
     help="Path to the configuration file",
     type=str,
 )
+parser.add_argument(
+    "-s",
+    "--seed",
+    default=None,
+    help="Seed for random file sorter",
+    type=str,
+)
 
 
 # parser.print_help()

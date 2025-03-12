@@ -4,6 +4,7 @@ import time
 import logging
 
 from collections import defaultdict
+from ordered_set import OrderedSet
 
 logger = logging.getLogger(__name__)
 
@@ -352,27 +353,56 @@ def export_onnx(model, model_name, batch_size, input_size, device):
 def create_DNN_columns_list(run2, flatten, dnn_input_variables):
     """Create the columns of the DNN input variables
     """
-    column_dict = defaultdict(set)
+    # column_dict = defaultdict(set)
+#    column_dict = defaultdict(OrderedSet)
+#    for x, y in dnn_input_variables.values():
+#        if run2:
+#            print(f"{x}_{y}")
+#            if x != "events" or "sigma" in x:
+#                column_dict[x.split(":")[0] + "Run2"].add(y)
+#            else:
+#                column_dict[x.split(":")[0]].add(y)
+#
+#        else:
+#            column_dict[x.split(":")[0]].add(y)
+#    if run2:
+#        column_dict.update(
+#            {
+#                "events": set(
+#                    (
+#                        "era",
+#                        "HT",
+#                        "dR_min",
+#                        "dR_max",
+#                        "sigma_over_higgs1_reco_massRun2",
+#                        "sigma_over_higgs2_reco_massRun2",
+#                    )
+#                )
+#            }
+#        )
+#    print(column_dict)
+#    column_list=[f"{column}_{value}" for column, values in column_dict.items() for value in values]
+    column_list = []
     for x, y in dnn_input_variables.values():
+        name = x.split(":")[0]
         if run2:
             if x != "events":
-                column_dict[x.split(":")[0] + "Run2"].add(y)
+                column_list.append(f"{name}Run2_{y}")
+            elif "sigma" in y: 
+                column_list.append(f"{name}_{y}Run2")
+            else:
+                column_list.append(f"{name}_{y}")
+
         else:
-            column_dict[x.split(":")[0]].add(y)
-    if run2:
-        column_dict.update(
-            {
-                "events": set(
-                    (
-                        "era",
-                        "HT",
-                        "dR_min",
-                        "dR_max",
-                        "sigma_over_higgs1_reco_massRun2",
-                        "sigma_over_higgs2_reco_massRun2",
-                    )
-                )
-            }
-        )
-    column_list=[f"{column}_{value}" for column, values in column_dict.items() for value in values]
-    return column_list 
+            column_list.append(f"{name}_{y}")
+    
+    unique_list = []
+    [unique_list.append(val) for val in column_list if val not in unique_list]
+
+    return unique_list 
+
+if __name__=="__main__":
+    from dnn_input_variables import bkg_morphing_dnn_input_variables
+    columns = create_DNN_columns_list(True,True,bkg_morphing_dnn_input_variables)
+    for var in columns:
+        print(var)
