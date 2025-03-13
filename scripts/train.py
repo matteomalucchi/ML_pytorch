@@ -208,6 +208,7 @@ if __name__ == "__main__":
             (
                 avg_vloss,
                 avg_vaccuracy,
+                best_veval,
                 best_vloss,
                 best_vaccuracy,
                 best_epoch,
@@ -223,6 +224,7 @@ if __name__ == "__main__":
                 time_epoch,
                 None,
                 main_dir,
+                best_veval,
                 best_vloss,
                 best_vaccuracy,
                 best_epoch,
