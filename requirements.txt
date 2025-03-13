@@ -2,3 +2,4 @@ omegaconf==2.3.0
 coffea==0.7.22
 matplotlib==3.7.1
 mplhep==0.3.55
+ordered_set

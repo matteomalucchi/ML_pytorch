@@ -16,25 +16,39 @@ from tools import (
     train_val_one_epoch,
     eval_model,
     export_onnx,
+    create_DNN_columns_list,
 )
+from dnn_input_variables import bkg_morphing_dnn_input_variables, test_set, set_with_btag
 
 from args_train import args
 
 from setup_logger import setup_logger
 
+from early_stopper import EarlyStopper
 
-if args.histos:
-    from sig_bkg_eval import plot_sig_bkg_distributions, plot_roc_curve
-if args.history:
-    from plot_history import read_from_txt, plot_history
 
 
 if __name__ == "__main__":
     start_time = time.time()
+    
+    default_cfg = OmegaConf.load(f"{os.path.dirname(__file__)}/../configs/default_configs.yml")
+    cfg_file = OmegaConf.load(args.config)
+    
+    cfg = default_cfg
+    for key, val in cfg_file.items():
+        cfg[key] = val
 
+    for key, val in args.__dict__.items():
+        if val is not None:
+            cfg[key] = val
+
+    if cfg.histos:
+        from sig_bkg_eval import plot_sig_bkg_distributions, plot_roc_curve
+    if cfg.history:
+        from plot_history import read_from_txt, plot_history
     # timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    # main_dir = f"out/{timestamp}_{args.name}"
-    main_dir = args.output_dir
+    # main_dir = f"out/{timestamp}_{cfg.name}"
+    main_dir = cfg.output_dir
     name = main_dir.split("/")[-1]
 
     best_vloss = 1_000_000.0
@@ -43,21 +57,17 @@ if __name__ == "__main__":
     best_model_name = ""
 
     loaded_epoch = -1
+    
+    n_epochs = cfg.epochs if cfg.epochs else cfg.epochs
 
-    cfg = OmegaConf.load(args.config)
-
-    n_epochs = args.epochs if args.epochs else cfg.epochs
-
-    if not cfg.learning_rate_schedule in ["constant", "linear"]:
-        raise ValueError("learning_rate_schedule must be either 'constant' or 'linear'")
     assert cfg.learning_rate > 0, "learning_rate must be positive"
 
     sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
     ML_model = importlib.import_module(cfg.ML_model)
 
-    if args.load_model or args.eval_model:
+    if cfg.load_model or cfg.eval_model:
         main_dir = os.path.dirname(
-            args.load_model if args.load_model else args.eval_model
+            cfg.load_model if cfg.load_model else cfg.eval_model
         ).replace("models", "")
     else:
         try:
@@ -65,7 +75,7 @@ if __name__ == "__main__":
         except FileExistsError:
             # ask the user if they want to overwrite the directory
             print(f"Directory {main_dir} already exists")
-            if args.overwrite:
+            if cfg.overwrite:
                 print("Overwriting...")
                 os.system(f"rm -rf {main_dir}")
                 os.makedirs(main_dir)
@@ -80,15 +90,34 @@ if __name__ == "__main__":
                     sys.exit(0)
     # writer = SummaryWriter(f"runs/DNN_trainer_{timestamp}")
     # Create the logger
-    logger = setup_logger(f"{main_dir}/logger_{name}.log")
+    logger = setup_logger(f"{main_dir}/logger_{name}.log", cfg.verbosity)
+    
+    logger.debug('='*20)
+    logger.debug('default configs')
+    logger.debug("cfg:\n - %s", "\n - ".join(str(it) for it in default_cfg.items()))
 
+    logger.info('='*20)
+    logger.info('args')
+    logger.info("args:\n - %s", "\n - ".join(str(it) for it in args.__dict__.items()))
+    
+    logger.info('='*20)
+    logger.info('configs')
     logger.info("cfg:\n - %s", "\n - ".join(str(it) for it in cfg.items()))
 
-    logger.info("args:\n - %s", "\n - ".join(str(it) for it in args.__dict__.items()))
-
+    if cfg.input_variables is None:
+        logger.debug("Get Input variables from dnn_inputs")
+        logger.debug(bkg_morphing_dnn_input_variables)
+        #cfg.input_variables = create_DNN_columns_list(True, True, set_with_btag)
+        # cfg.input_variables = create_DNN_columns_list(True, True, test_set)
+        cfg.input_variables = create_DNN_columns_list(True, True, bkg_morphing_dnn_input_variables)
     input_variables = cfg.input_variables
+    logger.info(input_variables)
     signal_list = cfg.signal_list
     background_list = cfg.background_list
+        
+    early_stopping = cfg.early_stopping
+    patience = cfg.patience
+    min_delta = cfg.min_delta
 
     # Load data
     (
@@ -101,9 +130,9 @@ if __name__ == "__main__":
         X_fts,
         X_lbl,
         batch_size,
-    ) = load_data(args, cfg)
-    if args.gpus:
-        gpus = [int(i) for i in args.gpus.split(",")]
+    ) = load_data(cfg,cfg.seed)
+    if cfg.gpus:
+        gpus = [int(i) for i in cfg.gpus.split(",")]
         device = torch.device(gpus[0])
     else:
         gpus = None
@@ -111,7 +140,15 @@ if __name__ == "__main__":
     logger.info(f"Using {device} device")
 
     input_size = X_fts.size(1) - 1
+    
+    # Get validation evaluator (if best model by loss or accuracy)
+    eval_param = cfg.eval_param
+    logger.debug(f"Eval param: {eval_param}")
+    assert eval_param in ["loss", "acc"], "eval_param must be loss or acc"
 
+    # Create stopper class
+    early_stopper = EarlyStopper(logger=logger, patience=patience, min_delta=min_delta, eval_param=eval_param)
+    
     # Get model
     model, loss_fn, optimizer, scheduler = ML_model.get_model(
         input_size, device, cfg.learning_rate, cfg.learning_rate_schedule, n_epochs
@@ -124,12 +161,12 @@ if __name__ == "__main__":
         # model becomes `torch.nn.DataParallel` w/ model.module being the original `torch.nn.Module`
         model = torch.nn.DataParallel(model, device_ids=gpus)
 
-    if args.load_model or args.eval_model:
-        checkpoint = torch.load(args.load_model if args.load_model else args.eval_model)
+    if cfg.load_model or cfg.eval_model:
+        checkpoint = torch.load(cfg.load_model if cfg.load_model else cfg.eval_model)
         model.load_state_dict(checkpoint["state_dict"])
         optimizer.load_state_dict(checkpoint["optimizer"])
         loaded_epoch = checkpoint["epoch"]
-        best_model_name = args.load_model if args.load_model else args.eval_model
+        best_model_name = cfg.load_model if cfg.load_model else cfg.eval_model
         with open(f"{main_dir}/logger_{name}.log", "r") as f:
             for line in reversed(f.readlines()):
                 if "Best epoch" in line:
@@ -144,7 +181,7 @@ if __name__ == "__main__":
             % (best_model_name, loaded_epoch, best_vloss, best_vaccuracy)
         )
 
-    if not args.eval_model:
+    if not cfg.eval_model:
         for epoch in range(n_epochs):
             if epoch <= loaded_epoch:
                 continue
@@ -189,6 +226,7 @@ if __name__ == "__main__":
                 best_vloss,
                 best_vaccuracy,
                 best_epoch,
+                eval_param,
                 best_model_name,
             )
 
@@ -219,56 +257,62 @@ if __name__ == "__main__":
             # )
 
             # writer.flush()
+            validator = avg_vaccuracy if eval_param == "acc" else avg_vloss
+            logger.debug(f"Validator: {validator}")
+            if early_stopping and early_stopper.early_stop(validator):
+                logger.info("Stopping early")
+                break
             epoch += 1
             logger.info("time elapsed: {:.2f}s".format(time.time() - time_epoch))
 
-        if args.history:
-            # plot the training and validation loss and accuracy
-            print("\n\n\n")
-            logger.info("Plotting training and validation loss and accuracy")
-            train_accuracy, train_loss, val_accuracy, val_loss = read_from_txt(
-                f"{main_dir}/logger_{name}.log"
-            )
+    if cfg.history:
+        # plot the training and validation loss and accuracy
+        print("\n\n\n")
+        logger.info("Plotting training and validation loss and accuracy")
+        train_accuracy, train_loss, val_accuracy, val_loss = read_from_txt(
+            f"{main_dir}/logger_{name}.log"
+        )
 
-            plot_history(
-                train_accuracy,
-                train_loss,
-                val_accuracy,
-                val_loss,
-                main_dir,
-                False,
-            )
-    if args.onnx:
+        plot_history(
+            train_accuracy,
+            train_loss,
+            val_accuracy,
+            val_loss,
+            main_dir,
+            False,
+        )
+
+    # load best model
+    model.load_state_dict(
+            torch.load(best_model_name if not cfg.eval_model else cfg.eval_model)[
+            "state_dict"
+        ]
+    )
+    model.train(False)
+
+    if cfg.onnx:
         # export the model to ONNX
         print("\n\n\n")
         logger.info("Exporting model to ONNX")
-        model.train(False)
         # move model to cpu
         model.to("cpu")
         export_onnx(
             model,
-            best_model_name if not args.eval_model else args.eval_model,
+            best_model_name if not cfg.eval_model else cfg.eval_model,
             batch_size,
             input_size,
             "cpu",
         )
+    
+    model.to(device)
 
-    if args.eval or args.eval_model:
+    if cfg.eval or cfg.eval_model:
         # evaluate model on test_dataset loadining the best model
-        print("\n\n\n")
+        logger.info("\n\n\n")
         logger.info("Evaluating best model on test and train dataset")
-        print("================================")
+        logger.info("================================")
 
-        # load best model
-        model.load_state_dict(
-            torch.load(best_model_name if not args.eval_model else args.eval_model)[
-                "state_dict"
-            ]
-        )
-        model.train(False)
-        model.to(device)
-
-        eval_epoch = loaded_epoch if args.eval_model else best_epoch
+        eval_epoch = loaded_epoch if cfg.eval_model else best_epoch
         logger.info("Training dataset\n")
         score_lbl_array_train, loss_eval_train, accuracy_eval_train = eval_model(
             model,
@@ -312,7 +356,7 @@ if __name__ == "__main__":
         )
 
         # plot the signal and background distributions
-        if args.histos:
+        if cfg.histos:
             print("\n\n\n")
             logger.info("Plotting signal and background distributions")
             plot_sig_bkg_distributions(
@@ -323,7 +367,7 @@ if __name__ == "__main__":
                 [0.3363, 0.3937], #TODO:remove default values
                 train_test_fractions[1],
             )
-        if args.roc:
+        if cfg.roc:
             print("\n\n\n")
             logger.info("Plotting ROC curve")
             plot_roc_curve(score_lbl_array_test, main_dir, False)

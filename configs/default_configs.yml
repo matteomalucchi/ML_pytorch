@@ -1,0 +1,49 @@
+input_variables:
+    [JetGood_pt, JetGood_eta, JetGood_phi, JetGood_mass, JetGood_btagPNetB]
+
+signal_list: [VBF_HHto4B]
+background_list: [GluGlutoHHto4B]
+
+region: 4b_region 
+# signal_region: 4b_control_region
+# background_region: 2b_control_region
+dataset_signal: VBFHHto4B_CV_1_C2V_1_C3_1_2022_postEE
+dataset_background: GluGlutoHHto4B_kl-1p00_kt-1p00_c2-0p00__2022_postEE
+
+ML_model: models.DNN_reweight_model
+
+data_format: coffea
+verbosity: info
+
+seed: 1
+
+batch_size: 512
+epochs: 50
+
+learning_rate: 1e-2
+learning_rate_schedule: linear
+
+early_stopping: False
+patience: 5
+min_delta: 0
+
+eval_param: "loss"
+
+train_fraction: 0.5
+val_fraction: 0.25
+test_fraction: 0.25
+
+num_workers: 4
+data_dirs: [/work/mmaluch/out_hh4b/out_vbf_ggf_dnn_full/]
+eval: True
+gpus: 7
+histos: True
+roc: True
+history: True
+eval_model: ''
+load_model: ''
+onnx: True
+pin_memory: False
+overwrite: False
+output_dir: out/name_of_training
+config: configs/DNN_config_ggF_VBF.yml

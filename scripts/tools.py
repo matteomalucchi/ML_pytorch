@@ -3,6 +3,9 @@ import os
 import time
 import logging
 
+from collections import defaultdict
+from ordered_set import OrderedSet
+
 logger = logging.getLogger(__name__)
 
 
@@ -149,9 +152,10 @@ def train_val_one_epoch(
     time_epoch,
     scheduler,
     main_dir=None,
-    best_loss=None,
+    best_eval=None,
     best_accuracy=None,
     best_epoch=None,
+    eval_param="loss",
     best_model_name=None,
 ):
     logger.info("Training" if train else "Validation")
@@ -220,26 +224,37 @@ def train_val_one_epoch(
     avg_accuracy = tot_correct / tot_num
 
     # Track best performance, and save the model state
-    if not train and avg_loss < best_loss:
+    if eval_param == "loss":
+        evaluator=avg_loss
+    elif eval_param == "acc":
+        evaluator=1-avg_accuracy
+    else:
+        raise ValueError("Bad evaluator name")
+    if not train and evaluator < best_eval:
+        best_eval = evaluator
         best_loss = avg_loss
         best_accuracy = avg_accuracy
         best_epoch = epoch_index
 
         model_dir = f"{main_dir}/models"
+        state_dict_dir = f"{main_dir}/state_dict"
         os.makedirs(model_dir, exist_ok=True)
+        os.makedirs(state_dict_dir, exist_ok=True)
         model_name = f"{model_dir}/model_{epoch_index}.pt"
+        state_dict_name = f"{state_dict_dir}/model_{epoch_index}_state_dict.pt"
         checkpoint = {
             "epoch": epoch_index,
             "state_dict": model.state_dict(),
             "optimizer": optimizer.state_dict(),
         }
-        torch.save(checkpoint, model_name)
-        best_model_name = model_name
+        torch.save(checkpoint, state_dict_name)
+        torch.save(model, model_name)
+        best_model_name = state_dict_name
 
     return (
         avg_loss,
         avg_accuracy,
-        best_loss,
+        best_eval,
         best_accuracy,
         best_epoch,
         best_model_name,
@@ -334,3 +349,60 @@ def export_onnx(model, model_name, batch_size, input_size, device):
             "Sigmoid": {0: "batch_size"},
         },
     )
+
+def create_DNN_columns_list(run2, flatten, dnn_input_variables):
+    """Create the columns of the DNN input variables
+    """
+    # column_dict = defaultdict(set)
+#    column_dict = defaultdict(OrderedSet)
+#    for x, y in dnn_input_variables.values():
+#        if run2:
+#            print(f"{x}_{y}")
+#            if x != "events" or "sigma" in x:
+#                column_dict[x.split(":")[0] + "Run2"].add(y)
+#            else:
+#                column_dict[x.split(":")[0]].add(y)
+#
+#        else:
+#            column_dict[x.split(":")[0]].add(y)
+#    if run2:
+#        column_dict.update(
+#            {
+#                "events": set(
+#                    (
+#                        "era",
+#                        "HT",
+#                        "dR_min",
+#                        "dR_max",
+#                        "sigma_over_higgs1_reco_massRun2",
+#                        "sigma_over_higgs2_reco_massRun2",
+#                    )
+#                )
+#            }
+#        )
+#    print(column_dict)
+#    column_list=[f"{column}_{value}" for column, values in column_dict.items() for value in values]
+    column_list = []
+    for x, y in dnn_input_variables.values():
+        name = x.split(":")[0]
+        if run2:
+            if x != "events":
+                column_list.append(f"{name}Run2_{y}")
+            elif "sigma" in y: 
+                column_list.append(f"{name}_{y}Run2")
+            else:
+                column_list.append(f"{name}_{y}")
+
+        else:
+            column_list.append(f"{name}_{y}")
+    
+    unique_list = []
+    [unique_list.append(val) for val in column_list if val not in unique_list]
+
+    return unique_list 
+
+if __name__=="__main__":
+    from dnn_input_variables import bkg_morphing_dnn_input_variables
+    columns = create_DNN_columns_list(True,True,bkg_morphing_dnn_input_variables)
+    for var in columns:
+        print(var)
