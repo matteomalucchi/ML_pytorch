@@ -17,7 +17,7 @@ echo "Created batch directory: $batch_dir"
 for i in {0..19}; do
     run_dir="$batch_dir/run$(printf "%02d" $i)"
     echo "Running script with output to: $run_dir"
-    python scripts/train.py -d $coffea_dir  -o "$run_dir" --eval --onnx --roc --histos --history --gpus 7 -n 4 -c $config_file
+    python scripts/train.py -d $coffea_dir  -o "$run_dir" --eval --onnx --roc --histos --history --gpus 7 -n 4 -c $config_file -s $i
 done
 
 # Create best_models directory
@@ -27,14 +27,15 @@ echo "Created best models directory: $best_models_dir"
 
 # Find the last .pt file in each run folder and copy it
 for i in {0..19}; do
-    run_dir="$batch_dir/run$(printf "%02d" $i)/models"
+    run_dir="$batch_dir/run$(printf "%02d" $i)/state_dict/"
     if [ -d "$run_dir" ]; then
-        best_model=$(ls "$run_dir"/model_*.pt 2>/dev/null | grep -Eo 'model_[0-9]+\.pt' | sed 's/model_//; s/\.pt//' | sort -n | tail -n 1 | awk '{print "'$run_dir'/model_"$1".pt"}')
+        ls "$run_dir"/model_*state_dict.onnx
+        best_model=$(ls "$run_dir"/model_*state_dict.onnx 2>/dev/null | grep -Eo 'model_[0-9]+\_state_dict.onnx' | sed 's/model_//; s/\_state_dict.onnx//' | sort -n | tail -n 1 | awk '{print "'$run_dir'/model_"$1"_state_dict.onnx"}')
         if [ -n "$best_model" ]; then
-            cp "$best_model" "$best_models_dir/best_model_run$(printf "%02d" $i).pt"
-            echo "Copied $best_model to $best_models_dir/best_${best_model}_run$(printf "%02d" $i).pt"
+            cp "$best_model" "$best_models_dir/best_model_run$(printf "%02d" $i).onnx"
+            echo "Copied $best_model to $best_models_dir/best_model_run$(printf "%02d" $i).onnx"
         else
-            echo "No .pt files found in $run_dir"
+            echo "No .onnx files found in $run_dir"
         fi
     else
         echo "No models directory found in $run_dir"
