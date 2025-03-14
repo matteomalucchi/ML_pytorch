@@ -1,10 +1,7 @@
 from torch import nn
 import torch
-import sys
-import os
 
-sys.path.append(f"{os.path.dirname(__file__)}/../")
-from scripts.learning_rate_schedules import get_lr_scheduler
+from ml_pytorch.utils.learning_rate_schedules import get_lr_scheduler
 
 
 class DNN(nn.Module):
@@ -12,18 +9,18 @@ class DNN(nn.Module):
         super().__init__()
         self.linear_relu_stack = nn.Sequential(
             nn.Linear(dim_in, 512),
-            nn.BatchNorm1d(512),
             nn.ReLU(),
-            nn.Dropout(0.2),
             nn.Linear(512, 256),
-            nn.BatchNorm1d(256),
             nn.ReLU(),
-            nn.Dropout(0.2),
             nn.Linear(256, 128),
-            nn.BatchNorm1d(128),
             nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(128, 1),
+            nn.Linear(128, 64),
+            nn.ReLU(),
+            nn.Linear(64, 64),
+            nn.ReLU(),
+            nn.Linear(64, 64),
+            nn.ReLU(),
+            nn.Linear(64, 1),
         )
         self.sigmoid = nn.Sigmoid()
 

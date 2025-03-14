@@ -404,7 +404,7 @@ def create_DNN_columns_list(run2, flatten, dnn_input_variables):
     return unique_list 
 
 if __name__=="__main__":
-    from dnn_input_variables import bkg_morphing_dnn_input_variables
+    from ml_pytorch.defaults.dnn_input_variables import bkg_morphing_dnn_input_variables
     columns = create_DNN_columns_list(True,True,bkg_morphing_dnn_input_variables)
     for var in columns:
         print(var)

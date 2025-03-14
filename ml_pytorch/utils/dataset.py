@@ -5,7 +5,6 @@ import math
 import logging
 import os
 from coffea.util import load
-import sys
 import awkward as ak
 
 logger = logging.getLogger(__name__)
@@ -47,15 +46,13 @@ def get_variables(
                 if sample in sample_list:
                     print(f"sample {sample} in file")
                     if any([d not in list(file["columns"][sample].keys()) for d in dataset_list]):
-                        logger.error(f"dataset_list {dataset_list} not in available datasets {list(file['columns'][sample].keys())}")
-                        raise ValueError
+                        logger.warning(f"dataset_list {dataset_list} not in available datasets {list(file['columns'][sample].keys())}")
                     for dataset in list(file["columns"][sample].keys()):
                         print(f"searching dataset {dataset} in dataset_list {dataset_list}")
                         if dataset in dataset_list:
                             logger.info("dataset %s", dataset)
                             if any([region_file not in list(file["columns"][sample][dataset].keys()) for region_file in region_list]):
-                                logger.error(f"region_list {region_list} not in available regions {list(file['columns'][sample][dataset].keys())}")
-                                raise ValueError
+                                logger.warning(f"region_list {region_list} not in available regions {list(file['columns'][sample][dataset].keys())}")
                             for region_file in list(file["columns"][sample][dataset].keys()):
                                 if region_file in region_list:
                                     logger.info("region_file %s", region_file)

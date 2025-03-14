@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+#build-backend = "setuptools.build_meta"
+
+[project]
+name = "ml_pytorch"
+description = "Repository with basic machine learning algorithms implemented in PyTorch."
+authors = [
+    {name = "Matteo Malucchi", email = "matteo.malucchi@cern.ch"},
+    {name = "Thierry Guillaume Harte", email = "thierry.guillaume.harte@cern.ch"}]
+license = {text = "BSD-3-Clause"}
+readme = "README.md"
+classifiers = [
+    "Development Status :: 1 - Planning",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: BSD License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.7",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering",
+    "Typing :: Typed"]
+dynamic = ["version", "dependencies"]
+requires-python = ">=3.7"
+
+[tool.setuptools.dynamic]
+#version = {attr = "configs.__meta__.__version__"}
+readme = {file = ["README.md"], content-type = "text/markdown"}
+#dependencies = {file = ["requirements.txt"]}
+
+[tool.setuptools.packages.find]
+include = ["ml_pytorch*"]
+exclude = ["configs/*"]
+
+
+[project.urls]
+Repository = "https://github.com/matteomalucchi/ML_pytorch"
+
+[tool.setuptools]
+include-package-data = true
+
+[project.scripts]
+ml_train = "ml_pytorch.scripts.train:main"
+ml_sb= "ml_pytorch.scripts.sig_bkg_eval:main"
+ml_history= "ml_pytorch.scripts.plot_history:main"
+ml_onnx= "ml_pytorch.scripts.convert_to_onnx:main"

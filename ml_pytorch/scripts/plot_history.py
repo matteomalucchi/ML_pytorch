@@ -108,8 +108,7 @@ def plot_history(
     if show:
         plt.show()
 
-
-if __name__ == "__main__":
+def main():
     # plot the history for the training and validation losses and accuracies
     parser = argparse.ArgumentParser()
     parser.add_argument("-i", "--input-path", type=str, help="path to log file")
@@ -153,3 +152,6 @@ if __name__ == "__main__":
         args.uniform_filter,
         args.lenght,
     )
+
+if __name__ == "__main__":
+    main()
