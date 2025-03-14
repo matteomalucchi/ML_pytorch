@@ -5,7 +5,6 @@ import math
 import logging
 import os
 from coffea.util import load
-import sys
 import awkward as ak
 
 logger = logging.getLogger(__name__)

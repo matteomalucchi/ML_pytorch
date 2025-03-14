@@ -10,28 +10,28 @@ import importlib
 # PyTorch TensorBoard support
 # from torch.utils.tensorboard import SummaryWriter
 
-from dataset import load_data
-from tools import (
+from ml_pytorch.utils.dataset import load_data
+from ml_pytorch.utils.tools import (
     get_model_parameters_number,
     train_val_one_epoch,
     eval_model,
     export_onnx,
     create_DNN_columns_list,
 )
-from dnn_input_variables import bkg_morphing_dnn_input_variables, test_set, set_with_btag
+from ml_pytorch.defaults.dnn_input_variables import bkg_morphing_dnn_input_variables, test_set, set_with_btag
 
-from args_train import args
+from ml_pytorch.utils.args_train import args
 
-from setup_logger import setup_logger
+from ml_pytorch.utils.setup_logger import setup_logger
 
-from early_stopper import EarlyStopper
+from ml_pytorch.utils.early_stopper import EarlyStopper
 
 
 
 if __name__ == "__main__":
     start_time = time.time()
     
-    default_cfg = OmegaConf.load(f"{os.path.dirname(__file__)}/../configs/default_configs.yml")
+    default_cfg = OmegaConf.load(f"{os.path.dirname(__file__)}/../defaults/default_configs.yml")
     cfg_file = OmegaConf.load(args.config)
     
     cfg = default_cfg
@@ -64,8 +64,7 @@ if __name__ == "__main__":
 
     assert cfg.learning_rate > 0, "learning_rate must be positive"
 
-    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-    ML_model = importlib.import_module(cfg.ML_model)
+    ML_model = importlib.import_module(f"ml_pytorch.models.{cfg.ML_model}")
     
     # copy the ML model to the output directory
     ML_model_path=cfg.ML_model.replace('.','/')+'.py'

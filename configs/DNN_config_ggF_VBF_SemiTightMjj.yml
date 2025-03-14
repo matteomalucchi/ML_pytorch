@@ -16,7 +16,7 @@ background_region: [4b_semiTight_LeadingMjj_region]
 signal_dataset: [VBFHHto4B_CV_1_C2V_1_C3_1_2022_postEE]
 background_dataset: [GluGlutoHHto4B_kl-1p00_kt-1p00_c2-0p00__2022_postEE]
 
-ML_model: models.DNN_model
+ML_model: DNN_model
 
 data_format: coffea
 
