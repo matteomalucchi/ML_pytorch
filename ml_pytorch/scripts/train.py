@@ -65,7 +65,7 @@ def main():
     ML_model = importlib.import_module(f"ml_pytorch.models.{cfg.ML_model}")
     
     # copy the ML model to the output directory
-    ML_model_path=cfg.ML_model.replace('.','/')+'.py'
+    ML_model_path=f"ml_pytorch/models/{cfg.ML_model}.py"
     os.system(f"cp {ML_model_path} {main_dir}/ML_model.py")
 
     if cfg.load_model or cfg.eval_model:

@@ -23,11 +23,11 @@ class DNN(nn.Module):
             nn.Dropout(0.2),
             nn.Linear(128, 2),
         )
-        self.sigmoid = nn.Softmax()
+        self.softmax = nn.Softmax(dim=1)
 
     def forward(self, x):
         logits = self.linear_relu_stack(x)
-        logits = self.sigmoid(logits)
+        logits = self.softmax(logits)
         return logits
 
 
@@ -35,7 +35,7 @@ def get_model(input_size, device, lr, lr_schedule, n_epochs):
     model = DNN(input_size).to(device)
     print(model)
 
-    loss_fn = torch.nn.CCELoss(reduction="none")
+    loss_fn = torch.nn.CrossEntropyLoss(reduction="none")
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     scheduler = get_lr_scheduler(lr_schedule, optimizer, n_epochs)
 

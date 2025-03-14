@@ -6,7 +6,6 @@ import numpy as np
 import argparse
 import onnxruntime as ort
 import uproot
-import sys
 
 parser = argparse.ArgumentParser(description="Convert keras to onnx or average models")
 parser.add_argument("-i", "--input", type=str, required=True, help="Input directory")
@@ -174,7 +173,7 @@ def compare_output_onnx_keras(onnx_model_name, keras_model):
 
     input_tensor = tf.convert_to_tensor(input_data, dtype=tf.float32)
     # input_tensor = tf.expand_dims(input_tensor, 0)
-    output_keras = model.predict(input_tensor)
+    output_keras = keras_model.predict(input_tensor)
 
     print(output_onnx)
     print(output_keras)
@@ -223,8 +222,6 @@ def main():
             r = op.div(r,op.sub(op.const(1.0,dtype="float32"),r))
 
             onnx_model_ratio_sum = build({"args_0": b}, {"sum_w": r})
-
-
 
         for model_file in model_files[1:]:
             tot_len += 1

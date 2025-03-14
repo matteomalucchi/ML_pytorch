@@ -261,7 +261,7 @@ def load_data(cfg, seed):
     ).unsqueeze(0)
 
     X_fts = torch.cat((X_sig[0], X_bkg[0]), dim=1).transpose(1, 0)
-    X_lbl = torch.cat((X_sig[1], X_bkg[1]), dim=1).transpose(1, 0)
+    X_lbl = torch.cat((X_sig[1], X_bkg[1]), dim=1).transpose(1, 0).flatten()
     X_clsw = torch.cat(
         (sig_class_weights_tensor, bkg_class_weights_tensor), dim=1
     ).transpose(1, 0)

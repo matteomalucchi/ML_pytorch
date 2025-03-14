@@ -3,9 +3,6 @@ import os
 import time
 import logging
 
-from collections import defaultdict
-from ordered_set import OrderedSet
-
 logger = logging.getLogger(__name__)
 
 
@@ -49,11 +46,18 @@ def loop_one_batch(
 
     # compute the outputs of the model
     outputs = model(inputs)
-
+    
+    if outputs.shape[1] == 1:
+        outputs=outputs.flatten()
+        y_pred = torch.round(outputs)
+        
+    else:
+        y_pred = outputs.argmax(dim=1)
+        labels=labels.type(dtype=torch.long)
+        
     # Compute the accuracy
-    y_pred = torch.round(outputs)
-
-    correct = ((y_pred == labels).view(1, -1).squeeze() * weights).sum().item()
+    correct = ((y_pred == labels) * weights).sum().item()
+    # correct = ((y_pred == labels).view(1, -1).squeeze() * weights).sum().item()
 
     # Compute the loss and its gradients
     loss = loss_fn(outputs, labels)
@@ -355,35 +359,6 @@ def export_onnx(model, model_name, batch_size, input_size, device):
 def create_DNN_columns_list(run2, flatten, dnn_input_variables):
     """Create the columns of the DNN input variables
     """
-    # column_dict = defaultdict(set)
-#    column_dict = defaultdict(OrderedSet)
-#    for x, y in dnn_input_variables.values():
-#        if run2:
-#            print(f"{x}_{y}")
-#            if x != "events" or "sigma" in x:
-#                column_dict[x.split(":")[0] + "Run2"].add(y)
-#            else:
-#                column_dict[x.split(":")[0]].add(y)
-#
-#        else:
-#            column_dict[x.split(":")[0]].add(y)
-#    if run2:
-#        column_dict.update(
-#            {
-#                "events": set(
-#                    (
-#                        "era",
-#                        "HT",
-#                        "dR_min",
-#                        "dR_max",
-#                        "sigma_over_higgs1_reco_massRun2",
-#                        "sigma_over_higgs2_reco_massRun2",
-#                    )
-#                )
-#            }
-#        )
-#    print(column_dict)
-#    column_list=[f"{column}_{value}" for column, values in column_dict.items() for value in values]
     column_list = []
     for x, y in dnn_input_variables.values():
         name = x.split(":")[0]
