@@ -40,3 +40,6 @@ exclude = ["configs/*"]
 
 [tool.setuptools]
 include-package-data = true
+
+[project.scripts]
+ml_train = "ml_pytorch.scripts.train:main"
