@@ -9,6 +9,8 @@ salloc --account gpu_gres --job-name "InteractiveJob" --cpus-per-task 4 --mem-pe
 micromamba env create -f ML_pytorch_env.yml
 micromamba activate ML_pytorch
 pip install -r requirements.txt
+# install the package in editable mode
+pip install -e .
 ```
 
 # Connect to node with a gpu
@@ -26,5 +28,5 @@ echo $CUDA_VISIBLE_DEVICES # or echo $CUDA_VISIBLE_DEVICES
 To execute an example training, evaluate the model on the test set, plot the history and plot the signal/background histograms, you can use the following command:
 
 ```bash
-python  scripts/train.py  -c configs/example_DNN_config_ggF_VBF.yml
+python  ml_pytorch/scripts/train.py  -c configs/example_DNN_config_ggF_VBF.yml
 ```

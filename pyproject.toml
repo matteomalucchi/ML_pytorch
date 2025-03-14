@@ -3,7 +3,7 @@ requires = ["setuptools", "wheel"]
 #build-backend = "setuptools.build_meta"
 
 [project]
-name = "configs"
+name = "ml_pytorch"
 description = "Repository with basic machine learning algorithms implemented in PyTorch."
 authors = [
     {name = "Matteo Malucchi", email = "matteo.malucchi@cern.ch"},
@@ -35,7 +35,7 @@ readme = {file = ["README.md"], content-type = "text/markdown"}
 #dependencies = {file = ["requirements.txt"]}
 
 [tool.setuptools.packages.find]
-include = ["ml_pytorch/*"]
+include = ["ml_pytorch*"]
 exclude = ["configs/*"]
 
 [tool.setuptools]
