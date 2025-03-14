@@ -1,13 +1,5 @@
 input_variables:
-    [
-        JetVBFLeadingPtNotFromHiggs_pt,
-        JetVBFLeadingPtNotFromHiggs_eta,
-        JetVBFLeadingPtNotFromHiggs_phi,
-        JetVBFLeadingPtNotFromHiggs_mass,
-        JetVBFLeadingPtNotFromHiggs_btagPNetB,
-        events_HH_centrality,
-        HH_pt,
-    ]
+    [JetGood_pt, JetGood_eta, JetGood_phi, JetGood_mass, JetGood_btagPNetB]
 
 signal_sample: [VBF_HHto4B]
 background_sample: [GluGlutoHHto4B]
@@ -23,11 +15,13 @@ ML_model: models.DNN_model
 data_format: coffea
 
 batch_size: 512
-epochs: 100
+epochs: 2
 
 learning_rate: 1e-3
 learning_rate_schedule: linear
 
-train_fraction: 0.8
-val_fraction: 0.1
-test_fraction: 0.1
+train_fraction: 0.1
+val_fraction: 0.05
+test_fraction: 0.05
+
+overwrite: True

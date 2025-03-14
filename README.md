@@ -18,11 +18,13 @@ To connect to a node with a gpu, you can use the following command:
 salloc --account gpu_gres --job-name "InteractiveJob" --cpus-per-task 4 --mem-per-cpu 3000 --time 01:00:00  -p gpu --gres=gpu:1
 # activate the environment
 micromamba activate ML_pytorch
+# check which gpu is available
+echo $CUDA_VISIBLE_DEVICES # or echo $CUDA_VISIBLE_DEVICES
 ```
 
 # Examples
-To execute a training, evaluate the model on the test set, plot the history and plot the signal/background histograms, you can use the following command:
+To execute an example training, evaluate the model on the test set, plot the history and plot the signal/background histograms, you can use the following command:
 
 ```bash
-python  scripts/train.py -d /work/mmalucch/out_hh4b/out_vbf_ggf_dnn_full/ -o out/name_of_training --eval --onnx --roc --histos --history --gpus 7 -n 4 -e 10 -c configs/DNN_config_ggF_VBF.yml
+python  scripts/train.py  -c configs/example_DNN_config_ggF_VBF.yml
 ```

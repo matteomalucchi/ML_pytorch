@@ -1,12 +1,14 @@
 input_variables:
     [JetGood_pt, JetGood_eta, JetGood_phi, JetGood_mass, JetGood_btagPNetB]
 
-signal_list: [VBF_HHto4B]
-background_list: [GluGlutoHHto4B]
+signal_sample: [VBF_HHto4B]
+background_sample: [GluGlutoHHto4B]
 
-region: 4b_region
-dataset_signal: VBFHHto4B_CV_1_C2V_1_C3_1_2022_postEE
-dataset_background: GluGlutoHHto4B_kl-1p00_kt-1p00_c2-0p00__2022_postEE
+signal_region: [4b_region] 
+background_region: [4b_region] 
+
+signal_dataset: [VBFHHto4B_CV_1_C2V_1_C3_1_2022_postEE]
+background_dataset: [GluGlutoHHto4B_kl-1p00_kt-1p00_c2-0p00__2022_postEE]
 
 ML_model: models.DNN_model
 

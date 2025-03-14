@@ -7,12 +7,15 @@ input_variables:
     events_JetVBFLeadingPtNotFromHiggs_jjMass, events_JetVBFLeadingPtNotFromHiggs_deltaEta,
     HH_pt, HH_eta, HH_phi, HH_mass]
 
-signal_list: [VBF_HHto4B]
-background_list: [GluGlutoHHto4B]
+signal_sample: [VBF_HHto4B]
+background_sample: [GluGlutoHHto4B]
 
-region: 4b_semiTight_LeadingPt_region
-dataset_signal: VBFHHto4B_CV_1_C2V_1_C3_1_2022_postEE
-dataset_background: GluGlutoHHto4B_kl-1p00_kt-1p00_c2-0p00__2022_postEE
+
+signal_region: [4b_semiTight_LeadingMjj_region] 
+background_region: [4b_semiTight_LeadingMjj_region] 
+
+signal_dataset: [VBFHHto4B_CV_1_C2V_1_C3_1_2022_postEE]
+background_dataset: [GluGlutoHHto4B_kl-1p00_kt-1p00_c2-0p00__2022_postEE]
 
 ML_model: models.DNN_model
 

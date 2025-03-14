@@ -46,8 +46,10 @@ if __name__ == "__main__":
         from sig_bkg_eval import plot_sig_bkg_distributions, plot_roc_curve
     if cfg.history:
         from plot_history import read_from_txt, plot_history
+        
     # timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     # main_dir = f"out/{timestamp}_{cfg.name}"
+    
     main_dir = cfg.output_dir
     name = main_dir.split("/")[-1]
 
@@ -58,17 +60,22 @@ if __name__ == "__main__":
 
     loaded_epoch = -1
     
-    n_epochs = cfg.epochs if cfg.epochs else cfg.epochs
+    n_epochs = cfg.epochs
 
     assert cfg.learning_rate > 0, "learning_rate must be positive"
 
     sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
     ML_model = importlib.import_module(cfg.ML_model)
+    
+    # copy the ML model to the output directory
+    ML_model_path=cfg.ML_model.replace('.','/')+'.py'
+    os.system(f"cp {ML_model_path} {main_dir}/ML_model.py")
 
     if cfg.load_model or cfg.eval_model:
         main_dir = os.path.dirname(
             cfg.load_model if cfg.load_model else cfg.eval_model
-        ).replace("models", "")
+        ).replace("models", "").replace("state_dict", "")
+        print(main_dir)
     else:
         try:
             os.makedirs(main_dir)
@@ -88,9 +95,11 @@ if __name__ == "__main__":
                 else:
                     print("Exiting...")
                     sys.exit(0)
+                    
     # writer = SummaryWriter(f"runs/DNN_trainer_{timestamp}")
     # Create the logger
-    logger = setup_logger(f"{main_dir}/logger_{name}.log", cfg.verbosity)
+    logger_file = f"{main_dir}/logger_{name}.log"
+    logger = setup_logger(logger_file, cfg.verbosity)
     
     logger.debug('='*20)
     logger.debug('default configs')
@@ -112,8 +121,6 @@ if __name__ == "__main__":
         cfg.input_variables = create_DNN_columns_list(True, True, bkg_morphing_dnn_input_variables)
     input_variables = cfg.input_variables
     logger.info(input_variables)
-    signal_list = cfg.signal_list
-    background_list = cfg.background_list
         
     early_stopping = cfg.early_stopping
     patience = cfg.patience
@@ -167,7 +174,7 @@ if __name__ == "__main__":
         optimizer.load_state_dict(checkpoint["optimizer"])
         loaded_epoch = checkpoint["epoch"]
         best_model_name = cfg.load_model if cfg.load_model else cfg.eval_model
-        with open(f"{main_dir}/logger_{name}.log", "r") as f:
+        with open(logger_file, "r") as f:
             for line in reversed(f.readlines()):
                 if "Best epoch" in line:
                     # get line from Best epoch onwards
@@ -208,7 +215,6 @@ if __name__ == "__main__":
             (
                 avg_vloss,
                 avg_vaccuracy,
-                best_veval,
                 best_vloss,
                 best_vaccuracy,
                 best_epoch,
@@ -224,7 +230,6 @@ if __name__ == "__main__":
                 time_epoch,
                 None,
                 main_dir,
-                best_veval,
                 best_vloss,
                 best_vaccuracy,
                 best_epoch,
@@ -272,7 +277,7 @@ if __name__ == "__main__":
         print("\n\n\n")
         logger.info("Plotting training and validation loss and accuracy")
         train_accuracy, train_loss, val_accuracy, val_loss = read_from_txt(
-            f"{main_dir}/logger_{name}.log"
+            logger_file
         )
 
         plot_history(

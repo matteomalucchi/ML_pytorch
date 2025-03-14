@@ -16,126 +16,135 @@ def get_variables(
     total_fraction_of_events,
     input_variables,
     sample_list,
-    dataset_sample,
-    region,
+    dataset_list,
+    region_list,
     sig_bkg,
     data_format="root",
 ):
     tot_lenght = 0
-    for i, file_name in enumerate(files):
-        logger.info(f"Loading file {file_name}")
-        if data_format == "root":
+    if data_format == "root":
+        for i, file_name in enumerate(files):
+            logger.info(f"Loading file {file_name}")
             # open each file and get the Events tree using uproot
             file = uproot.open(f"{file_name}:Events")
             variables_array = np.array(
                 [file[input].array(library="np") for input in input_variables]
             )
-        elif data_format == "coffea":
-            vars = []
-            weights = []
-            logger.info(f"Currently working on file: {file_name}")
-            variables_dict = {}
+    elif data_format == "coffea":
+        vars_array = []
+        weights = []
+        variables_dict = {}
+        for i, file_name in enumerate(files):
+            logger.info(f"Loading file {file_name}")
             file = load(file_name)
             print(f"sample_list: {sample_list}")
-            for sample in sample_list:
+            if any([s not in list(file["columns"].keys()) for s in sample_list]):
+                logger.error(f"sample_list {sample_list} not in available samples {list(file['columns'].keys())}")
+                raise ValueError
+            for sample in list(file["columns"].keys()):
                 logger.info("sample %s", sample)
                 print(list(file["columns"].keys()))
-                if sample in list(file["columns"].keys()):
+                if sample in sample_list:
                     print(f"sample {sample} in file")
+                    if any([d not in list(file["columns"][sample].keys()) for d in dataset_list]):
+                        logger.error(f"dataset_list {dataset_list} not in available datasets {list(file['columns'][sample].keys())}")
+                        raise ValueError
                     for dataset in list(file["columns"][sample].keys()):
-                        print(f"searching dataset {dataset} in dataset_sample {dataset_sample}")
-                        if dataset in dataset_sample:
+                        print(f"searching dataset {dataset} in dataset_list {dataset_list}")
+                        if dataset in dataset_list:
                             logger.info("dataset %s", dataset)
-                            for category in list(file["columns"][sample][dataset].keys()):
-                                if category == region:
-                                    logger.info("category %s", category)
-                                    vars.append(file["columns"][sample][dataset][category])
+                            if any([region_file not in list(file["columns"][sample][dataset].keys()) for region_file in region_list]):
+                                logger.error(f"region_list {region_list} not in available regions {list(file['columns'][sample][dataset].keys())}")
+                                raise ValueError
+                            for region_file in list(file["columns"][sample][dataset].keys()):
+                                if region_file in region_list:
+                                    logger.info("region_file %s", region_file)
+                                    vars_array.append(file["columns"][sample][dataset][region_file])
                                     weights.append(
-                                        file["columns"][sample][dataset][category][
+                                        file["columns"][sample][dataset][region_file][
                                             "weight"
                                         ].value
                                         / (file["sum_genweights"][dataset] if dataset in file["sum_genweights"] else 1)
                                     )
                                     if dataset in file["sum_genweights"]:
                                         logger.info(
-                                            f"original weight: {file['columns'][sample][dataset][category]['weight'].value[0]}"
+                                            f"original weight: {file['columns'][sample][dataset][region_file]['weight'].value[0]}"
                                         )
                                         logger.info(f"sum_genweights: {file['sum_genweights'][dataset]}")
                                     logger.info(f"weight: {weights[0]}")
-            if len(vars)<1:
-                logger.error(
-                    f"region {region} not found in dataset {dataset_sample} for sample {sample_list}"
-                )
-                raise ValueError
-            
-            logger.info(f"Found datasets: {len(vars)}")
-            # Merge multiple lists:
-            keys = set().union(*vars)
-            print(keys)
-            concat = {}
-            for key in keys:
-                concat[key] = np.concatenate([var[key].value for var in vars], axis=0)
-            vars = concat
-            # Concatenate multiple weights
-            weights = np.concatenate(weights, axis=0)
+        if len(vars_array)<1:
+            logger.error(
+                f"Could not find any datasets in the files {files} with the sample_list {sample_list} and dataset_list {dataset_list} and region {region_list}"
+            )
+            raise ValueError
+        
+        logger.info(f"Found datasets: {len(vars_array)}")
+        # Merge multiple lists:
+        keys = set().union(*vars_array)
+        print(keys)
+        concat = {}
+        for key in keys:
+            concat[key] = np.concatenate([var[key].value for var in vars_array], axis=0)
+        vars_array = concat
+        # Concatenate multiple weights
+        weights = np.concatenate(weights, axis=0)
 
-            for k in input_variables:
-                logger.info(k)
-                # unflatten all the jet variables
-                collection = k.split("_")[0]
+        for k in input_variables:
+            logger.info(k)
+            # unflatten all the jet variables
+            collection = k.split("_")[0]
 
-                # check if collection_N is present to unflatten the variables
-                if f"{collection}_N" in vars.keys() and k.split("_")[1] != "N":
-                    #number_per_event = tuple(vars[f"{collection}_N"].value)
-                    number_per_event = tuple(vars[f"{collection}_N"])
-                    if ak.all(number_per_event == number_per_event[0]):
-                        variables_dict[k] = ak.to_numpy(
-                            ak.unflatten(vars[k], number_per_event)
-                        )
-                    else:
-                        logger.warning(
-                            f"number of {collection} jets per event is not the same for all events"
-                        )
-                        variables_dict[k] = ak.to_numpy(
-                            ak.pad_none(
-                                ak.unflatten(vars[k], number_per_event),
-                                6,
-                                clip=True,
-                            )
-                        )
+            # check if collection_N is present to unflatten the variables
+            if f"{collection}_N" in vars_array.keys() and k.split("_")[1] != "N":
+                number_per_event = tuple(vars_array[f"{collection}_N"])
+                if ak.all(number_per_event == number_per_event[0]):
+                    variables_dict[k] = ak.to_numpy(
+                        ak.unflatten(vars_array[k], number_per_event)
+                    )
                 else:
-                    variables_dict[k] = ak.to_numpy(ak.unflatten(vars[k], 1))
+                    logger.warning(
+                        f"number of {collection} jets per event is not the same for all events, \n padding collection to 5 ..."
+                    )
+                    variables_dict[k] = ak.to_numpy(
+                        ak.pad_none(
+                            ak.unflatten(vars_array[k], number_per_event),
+                            5,
+                            clip=True,
+                        )
+                    )
+            else:
+                variables_dict[k] = ak.to_numpy(ak.unflatten(vars_array[k], 1))
 
-            weights = np.expand_dims(weights, axis=0)
-            variables_array =np.concatenate(
-                    [variables_dict[input] for input in input_variables], axis=1
-                )
-            print(variables_array)
-            variables_array = np.swapaxes(variables_array, 0 , 1)
-            logger.info(f"variables_array {variables_array.shape}")
-            logger.info(f"weights {weights.shape}")
-            variables_array = np.append(variables_array, weights, axis=0)
-            logger.info(f"variables_array complete {variables_array.shape}")
-            print(variables_array)
-            print(variables_dict)
+        weights = np.expand_dims(weights, axis=0)
+        variables_array =np.concatenate(
+                [variables_dict[input] for input in input_variables], axis=1
+            )
+        print(variables_array)
+        variables_array = np.swapaxes(variables_array, 0 , 1)
+        logger.info(f"variables_array {variables_array.shape}")
+        logger.info(f"weights {weights.shape}")
+        variables_array = np.append(variables_array, weights, axis=0)
+        logger.info(f"variables_array complete {variables_array.shape}")
+        print(variables_array)
+        print(variables_dict)
 
-        tot_lenght += variables_array.shape[1]
+    tot_lenght += variables_array.shape[1]
 
-        # concatenate all the variables into a single torch tensor
-        if 'variables' not in locals():
-            print(f"overwrite variables")
-            variables = torch.tensor(variables_array, dtype=torch.float32)[
-                :, : math.ceil(total_fraction_of_events * variables_array.shape[1])
-            ]
-        else:
-            variables = torch.cat(
-                (
-                    variables,
-                    torch.tensor(variables_array, dtype=torch.float32),
-                ),
-                dim=1,
-            )[:, : math.ceil(total_fraction_of_events * variables_array.shape[1])]
-        print(f"variable length {len(variables[0])}")
+    # concatenate all the variables into a single torch tensor
+    if 'variables' not in locals():
+        print(f"overwrite variables")
+        variables = torch.tensor(variables_array, dtype=torch.float32)[
+            :, : math.ceil(total_fraction_of_events * variables_array.shape[1])
+        ]
+    else:
+        variables = torch.cat(
+            (
+                variables,
+                torch.tensor(variables_array, dtype=torch.float32),
+            ),
+            dim=1,
+        )[:, : math.ceil(total_fraction_of_events * variables_array.shape[1])]
+    print(f"variable length {len(variables[0])}")
 
     logger.info(f"number of {sig_bkg} events: {variables.shape[1]}")
 
@@ -169,10 +178,10 @@ def load_data(cfg, seed):
         for x in dirs:
             files = os.listdir(x)
             for file in files:
-                for signal in cfg.signal_list:
+                for signal in cfg.signal_sample:
                     if signal in file and "SR" in file:
                         sig_files.append(x + file)
-                for background in cfg.background_list:
+                for background in cfg.background_sample:
                     if background in file and "SR" in file:
                         bkg_files.append(x + file)
     elif cfg.data_format == "coffea":
@@ -181,19 +190,14 @@ def load_data(cfg, seed):
     else:
         logger.error(f"Data format {cfg.data_format} not supported")
         raise ValueError
-    
-    # Set signal region
-    sig_region = cfg.signal_region if "signal_region" in cfg else cfg.region
-    # Set background region
-    bck_region = cfg.background_region if "background_region" in cfg else cfg.region
 
     X_sig, tot_lenght_sig = get_variables(
         sig_files,
         total_fraction_of_events,
         cfg.input_variables,
-        cfg.signal_list,
-        cfg.dataset_signal,
-        sig_region,
+        cfg.signal_sample,
+        cfg.signal_dataset,
+        cfg.signal_region,
         "signal",
         cfg.data_format,
     )
@@ -201,9 +205,9 @@ def load_data(cfg, seed):
         bkg_files,
         total_fraction_of_events,
         cfg.input_variables,
-        cfg.background_list,
-        cfg.dataset_background,
-        bck_region,
+        cfg.background_sample,
+        cfg.background_dataset,
+        cfg.background_region,
         "background",
         cfg.data_format,
     )

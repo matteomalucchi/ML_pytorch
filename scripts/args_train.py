@@ -3,6 +3,13 @@ import argparse
 parser = argparse.ArgumentParser()
 
 parser.add_argument(
+    "-c",
+    "--config",
+    required=True,
+    help="Path to the configuration file",
+    type=str,
+)
+parser.add_argument(
     "-b",
     "--batch-size",
     default=None,
@@ -31,6 +38,7 @@ parser.add_argument(
     help="Directory for data",
 )
 parser.add_argument(
+    "-ev",
     "--eval",
     action="store_true",
     help="Evaluate the model",
@@ -49,6 +57,7 @@ parser.add_argument(
     "--history", default=None, help="Plot history", action="store_true"
 )
 parser.add_argument(
+    "-em",
     "--eval-model",
     default=None,
     help="Path to model to evaluate",
@@ -87,17 +96,10 @@ parser.add_argument(
     type=str,
 )
 parser.add_argument(
-    "-c",
-    "--config",
-    default=None,
-    help="Path to the configuration file",
-    type=str,
-)
-parser.add_argument(
     "-s",
     "--seed",
     default=None,
-    help="Seed for random file sorter",
+    help="Seed for event shuffling and weights initialization",
     type=str,
 )
 

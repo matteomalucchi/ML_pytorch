@@ -152,7 +152,6 @@ def train_val_one_epoch(
     time_epoch,
     scheduler,
     main_dir=None,
-    best_eval=None,
     best_loss=None,
     best_accuracy=None,
     best_epoch=None,
@@ -172,7 +171,7 @@ def train_val_one_epoch(
     tot_num = 0
 
     num_batches = len(loader)
-    count = 1
+    count = 0
 
     all_scores = None
     all_labels = None
@@ -227,8 +226,10 @@ def train_val_one_epoch(
     # Track best performance, and save the model state
     if eval_param == "loss":
         evaluator=avg_loss
+        best_eval=best_loss
     elif eval_param == "acc":
         evaluator=1-avg_accuracy
+        best_eval=1-best_accuracy
     else:
         raise ValueError("Bad evaluator name")
     if not train and evaluator < best_eval:
@@ -241,7 +242,7 @@ def train_val_one_epoch(
         state_dict_dir = f"{main_dir}/state_dict"
         os.makedirs(model_dir, exist_ok=True)
         os.makedirs(state_dict_dir, exist_ok=True)
-        model_name = f"{model_dir}/model_{epoch_index}.pt"
+        # model_name = f"{model_dir}/model_{epoch_index}.pt"
         state_dict_name = f"{state_dict_dir}/model_{epoch_index}_state_dict.pt"
         checkpoint = {
             "epoch": epoch_index,
@@ -249,13 +250,12 @@ def train_val_one_epoch(
             "optimizer": optimizer.state_dict(),
         }
         torch.save(checkpoint, state_dict_name)
-        torch.save(model, model_name)
+        # torch.save(model, model_name)
         best_model_name = state_dict_name
 
     return (
         avg_loss,
         avg_accuracy,
-        best_eval,
         best_loss,
         best_accuracy,
         best_epoch,
