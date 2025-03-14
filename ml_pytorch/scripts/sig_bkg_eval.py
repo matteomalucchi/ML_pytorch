@@ -415,8 +415,7 @@ def plot_roc_curve(score_lbl_tensor_test, dir, show):
     if show:
         plt.show()
 
-
-if __name__ == "__main__":
+def main():
     # parse the arguments
     parser = argparse.ArgumentParser()
 
@@ -469,3 +468,6 @@ if __name__ == "__main__":
     )
 
     plot_roc_curve(score_lbl_tensor_test, args.input_dir, args.show)
+    
+if __name__ == "__main__":
+    main()

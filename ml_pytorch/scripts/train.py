@@ -26,9 +26,7 @@ from ml_pytorch.utils.setup_logger import setup_logger
 
 from ml_pytorch.utils.early_stopper import EarlyStopper
 
-
-
-if __name__ == "__main__":
+def main():
     start_time = time.time()
     
     default_cfg = OmegaConf.load(f"{os.path.dirname(__file__)}/../defaults/default_configs.yml")
@@ -43,9 +41,9 @@ if __name__ == "__main__":
             cfg[key] = val
 
     if cfg.histos:
-        from sig_bkg_eval import plot_sig_bkg_distributions, plot_roc_curve
+        from ml_pytorch.scripts.sig_bkg_eval import plot_sig_bkg_distributions, plot_roc_curve
     if cfg.history:
-        from plot_history import read_from_txt, plot_history
+        from ml_pytorch.scripts.plot_history import read_from_txt, plot_history
         
     # timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     # main_dir = f"out/{timestamp}_{cfg.name}"
@@ -381,3 +379,6 @@ if __name__ == "__main__":
     logger.info("Saved output in %s" % main_dir)
 
     logger.info("Total time: %.1f" % (time.time() - start_time))
+
+if __name__ == "__main__":
+    main()
