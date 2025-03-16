@@ -38,8 +38,15 @@ readme = {file = ["README.md"], content-type = "text/markdown"}
 include = ["ml_pytorch*"]
 exclude = ["configs/*"]
 
+
+[project.urls]
+Repository = "https://github.com/matteomalucchi/ML_pytorch"
+
 [tool.setuptools]
 include-package-data = true
 
 [project.scripts]
 ml_train = "ml_pytorch.scripts.train:main"
+ml_sb= "ml_pytorch.scripts.sig_bkg_eval:main"
+ml_history= "ml_pytorch.scripts.plot_history:main"
+ml_onnx= "ml_pytorch.scripts.convert_to_onnx:main"

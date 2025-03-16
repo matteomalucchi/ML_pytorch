@@ -26,8 +26,6 @@ from ml_pytorch.utils.setup_logger import setup_logger
 
 from ml_pytorch.utils.early_stopper import EarlyStopper
 
-
-
 def main():
     start_time = time.time()
     
@@ -67,7 +65,7 @@ def main():
     ML_model = importlib.import_module(f"ml_pytorch.models.{cfg.ML_model}")
     
     # copy the ML model to the output directory
-    ML_model_path=cfg.ML_model.replace('.','/')+'.py'
+    ML_model_path=f"ml_pytorch/models/{cfg.ML_model}.py"
     os.system(f"cp {ML_model_path} {main_dir}/ML_model.py")
 
     if cfg.load_model or cfg.eval_model:
@@ -382,7 +380,5 @@ def main():
 
     logger.info("Total time: %.1f" % (time.time() - start_time))
 
-
 if __name__ == "__main__":
     main()
-
