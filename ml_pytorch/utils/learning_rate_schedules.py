@@ -13,7 +13,7 @@ def get_linear_schedule_with_warmup(optimizer: Optimizer, total_iters: int):
     )
 
 def get_delayed_drop_schedule(optimizer: Optimizer):
-    lambda1 = lambda epoch: (0.75**(epoch-5) if epoch>=6 else 1)
+    lambda1 = lambda epoch: (0.85**(epoch-30) if epoch>=31 else 1)
     return LambdaLR(
         optimizer, lr_lambda=lambda1
     )

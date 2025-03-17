@@ -27,7 +27,7 @@ class DNN(nn.Module):
 
     def forward(self, x):
         logits = self.linear_relu_stack(x)
-        logits = self.softmax(logits)
+        #logits = self.softmax(logits)
         return logits
 
 
