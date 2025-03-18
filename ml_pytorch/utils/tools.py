@@ -46,7 +46,6 @@ def loop_one_batch(
 
     # compute the outputs of the model
     outputs = model(inputs)
-    probs = torch.softmax(outputs, dim=1)
 
     if outputs.shape[1] == 1:
         outputs=outputs.flatten()
@@ -124,7 +123,7 @@ def loop_one_batch(
     if eval_model:
         # Create array of scores and labels
         if i == 0:
-            all_scores = torch.softmax(outputs, dim=1)
+            all_scores = outputs
             all_labels = labels
             all_weights = event_weights
         else:
@@ -353,7 +352,9 @@ def export_onnx(model, model_name, batch_size, input_size, device):
             logits = self.model(x)  # Get raw logits
             return torch.nn.functional.softmax(logits, dim=1)  # Apply softmax inside ONNX model
     
-    model = ONNXWrappedModel(model)
+    if hasattr(model, "export_model"):
+        model = model.export_model(model)
+    #model = ONNXWrappedModel(model)
 
     # Export the model to ONNX format
     dummy_input = torch.zeros(batch_size, input_size, device=device)
