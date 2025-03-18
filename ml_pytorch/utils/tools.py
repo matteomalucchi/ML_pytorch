@@ -47,6 +47,7 @@ def loop_one_batch(
     # compute the outputs of the model
     outputs = model(inputs)
     
+    
     if outputs.shape[1] == 1:
         outputs=outputs.flatten()
         y_pred = torch.round(outputs)
@@ -54,6 +55,7 @@ def loop_one_batch(
     else:
         y_pred = outputs.argmax(dim=1)
         labels=labels.type(dtype=torch.long)
+        
         
     # Compute the accuracy
     correct = ((y_pred == labels) * weights).sum().item()
@@ -67,6 +69,11 @@ def loop_one_batch(
     loss = loss * weights
     # weighted average of the loss
     loss_average = loss.sum() / weights.sum()
+    
+    if i==50 and epoch_index==0:
+        print("outputs", outputs, outputs.shape)
+        print("labels", labels, labels.shape)
+        print("loss", loss, loss.shape)
 
     if train:
         # Reset the gradients of all optimized torch.Tensor
@@ -349,37 +356,37 @@ def export_onnx(model, model_name, batch_size, input_size, device):
         export_params=True,
         opset_version=13,
         input_names=["InputVariables"],  # the model's input names
-        output_names=["Sigmoid"],  # the model's output names
+        output_names=["Output"],  # the model's output names
         dynamic_axes={
             "InputVariables": {0: "batch_size"},  # variable length axes
-            "Sigmoid": {0: "batch_size"},
+            "Output": {0: "batch_size"},
         },
     )
 
-def create_DNN_columns_list(run2, flatten, dnn_input_variables):
+def create_DNN_columns_list(run2, dnn_input_variables):
     """Create the columns of the DNN input variables
     """
     column_list = []
     for x, y in dnn_input_variables.values():
-        name = x.split(":")[0]
+        # name = x.split(":")[0]
+        name_coll=x
         if run2:
-            if x != "events":
-                column_list.append(f"{name}Run2_{y}")
+            if ":" in name_coll:
+                coll, pos = name_coll.split(":")
+                column_list.append(f"{coll}Run2_{y}:{pos}")
+            elif name_coll != "events":
+                column_list.append(f"{name_coll}Run2_{y}")
             elif "sigma" in y: 
-                column_list.append(f"{name}_{y}Run2")
+                column_list.append(f"{name_coll}_{y}Run2")
             else:
-                column_list.append(f"{name}_{y}")
-
+                column_list.append(f"{name_coll}_{y}")
         else:
-            column_list.append(f"{name}_{y}")
-    
-    unique_list = []
-    [unique_list.append(val) for val in column_list if val not in unique_list]
+            column_list.append(f"{name_coll}_{y}")
 
-    return unique_list 
+    return column_list 
 
 if __name__=="__main__":
     from ml_pytorch.defaults.dnn_input_variables import bkg_morphing_dnn_input_variables
-    columns = create_DNN_columns_list(True,True,bkg_morphing_dnn_input_variables)
+    columns = create_DNN_columns_list(True,bkg_morphing_dnn_input_variables)
     for var in columns:
         print(var)
