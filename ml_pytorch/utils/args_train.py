@@ -45,6 +45,13 @@ parser.add_argument(
     default=False,
 )
 parser.add_argument(
+    "-os",
+    "--oversample",
+    action="store_true",
+    help="If true, the signal samples are copied multiple times to match number of background samples",
+    default=None,
+)
+parser.add_argument(
     "-g", "--gpus", default=None, help="GPU numbers separated by a comma", type=str
 )
 parser.add_argument(

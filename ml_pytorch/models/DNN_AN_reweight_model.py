@@ -27,9 +27,20 @@ class DNN(nn.Module):
 
     def forward(self, x):
         logits = self.linear_relu_stack(x)
-        logits = self.softmax(logits)
+        #logits = self.softmax(logits)
         return logits
 
+    def export_model(self, model):
+        class ONNXWrappedModel(torch.nn.Module):
+            def __init__(self, original_model):
+                super().__init__()
+                self.model = original_model  # Use the trained model
+
+            def forward(self, x):
+                logits = self.model(x)  # Get raw logits
+                return torch.nn.functional.softmax(logits, dim=1)  # Apply softmax inside ONNX model
+        
+        return ONNXWrappedModel(model)
 
 def get_model(input_size, device, lr, lr_schedule, n_epochs):
     model = DNN(input_size).to(device)

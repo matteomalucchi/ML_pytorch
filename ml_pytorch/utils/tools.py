@@ -46,8 +46,7 @@ def loop_one_batch(
 
     # compute the outputs of the model
     outputs = model(inputs)
-    
-    
+
     if outputs.shape[1] == 1:
         outputs=outputs.flatten()
         y_pred = torch.round(outputs)
@@ -170,7 +169,10 @@ def train_val_one_epoch(
     best_model_name=None,
 ):
     logger.info("Training" if train else "Validation")
-    model.train(train)
+    if train: 
+        model.train(train)
+    else:
+        model.eval()
 
     running_loss = 0.0
     tot_loss = 0.0
@@ -346,6 +348,20 @@ def eval_model(model, loader, loss_fn, type, device, best_epoch):
 
 
 def export_onnx(model, model_name, batch_size, input_size, device):
+
+    class ONNXWrappedModel(torch.nn.Module):
+        def __init__(self, original_model):
+            super().__init__()
+            self.model = original_model  # Use the trained model
+
+        def forward(self, x):
+            logits = self.model(x)  # Get raw logits
+            return torch.nn.functional.softmax(logits, dim=1)  # Apply softmax inside ONNX model
+    
+    if hasattr(model, "export_model"):
+        model = model.export_model(model)
+    #model = ONNXWrappedModel(model)
+
     # Export the model to ONNX format
     dummy_input = torch.zeros(batch_size, input_size, device=device)
     torch.onnx.export(

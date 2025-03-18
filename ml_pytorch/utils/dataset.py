@@ -162,14 +162,17 @@ def get_variables(
                 variables_dict[k] = ak.to_numpy(ak.unflatten(vars_array[k], 1))
 
         weights = np.expand_dims(weights, axis=0)
+
         variables_array = np.concatenate(
             [variables_dict[input] for input in input_variables], axis=1
         )
         variables_array = np.swapaxes(variables_array, 0, 1)
+
         logger.info(f"variables_array {variables_array.shape}")
         logger.info(f"weights {weights.shape}")
         variables_array = np.append(variables_array, weights, axis=0)
         logger.info(f"variables_array complete {variables_array.shape}")
+
 
     tot_lenght += variables_array.shape[1]
 
@@ -265,18 +268,29 @@ def load_data(cfg, seed):
         cfg.data_format,
     )
 
+    # compute class weights such that sumw is the same for signal and background and each weight is order of 1
+    num_events_bkg = X_bkg[0].shape[1]
+    
+    print(X_sig[0].shape)
+    if cfg.oversample:
+        num_events_sig = X_sig[0].shape[1]
+        X_sig_f = X_sig[0].repeat((1,num_events_bkg//num_events_sig+1))[:,:num_events_bkg]
+        X_sig_l = X_sig[1].repeat((1,num_events_bkg//num_events_sig+1))[:,:num_events_bkg]
+        X_sig = (X_sig_f, X_sig_l)
+
+    num_events_sig = X_sig[0].shape[1]
+    print(X_sig[0].shape)
+    
     # sum of weights
     sumw_sig = X_sig[0][-1].sum()
     sumw_bkg = X_bkg[0][-1].sum()
     logger.info(f"sum of weights before rescaling signal: {sumw_sig}")
     logger.info(f"sum of weights before rescaling backgound: {sumw_bkg}")
 
-    # compute class weights such that sumw is the same for signal and background and each weight is order of 1
-    num_events_sig = X_sig[0].shape[1]
-    num_events_bkg = X_bkg[0].shape[1]
+
     if True:
-        sig_class_weights = (num_events_sig + num_events_bkg) / sumw_sig
-        bkg_class_weights = (num_events_sig + num_events_bkg) / sumw_bkg
+        sig_class_weights = (num_events_sig + num_events_bkg) / (2 * sumw_sig)
+        bkg_class_weights = (num_events_sig + num_events_bkg) / (2 * sumw_bkg)
     else:
         # Compute the effective class count
         # https://arxiv.org/pdf/1901.05555.pdf
@@ -326,9 +340,9 @@ def load_data(cfg, seed):
     logger.info(f"X_lbl shape: {X_lbl.shape}")
     logger.info(f"X_clsw shape: {X_clsw.shape}")
 
-    train_size = math.floor((tot_lenght_sig + tot_lenght_bkg) * cfg.train_fraction)
-    val_size = math.floor((tot_lenght_sig + tot_lenght_bkg) * cfg.val_fraction)
-    test_size = math.floor((tot_lenght_sig + tot_lenght_bkg) * cfg.test_fraction)
+    train_size = math.floor((num_events_sig + num_events_bkg) * cfg.train_fraction)
+    val_size = math.floor((num_events_sig + num_events_bkg) * cfg.val_fraction)
+    test_size = math.floor((num_events_sig + num_events_bkg) * cfg.test_fraction)
 
     tot_events = train_size + val_size + test_size
 
