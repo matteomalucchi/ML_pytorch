@@ -129,13 +129,13 @@ def loop_one_batch(
     if eval_model:
         # Create array of scores and labels
         if i == 0:
-            all_scores = outputs
-            all_labels = labels
-            all_weights = event_weights
+            all_scores = outputs.cpu().detach()
+            all_labels = labels.cpu().detach()
+            all_weights = event_weights.cpu().detach()
         else:
-            all_scores = torch.cat((all_scores, outputs))
-            all_labels = torch.cat((all_labels, labels))
-            all_weights = torch.cat((all_weights, event_weights))
+            all_scores = torch.cat((all_scores, outputs.cpu().detach()))
+            all_labels = torch.cat((all_labels, labels.cpu().detach()))
+            all_weights = torch.cat((all_weights, event_weights.cpu().detach()))
 
     return (
         running_loss,
@@ -347,7 +347,8 @@ def eval_model(model, loader, loss_fn, type, device, best_epoch):
     score_lbl_tensor = torch.cat((all_scores, all_labels, all_weights), 1)
 
     # detach the tensor from the graph and convert to numpy array
-    score_lbl_array = score_lbl_tensor.cpu().detach().numpy()
+    score_lbl_array = score_lbl_tensor.numpy()
+    # score_lbl_array = score_lbl_tensor.cpu().detach().numpy()
 
     return score_lbl_array, avg_loss, avg_accuracy
 
