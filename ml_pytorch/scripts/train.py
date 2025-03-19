@@ -62,18 +62,21 @@ def main():
 
     assert cfg.learning_rate > 0, "learning_rate must be positive"
 
-    ML_model = importlib.import_module(f"ml_pytorch.models.{cfg.ML_model}")
     
     # copy the ML model to the output directory
     ML_model_path=f"ml_pytorch/models/{cfg.ML_model}.py"
-    os.system(f"cp {ML_model_path} {main_dir}/ML_model.py")
+    saved_ML_model_path=f"{main_dir}/ML_model.py"
+    os.system(f"cp {ML_model_path} {saved_ML_model_path}")
 
+    
     if cfg.load_model or cfg.eval_model:
+        ML_model = importlib.import_module(saved_ML_model_path.replace("/", ".").replace(".py", ""))
         main_dir = os.path.dirname(
             cfg.load_model if cfg.load_model else cfg.eval_model
         ).replace("models", "").replace("state_dict", "")
         print(main_dir)
     else:
+        ML_model = importlib.import_module(f"ml_pytorch.models.{cfg.ML_model}")
         try:
             os.makedirs(main_dir)
         except FileExistsError:
