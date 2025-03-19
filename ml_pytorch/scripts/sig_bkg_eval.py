@@ -319,6 +319,12 @@ def plot_sig_bkg_distributions(
     print(
         f"Significance ({dnn_score_target:.3f} DNN cut): {significance_above_target:.3f}"
     )
+    handles_legend=[
+            sig_train[2][0],
+            legend_test_list[0],
+            bkg_train[2][0],
+            legend_test_list[1],
+        ],
     if plot_significance:
         # plot the vertical line for the signal efficiency
         line_target = plt.axvline(
@@ -332,6 +338,7 @@ def plot_sig_bkg_distributions(
                 significance_above_target,
             ),
         )
+        handles_legend.append(line_target)
     plt.xlabel("Output score")
     plt.ylabel("Normalized counts")
     plt.legend(
@@ -339,13 +346,7 @@ def plot_sig_bkg_distributions(
         # loc="center",
         # bbox_to_anchor=(0.3, 0.9),
         fontsize=20,
-        handles=[
-            sig_train[2][0],
-            legend_test_list[0],
-            bkg_train[2][0],
-            legend_test_list[1],
-            line_target,
-        ],
+        handles=handles_legend,
         frameon=False,
     )
     # plt.plot([0.09, 0.88], [8.35, 8.35], color="lightgray", linestyle="-", transform=plt.gca().transAxes)
