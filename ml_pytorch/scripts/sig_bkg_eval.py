@@ -324,7 +324,7 @@ def plot_sig_bkg_distributions(
             legend_test_list[0],
             bkg_train[2][0],
             legend_test_list[1],
-        ],
+        ]
     if plot_significance:
         # plot the vertical line for the signal efficiency
         line_target = plt.axvline(
