@@ -42,7 +42,7 @@ parser.add_argument(
     "--eval",
     action="store_true",
     help="Evaluate the model",
-    default=False,
+    default=None,
 )
 parser.add_argument(
     "-os",

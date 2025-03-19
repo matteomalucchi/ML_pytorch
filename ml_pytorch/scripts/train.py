@@ -135,7 +135,7 @@ def main():
         X_lbl,
         batch_size,
     ) = load_data(cfg,cfg.seed)
-    if cfg.gpus:
+    if cfg.gpus is not None:
         gpus = [int(i) for i in cfg.gpus.split(",")]
         device = torch.device(gpus[0])
     else:

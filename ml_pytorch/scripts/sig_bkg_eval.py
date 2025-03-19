@@ -131,6 +131,7 @@ def plot_sig_bkg_distributions(
     show,
     rescale,
     test_fraction,
+    plot_significance=False,
     get_max_significance=False,
 ):
     # plot the signal and background distributions
@@ -318,18 +319,19 @@ def plot_sig_bkg_distributions(
     print(
         f"Significance ({dnn_score_target:.3f} DNN cut): {significance_above_target:.3f}"
     )
-    # plot the vertical line for the signal efficiency
-    line_target = plt.axvline(
-        dnn_score_target,
-        color="grey",
-        linestyle="--",
-        label="Sig efficiency {:.2f}\nBkg rejection {:.2f}\nDNN score {:.2f}\nSignificance {:.2f}".format(
-            sig_eff,
-            bkg_rejection,
+    if plot_significance:
+        # plot the vertical line for the signal efficiency
+        line_target = plt.axvline(
             dnn_score_target,
-            significance_above_target,
-        ),
-    )
+            color="grey",
+            linestyle="--",
+            label="Sig efficiency {:.2f}\nBkg rejection {:.2f}\nDNN score {:.2f}\nSignificance {:.2f}".format(
+                sig_eff,
+                bkg_rejection,
+                dnn_score_target,
+                significance_above_target,
+            ),
+        )
     plt.xlabel("Output score")
     plt.ylabel("Normalized counts")
     plt.legend(
@@ -464,6 +466,7 @@ def main():
         args.show,
         args.rescale,
         train_test_fractions[1],
+        plot_significance=False,
         get_max_significance=False,
     )
 

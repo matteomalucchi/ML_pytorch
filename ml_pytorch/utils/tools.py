@@ -69,7 +69,7 @@ def loop_one_batch(
     # weighted average of the loss
     loss_average = loss.sum() / weights.sum()
     
-    if i==50 and epoch_index==0:
+    if i==50 and epoch_index==0 and train:
         print("outputs", outputs, outputs.shape)
         print("labels", labels, labels.shape)
         print("loss", loss, loss.shape)
@@ -333,11 +333,16 @@ def eval_model(model, loader, loss_fn, type, device, best_epoch):
 
     avg_loss = tot_loss / len(loader)
     avg_accuracy = tot_correct / tot_num
-
+    print(all_scores)
+    if torch.any(all_scores <0) or  torch.any(all_scores >1):
+        all_scores = torch.nn.functional.softmax(all_scores, dim=1)
+    if all_scores.shape[1] == 2:
+        all_scores=all_scores[:,-1]
     # concatenate all scores and labels
     all_scores = all_scores.view(-1, 1)
     all_labels = all_labels.view(-1, 1)
     all_weights = all_weights.view(-1, 1)
+    print(all_scores)
 
     score_lbl_tensor = torch.cat((all_scores, all_labels, all_weights), 1)
 
@@ -349,18 +354,8 @@ def eval_model(model, loader, loss_fn, type, device, best_epoch):
 
 def export_onnx(model, model_name, batch_size, input_size, device):
 
-    class ONNXWrappedModel(torch.nn.Module):
-        def __init__(self, original_model):
-            super().__init__()
-            self.model = original_model  # Use the trained model
-
-        def forward(self, x):
-            logits = self.model(x)  # Get raw logits
-            return torch.nn.functional.softmax(logits, dim=1)  # Apply softmax inside ONNX model
-    
     if hasattr(model, "export_model"):
         model = model.export_model(model)
-    #model = ONNXWrappedModel(model)
 
     # Export the model to ONNX format
     dummy_input = torch.zeros(batch_size, input_size, device=device)
@@ -384,20 +379,18 @@ def create_DNN_columns_list(run2, dnn_input_variables):
     """
     column_list = []
     for x, y in dnn_input_variables.values():
-        # name = x.split(":")[0]
-        name_coll=x
         if run2:
-            if ":" in name_coll:
-                coll, pos = name_coll.split(":")
+            if ":" in x:
+                coll, pos = x.split(":")
                 column_list.append(f"{coll}Run2_{y}:{pos}")
-            elif name_coll != "events":
-                column_list.append(f"{name_coll}Run2_{y}")
+            elif x != "events":
+                column_list.append(f"{x}Run2_{y}")
             elif "sigma" in y: 
-                column_list.append(f"{name_coll}_{y}Run2")
+                column_list.append(f"{x}_{y}Run2")
             else:
-                column_list.append(f"{name_coll}_{y}")
+                column_list.append(f"{x}_{y}")
         else:
-            column_list.append(f"{name_coll}_{y}")
+            column_list.append(f"{x}_{y}")
 
     return column_list 
 

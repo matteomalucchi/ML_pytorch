@@ -38,7 +38,7 @@ oversample: False
 num_workers: 4
 data_dirs: [/work/mmalucch/out_hh4b/out_vbf_ggf_dnn_full/]
 eval: True
-gpus: 0
+gpus: '0'
 histos: True
 roc: True
 history: True
