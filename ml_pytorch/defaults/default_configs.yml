@@ -33,6 +33,7 @@ train_fraction: 0.5
 val_fraction: 0.25
 test_fraction: 0.25
 
+run2: False
 oversample: False
 
 num_workers: 4

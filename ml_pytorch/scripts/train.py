@@ -118,7 +118,7 @@ def main():
         logger.debug(bkg_morphing_dnn_input_variables)
         #cfg.input_variables = create_DNN_columns_list(True, True, set_with_btag)
         # cfg.input_variables = create_DNN_columns_list(True, True, test_set)
-        cfg.input_variables = create_DNN_columns_list(False, bkg_morphing_dnn_input_variables)
+        cfg.input_variables = create_DNN_columns_list(cfg.run2, bkg_morphing_dnn_input_variables)
     input_variables = cfg.input_variables
     logger.info(input_variables)
         
