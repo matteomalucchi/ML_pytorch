@@ -49,7 +49,7 @@ def main():
     # main_dir = f"out/{timestamp}_{cfg.name}"
     
     main_dir = cfg.output_dir
-    name = main_dir.split("/")[-1]
+    name = main_dir.strip("/").split("/")[-1]
 
     best_vloss = 1_000_000.0
     best_vaccuracy = 0.0
