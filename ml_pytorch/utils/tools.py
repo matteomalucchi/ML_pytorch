@@ -73,6 +73,7 @@ def loop_one_batch(
         print("outputs", outputs, outputs.shape)
         print("labels", labels, labels.shape)
         print("loss", loss, loss.shape)
+        print("inputs", inputs, inputs.shape)
 
     if train:
         # Reset the gradients of all optimized torch.Tensor
