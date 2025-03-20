@@ -70,7 +70,8 @@ def main():
 
     
     if cfg.load_model or cfg.eval_model:
-        ML_model = importlib.import_module(saved_ML_model_path.replace("/", ".").replace(".py", ""))
+        #ML_model = importlib.import_module(saved_ML_model_path.replace("/", ".").replace(".py", ""))
+        ML_model = importlib.import_module(f"ml_pytorch.models.{cfg.ML_model}")
         main_dir = os.path.dirname(
             cfg.load_model if cfg.load_model else cfg.eval_model
         ).replace("models", "").replace("state_dict", "")
@@ -318,6 +319,7 @@ def main():
         logger.info("\n\n\n")
         logger.info("Evaluating best model on test and train dataset")
         logger.info("================================")
+        torch.cuda.empty_cache()
 
         eval_epoch = loaded_epoch if cfg.eval_model else best_epoch
         logger.info("Training dataset\n")

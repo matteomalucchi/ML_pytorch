@@ -35,7 +35,11 @@ def read_from_txt(file):
     print("len train loss: ", len(train_loss))
     print("len val accuracy: ", len(val_accuracy))
     print("len val loss: ", len(val_loss))
-
+    print("\n")
+    print("Training loss:")
+    print(train_loss)
+    print("Validation loss:")
+    print(val_loss)
     return train_accuracy, train_loss, val_accuracy, val_loss
 
 

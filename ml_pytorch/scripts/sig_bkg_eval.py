@@ -224,14 +224,14 @@ def plot_sig_bkg_distributions(
     plt.text(
         0.5,
         0.925,
-        f"KS test: p-value (sig) = {p_value_sig:.2f}",
+        f"KS test: p-value (sig) = {p_value_sig:.6f}",
         fontsize=20,
         transform=plt.gca().transAxes,
     )
     plt.text(
         0.5,
         0.85,
-        f"KS test: p-value (bkg) = {p_value_bkg:.2f}",
+        f"KS test: p-value (bkg) = {p_value_bkg:.6f}",
         fontsize=20,
         transform=plt.gca().transAxes,
     )
