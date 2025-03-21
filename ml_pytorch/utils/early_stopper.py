@@ -4,15 +4,14 @@
 # If a 3rd is added, we will have to think about a good solution.
 
 class EarlyStopper:
-    def __init__(self, logger, patience=5, min_delta=0, eval_param="loss"):
+    def __init__(self, logger, patience=5, min_delta=1e-5, eval_param="loss"):
         assert eval_param in ["acc", "loss"]
         self.logger = logger
         self.patience = patience
         self.min_delta = min_delta
 
         self.eval_param = eval_param
-        self.better_than = lambda a, b, param: a >= b if param == "acc" else a <= b
-        self.worse_than  = lambda a, b, param: a < b if param == "acc" else a > b
+        self.better_than = lambda a, b, param: a >= b + min_delta if param == "acc" else a <= b - min_delta
 
         self.counter = 0
         self.min_validation = float('inf') if eval_param == "loss" else -float('inf')
@@ -24,7 +23,7 @@ class EarlyStopper:
             self.logger.info("Better")
             self.min_validation = validation
             self.counter = 0 
-        elif self.worse_than(validation, (self.min_validation + self.min_delta), self.eval_param):
+        else:
             self.logger.info("Worse")
             self.counter += 1
             if self.counter >= self.patience:
