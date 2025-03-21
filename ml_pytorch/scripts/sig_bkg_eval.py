@@ -137,7 +137,11 @@ def plot_sig_bkg_distributions(
     # plot the signal and background distributions
     sig_score_train, bkg_score_train = handle_arrays(score_lbl_tensor_train, 0)
     sig_score_test, bkg_score_test = handle_arrays(score_lbl_tensor_test, 0)
-
+    
+    print("Train scores")
+    print(sig_score_train)
+    print("Test scores")
+    print(sig_score_test)
     # get weights
     try:
         sig_weight_train, bkg_weight_train = handle_arrays(score_lbl_tensor_train, 2)
@@ -224,14 +228,14 @@ def plot_sig_bkg_distributions(
     plt.text(
         0.5,
         0.925,
-        f"KS test: p-value (sig) = {p_value_sig:.2f}",
+        f"KS test: p-value (sig) = {p_value_sig:.6f}",
         fontsize=20,
         transform=plt.gca().transAxes,
     )
     plt.text(
         0.5,
         0.85,
-        f"KS test: p-value (bkg) = {p_value_bkg:.2f}",
+        f"KS test: p-value (bkg) = {p_value_bkg:.6f}",
         fontsize=20,
         transform=plt.gca().transAxes,
     )

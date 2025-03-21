@@ -420,7 +420,11 @@ def create_DNN_columns_list(run2, dnn_input_variables):
             else:
                 column_list.append(f"{x}_{y}")
         else:
-            column_list.append(f"{x}_{y}")
+            if ":" in x:
+                coll, pos = x.split(":")
+                column_list.append(f"{coll}_{y}:{pos}")
+            else:
+                column_list.append(f"{x}_{y}")
 
     return column_list 
 
