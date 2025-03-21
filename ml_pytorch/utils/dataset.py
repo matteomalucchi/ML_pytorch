@@ -271,15 +271,18 @@ def load_data(cfg, seed):
     # compute class weights such that sumw is the same for signal and background and each weight is order of 1
     num_events_bkg = X_bkg[0].shape[1]
     
-    print(X_sig[0].shape)
+    logger.info(f"Number of background events  {X_bkg[0].shape[1]}")
+    logger.info(f"Number of signal before {X_sig[0].shape[1]}")
+    
     if cfg.oversample:
+        logger.info("Performing oversampling")
         num_events_sig = X_sig[0].shape[1]
         X_sig_f = X_sig[0].repeat((1,num_events_bkg//num_events_sig+1))[:,:num_events_bkg]
         X_sig_l = X_sig[1].repeat((1,num_events_bkg//num_events_sig+1))[:,:num_events_bkg]
         X_sig = (X_sig_f, X_sig_l)
+        logger.info(f"Number of signal events after oversampling {X_sig[0].shape[1]}")
 
     num_events_sig = X_sig[0].shape[1]
-    print(X_sig[0].shape)
     
     # sum of weights
     sumw_sig = X_sig[0][-1].sum()
@@ -340,9 +343,18 @@ def load_data(cfg, seed):
     logger.info(f"X_lbl shape: {X_lbl.shape}")
     logger.info(f"X_clsw shape: {X_clsw.shape}")
 
-    train_size = math.floor((num_events_sig + num_events_bkg) * cfg.train_fraction)
-    val_size = math.floor((num_events_sig + num_events_bkg) * cfg.val_fraction)
-    test_size = math.floor((num_events_sig + num_events_bkg) * cfg.test_fraction)
+    tot_num_events=num_events_sig + num_events_bkg
+    #shuffle the tensor with numpy random
+    np.random.seed(int(seed))
+    idx = np.random.permutation(tot_num_events)
+    X_fts = X_fts[idx]
+    X_lbl = X_lbl[idx]
+    X_clsw = X_clsw[idx]
+    
+    
+    train_size = math.floor(tot_num_events * cfg.train_fraction)
+    val_size = math.floor(tot_num_events * cfg.val_fraction)
+    test_size = math.floor(tot_num_events * cfg.test_fraction)
 
     tot_events = train_size + val_size + test_size
 
