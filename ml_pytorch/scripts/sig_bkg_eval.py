@@ -223,19 +223,23 @@ def plot_sig_bkg_distributions(
         )
     ks_statistic_sig, p_value_sig = stats.ks_2samp(sig_score_train, sig_score_test)
     ks_statistic_bkg, p_value_bkg = stats.ks_2samp(bkg_score_train, bkg_score_test)
-
+    print(f"\nKS: statistic (sig) = {ks_statistic_sig:.30f}")
+    print(f"KS: p-value (sig) = {p_value_sig:.30f}")
+    print(f"KS: statistic (bkg) = {ks_statistic_bkg:.30f}")
+    print(f"KS: p-value (bkg) = {p_value_bkg:.30f}")
+    
     # print the KS test results on the plot
     plt.text(
-        0.5,
+        0.6,
         0.925,
-        f"KS test: p-value (sig) = {p_value_sig:.6f}",
+        f"KS: p-value (sig) = {p_value_sig:.2f}",
         fontsize=20,
         transform=plt.gca().transAxes,
     )
     plt.text(
-        0.5,
+        0.6,
         0.85,
-        f"KS test: p-value (bkg) = {p_value_bkg:.6f}",
+        f"KS: p-value (bkg) = {p_value_bkg:.2f}",
         fontsize=20,
         transform=plt.gca().transAxes,
     )

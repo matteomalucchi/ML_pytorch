@@ -1,15 +1,15 @@
 #!/bin/bash
 
-coffea_dir=/work/mmalucch/out_hh4b/out_JMENanoData_comparisonRun2_DNN_variables_SR_CR_PADm10_fixed_SPANETptVary0p3_1p7
-config_file=configs/DNN_bkg_reweighting.yml
+config_file=configs/bkg_reweighting/DNN_AN_minDelta1em5.yml
+#micromamba activate ML_pytorch
 
 # Find the next available batch folder
 batch_num=0
-while [ -d "out/batch$(printf "%02d" $batch_num)" ]; do
+while [ -d "/work/mmalucch/out_ML_pytorch/DNN_AN_minDelta1em5/batch$(printf "%02d" $batch_num)" ]; do
     batch_num=$((batch_num + 1))
 done
 
-batch_dir="out/batch$(printf "%02d" $batch_num)"
+batch_dir="/work/mmalucch/out_ML_pytorch/DNN_AN_minDelta1em5/batch$(printf "%02d" $batch_num)"
 mkdir -p "$batch_dir"
 echo "Created batch directory: $batch_dir"
 
@@ -17,7 +17,7 @@ echo "Created batch directory: $batch_dir"
 for i in {0..19}; do
     run_dir="$batch_dir/run$(printf "%02d" $i)"
     echo "Running script with output to: $run_dir"
-    python scripts/train.py -d $coffea_dir  -o "$run_dir" --eval --onnx --roc --histos --history --gpus 7 -n 4 -c $config_file -s $i
+    ml_train  -o "$run_dir" -c $config_file -s $i
 done
 
 # Create best_models directory

@@ -373,7 +373,7 @@ def eval_model(model, loader, loss_fn, type_eval, device, best_epoch):
     all_weights = all_weights.view(-1, 1)
 
     score_lbl_tensor = torch.cat((all_scores, all_labels, all_weights), 1)
-    logger.info("score_lbl_tensor", score_lbl_tensor.shape)
+    logger.info(f"score_lbl_tensor shape: {score_lbl_tensor.shape}")
 
     # detach the tensor from the graph and convert to numpy array
     score_lbl_array = score_lbl_tensor.numpy()
