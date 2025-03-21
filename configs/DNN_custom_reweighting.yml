@@ -17,11 +17,11 @@ ML_model: DNN_AN_reweight_model
 data_format: coffea
 
 batch_size: 1024
-epochs: 50
+epochs: 200
 
 learning_rate: 1e-2
 #learning_rate_schedule: constant
-learning_rate_schedule: delayed_drop
+learning_rate_schedule: e30_drop95
 
 early_stopping: True
 patience: 10

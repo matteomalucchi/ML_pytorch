@@ -13,7 +13,19 @@ def get_linear_schedule_with_warmup(optimizer: Optimizer, total_iters: int):
     )
 
 def get_delayed_drop_schedule(optimizer: Optimizer):
+    lambda1 = lambda epoch: (0.75**(epoch-20) if epoch>=20 else 1)
+    return LambdaLR(
+        optimizer, lr_lambda=lambda1
+    )
+
+def get_e20_drop95_schedule(optimizer: Optimizer):
     lambda1 = lambda epoch: (0.95**(epoch-20) if epoch>=20 else 1)
+    return LambdaLR(
+        optimizer, lr_lambda=lambda1
+    )
+
+def get_e30_drop95_schedule(optimizer: Optimizer):
+    lambda1 = lambda epoch: (0.95**(epoch-30) if epoch>=30 else 1)
     return LambdaLR(
         optimizer, lr_lambda=lambda1
     )
@@ -27,6 +39,10 @@ def get_lr_scheduler(lr_schedule, optimizer, n_epochs):
         )
     elif lr_schedule == "delayed_drop":
         scheduler = get_delayed_drop_schedule(optimizer)
+    elif lr_schedule == "e20_drop95":
+        scheduler = get_e20_drop95_schedule(optimizer)
+    elif lr_schedule == "e30_drop95":
+        scheduler = get_e30_drop95_schedule(optimizer)
 
 
     else:
