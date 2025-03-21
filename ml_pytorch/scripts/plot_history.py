@@ -20,11 +20,11 @@ def read_from_txt(file):
         i = 0
         j = 0
         for line in lines:
-            if "Training batch" in line and not "batch  0." in line:
+            if "Training batch" in line and not "batch 0." in line:
                 train_accuracy.append(float(line.split("accuracy: ")[1].split(" ")[0]))
                 train_loss.append(float(line.split("loss: ")[1].split("\n")[0]))
                 i += 1
-            elif "Validation batch" in line and not "batch  0." in line:
+            elif "Validation batch" in line and not "batch 0." in line:
                 val_accuracy.append(float(line.split("accuracy: ")[1].split(" ")[0]))
                 val_loss.append(float(line.split("loss: ")[1].split("\n")[0]))
                 j += 1
@@ -50,7 +50,7 @@ def plot_history(
     val_loss,
     dir,
     show,
-    uniform_filter=50,
+    uniform_filter=10,
     lenght=-1,
 ):
     infos_dict = {
@@ -119,7 +119,7 @@ def main():
     parser.add_argument(
         "-u",
         "--uniform-filter",
-        default=50,
+        default=10,
         type=int,
         help="size of the uniform filter",
     )
@@ -140,7 +140,7 @@ def main():
     args = parser.parse_args()
 
     #find the file starting with logger in args.input_path using os.listdir
-    log_file=glob(args.input_path+"/*logger*")[0]
+    log_file=args.input_path
 
     print(log_file)
 

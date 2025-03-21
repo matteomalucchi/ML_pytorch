@@ -5,6 +5,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+DEBUG=False
 
 def get_model_parameters_number(model):
     params_num = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -69,11 +70,12 @@ def loop_one_batch(
     # weighted average of the loss
     loss_average = loss.sum() / weights.sum()
     
-    if i==50 and epoch_index==0 and train:
+    if i==50 and epoch_index==0:
         print("outputs", outputs, outputs.shape)
         print("labels", labels, labels.shape)
         print("loss", loss, loss.shape)
         print("inputs", inputs, inputs.shape)
+        print("weights", weights, weights.shape)
 
     if train:
         # Reset the gradients of all optimized torch.Tensor
@@ -94,6 +96,17 @@ def loop_one_batch(
     tot_num += weights.sum().item()
 
     step_prints = max(1, 0.1 * num_batches)
+    if DEBUG:
+        if not train: print("loss", loss)
+        if not train: print("loss_average", loss_average)
+        if not train: print("correct", correct)
+        if not train: print("running_loss", running_loss)
+        if not train: print("tot_loss", tot_loss)
+        if not train: print("running_correct", running_correct)
+        if not train: print("tot_correct", tot_correct)
+        if not train: print("running_num", running_num)
+        if not train: print("tot_num", tot_num)
+        if not train: print("i", i)
 
     if i + 1 >= step_prints * count:
         count += 1
@@ -101,6 +114,15 @@ def loop_one_batch(
         last_loss = running_loss / step_prints  # loss per batch
         last_accuracy = running_correct / running_num  # accuracy per batch
         tb_x = epoch_index * num_batches + i + 1
+        
+        if DEBUG:
+            if not train: print("\n Prints")
+            if not train: print("i", i)
+            if not train: print("count", count)
+            if not train: print("running_loss", running_loss)
+            if not train: print("running_correct", running_correct)
+            if not train: print("running_num", running_num)
+            if not train: print("step_prints", step_prints)
 
         logger.info(
             "EPOCH # %d, time %.1f,  %s batch %.1f %% , %s        accuracy: %.4f      //      loss: %.4f"
@@ -277,7 +299,7 @@ def train_val_one_epoch(
     )
 
 
-def eval_model(model, loader, loss_fn, type, device, best_epoch):
+def eval_model(model, loader, loss_fn, type_eval, device, best_epoch):
     # Test the model by running it on the test set
     running_loss = 0.0
     tot_loss = 0.0
@@ -289,7 +311,7 @@ def eval_model(model, loader, loss_fn, type, device, best_epoch):
     tot_num = 0
 
     num_batches = len(loader)
-    count = 1
+    count = 0
 
     all_scores = None
     all_labels = None
@@ -329,23 +351,29 @@ def eval_model(model, loader, loss_fn, type, device, best_epoch):
             all_scores,
             all_labels,
             all_weights,
-            type,
+            type_eval,
         )
 
     avg_loss = tot_loss / len(loader)
     avg_accuracy = tot_correct / tot_num
-    print(all_scores)
-    if torch.any(all_scores <0) or  torch.any(all_scores >1):
-        all_scores = torch.nn.functional.softmax(all_scores, dim=1)
+    
+    if (torch.any(all_scores <0) or  torch.any(all_scores >1)):
+        if all_scores.shape[1] == 2:
+            all_scores = torch.nn.functional.softmax(all_scores, dim=1)
+        elif  all_scores.shape[1] == 1:
+            all_scores = torch.nn.functional.sigmoid(all_scores)
     if all_scores.shape[1] == 2:
-        all_scores=all_scores[:,-1]
+            all_scores=all_scores[:,-1]      
+    elif all_scores.shape[1] > 2:
+        raise ValueError("The number of output nodes is not 1 or 2")        
+        
     # concatenate all scores and labels
     all_scores = all_scores.view(-1, 1)
     all_labels = all_labels.view(-1, 1)
     all_weights = all_weights.view(-1, 1)
-    print(all_scores)
 
     score_lbl_tensor = torch.cat((all_scores, all_labels, all_weights), 1)
+    logger.info("score_lbl_tensor", score_lbl_tensor.shape)
 
     # detach the tensor from the graph and convert to numpy array
     score_lbl_array = score_lbl_tensor.numpy()
