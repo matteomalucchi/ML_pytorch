@@ -434,8 +434,8 @@ def main():
         nargs="+",
         type=float,
         default=[
-            0.3363,
-            0.3937,  # this is the ratio of the (new xsec * BR) over the (old xsec)
+            # 0.3363,
+            # 0.3937,  # this is the ratio of the (new xsec * BR) over the (old xsec)
         ],  # 2.889e-6 4.567e-5 (=1/sumgenweights*10) #9.71589e-7, 1.79814e-5] #  3.453609602837785e-05,0.00017658439204048897,
         help="Rescale the signal and background when computing the number of expected events",
     )

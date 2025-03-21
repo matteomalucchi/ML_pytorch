@@ -28,9 +28,10 @@ from ml_pytorch.utils.early_stopper import EarlyStopper
 
 def main():
     start_time = time.time()
-    
-    default_cfg = OmegaConf.load(f"{os.path.dirname(__file__)}/../defaults/default_configs.yml")
+    file_dir = os.path.dirname(__file__)
+    default_cfg = OmegaConf.load(f"{file_dir}/../defaults/default_configs.yml")
     cfg_file = OmegaConf.load(args.config)
+    
     
     cfg = default_cfg
     for key, val in cfg_file.items():
@@ -64,13 +65,13 @@ def main():
 
     
     # copy the ML model to the output directory
-    ML_model_path=f"ml_pytorch/models/{cfg.ML_model}.py"
     saved_ML_model_path=f"{main_dir}/ML_model.py"
-    os.system(f"cp {ML_model_path} {saved_ML_model_path}")
+    
 
     
     if cfg.load_model or cfg.eval_model:
-        ML_model = importlib.import_module(saved_ML_model_path.replace("/", ".").replace(".py", ""))
+        # ML_model = importlib.import_module(saved_ML_model_path.replace("/", ".").replace(".py", ""))
+        ML_model = importlib.import_module(f"ml_pytorch.models.{cfg.ML_model}")
         main_dir = os.path.dirname(
             cfg.load_model if cfg.load_model else cfg.eval_model
         ).replace("models", "").replace("state_dict", "")
@@ -95,7 +96,11 @@ def main():
                 else:
                     print("Exiting...")
                     sys.exit(0)
-                    
+    
+    
+    ML_model_path=f"{file_dir}/../models/{cfg.ML_model}.py"
+    os.system(f"cp {ML_model_path} {saved_ML_model_path}")
+    os.system(f"cp {args.config} {main_dir}")
     # writer = SummaryWriter(f"runs/DNN_trainer_{timestamp}")
     # Create the logger
     logger_file = f"{main_dir}/logger_{name}.log"
@@ -295,7 +300,7 @@ def main():
             "state_dict"
         ]
     )
-    model.train(False)
+    model.eval()
 
     if cfg.onnx:
         # export the model to ONNX
@@ -312,6 +317,7 @@ def main():
         )
     
     model.to(device)
+    model.eval()
 
     if cfg.eval or cfg.eval_model:
         # evaluate model on test_dataset loadining the best model
@@ -330,7 +336,8 @@ def main():
             eval_epoch,
         )
 
-        logger.info("\nTest dataset")
+        logger.info("\n")
+        logger.info("Test dataset")
         score_lbl_array_test, loss_eval_test, accuracy_eval_test = eval_model(
             model,
             test_loader,
@@ -371,7 +378,8 @@ def main():
                 score_lbl_array_test,
                 main_dir,
                 False,
-                [0.3363, 0.3937], #TODO:remove default values
+                [],
+                # [0.3363, 0.3937], #TODO:remove default values
                 train_test_fractions[1],
             )
         if cfg.roc:
