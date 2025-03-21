@@ -278,7 +278,7 @@ def train_val_one_epoch(
         state_dict_dir = f"{main_dir}/state_dict"
         os.makedirs(model_dir, exist_ok=True)
         os.makedirs(state_dict_dir, exist_ok=True)
-        # model_name = f"{model_dir}/model_{epoch_index}.pt"
+        model_name = f"{model_dir}/model_{epoch_index}.pt"
         state_dict_name = f"{state_dict_dir}/model_{epoch_index}_state_dict.pt"
         checkpoint = {
             "epoch": epoch_index,
@@ -286,7 +286,7 @@ def train_val_one_epoch(
             "optimizer": optimizer.state_dict(),
         }
         torch.save(checkpoint, state_dict_name)
-        # torch.save(model, model_name)
+        torch.save(model, model_name)
         best_model_name = state_dict_name
 
     return (
