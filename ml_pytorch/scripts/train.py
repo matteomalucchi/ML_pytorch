@@ -46,9 +46,6 @@ def main():
     if cfg.history:
         from ml_pytorch.scripts.plot_history import read_from_txt, plot_history
         
-    # timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    # main_dir = f"out/{timestamp}_{cfg.name}"
-    
     main_dir = cfg.output_dir
     name = main_dir.strip("/").split("/")[-1]
 
@@ -66,9 +63,7 @@ def main():
     
     # copy the ML model to the output directory
     saved_ML_model_path=f"{main_dir}/ML_model.py"
-    
-
-    
+        
     if cfg.load_model or cfg.eval_model:
         # ML_model = importlib.import_module(saved_ML_model_path.replace("/", ".").replace(".py", ""))
         ML_model = importlib.import_module(f"ml_pytorch.models.{cfg.ML_model}")
@@ -179,6 +174,7 @@ def main():
         optimizer.load_state_dict(checkpoint["optimizer"])
         loaded_epoch = checkpoint["epoch"]
         best_model_name = cfg.load_model if cfg.load_model else cfg.eval_model
+        
         with open(logger_file, "r") as f:
             for line in reversed(f.readlines()):
                 if "Best epoch" in line:

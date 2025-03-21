@@ -62,13 +62,13 @@ parser.add_argument(
     "-g", "--gpus", default=None, help="GPU numbers separated by a comma", type=str
 )
 parser.add_argument(
-    "--histos", default=None, help="Make histograms", action="store_true"
+    "--histos", default=None, help="Make histograms of sig and bkg output distribution", action="store_true"
 )
 parser.add_argument(
-    "--roc", default=None, help="Make roc curve", action="store_true"
+    "--roc", default=None, help="Make roc curve of discrimination", action="store_true"
 )
 parser.add_argument(
-    "--history", default=None, help="Plot history", action="store_true"
+    "--history", default=None, help="Plot training history", action="store_true"
 )
 parser.add_argument(
     "-em",
@@ -81,7 +81,7 @@ parser.add_argument(
     "-l",
     "--load-model",
     default=None,
-    help="Path to model to load and continue training",
+    help="Path to model to load and continue training. The model should be the state at the best epoch",
     type=str,
 )
 parser.add_argument(
