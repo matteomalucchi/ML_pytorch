@@ -21,7 +21,7 @@ salloc --account gpu_gres --job-name "InteractiveJob" --cpus-per-task 4 --mem-pe
 # activate the environment
 micromamba activate ML_pytorch
 # check which gpu is available
-echo $CUDA_VISIBLE_DEVICES # or echo $CUDA_VISIBLE_DEVICES
+echo $CUDA_VISIBLE_DEVICES # or echo $SLURM_JOB_GPUS
 ```
 
 # Examples
