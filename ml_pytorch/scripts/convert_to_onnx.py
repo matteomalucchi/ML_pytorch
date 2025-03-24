@@ -24,9 +24,16 @@ parser.add_argument(
     help="Perform the average between the models in the directory of the ratios of the outputs",
 )
 parser.add_argument(
+    "-d",
+    "--debug",
+    action="store_true",
+    default=False,
+    help="Perform the average between two models and compare the output",
+)
+parser.add_argument(
     "-mt",
     "--model_type",
-    default="keras",
+    default="onnx",
     help="Parameter to determine, what type of model is being converted (onnx or keras)",
 )
 args = parser.parse_args()
@@ -96,7 +103,7 @@ def compare_output_onnx_keras(onnx_model_name, keras_model):
     assert np.allclose(output_onnx, output_keras, rtol=1e-03, atol=1e-05)
 
 
-def compare_output_onnx_ratio(onnx_model_name, onnx_model_ratio_name):
+def compare_output_onnx_ratio(onnx_model_name, onnx_model_ratio_name, onnx_model_name_2):
     input_data=load_events()
     
     print(input_data)
@@ -104,13 +111,54 @@ def compare_output_onnx_ratio(onnx_model_name, onnx_model_ratio_name):
     output_onnx = get_onnx_output(onnx_model_name, input_data)
     output_onnx_ratio = get_onnx_output(onnx_model_ratio_name, input_data)
     
-    MASK_NOT_0=output_onnx[:,0] > 1e-5
+    
+    print("output_onnx", output_onnx)
+    if args.debug:
+        output_onnx_2 = get_onnx_output(onnx_model_name_2, input_data)
+        print("output_onnx_2", output_onnx_2)
+        averge_output = (output_onnx[:,1]/output_onnx[:,0] + output_onnx_2[:,1]/output_onnx_2[:,0])/2
+        print("averge_output", averge_output)
+    
+    print("output_onnx_ratio",output_onnx_ratio)
 
-    print(output_onnx)
-    print(output_onnx_ratio)
-    print(output_onnx[MASK_NOT_0])
-    print(output_onnx_ratio[MASK_NOT_0])
+def get_model_tensor_onnx(onnx_model,b):
+    inferred_model = onnx.shape_inference.infer_shapes(onnx_model)
 
+    # get the output shape of the model
+    output_shape = (
+        inferred_model.graph.output[0].type.tensor_type.shape.dim[1].dim_value
+    )
+    print(f"Output shape: {output_shape}")
+
+
+    # To take the ratio of the first model too.
+    (r,) = inline(onnx_model)(b).values()
+    print(f"{b.type = !s}, {r.type = !s}")
+    if output_shape == 1:
+        r = op.div(r, op.sub(op.const(1.0, dtype="float32"), r))
+    elif output_shape == 2:
+        r_0 = op.squeeze(
+            op.slice(
+                r,
+                op.constant(value=np.array([0, 0])),
+                op.constant(value=np.array([sys.maxsize, 1])),
+            ),
+            axes=op.const([-1]),
+        )
+        r_1 = op.squeeze(
+            op.slice(
+                r,
+                op.constant(value=np.array([0, 1])),
+                op.constant(value=np.array([sys.maxsize, 2])),
+            ),
+            axes=op.const([-1]),
+        )
+        r = op.div(r_1, r_0)
+        print(f"{r_0.type = !s}, {r_1.type = !s}, {r.type = !s}")
+    else:
+        raise ValueError("The output shape is not 1 or 2")
+    
+    return r
 
 def main():
     in_dir = args.input
@@ -124,6 +172,11 @@ def main():
         filending = ".onnx"
 
     model_files = [x for x in os.listdir(in_dir) if x.endswith(filending)]
+    model_files = [x for x in model_files if "average_model_from" not in x]
+    
+    if args.debug:
+        model_files = model_files[:2]
+    
     print(model_files)
     print("Lenght of input", len(columns))
 
@@ -132,6 +185,7 @@ def main():
 
         tot_len = 1
         first_file_name=os.path.join(in_dir, model_files[0])
+        b = argument(Tensor(np.float32, ("N", len(columns))))
         if args.model_type == "keras":
             model = tf.keras.models.load_model(first_file_name)
             model_ratio = tf.keras.models.Model(
@@ -144,51 +198,51 @@ def main():
                     tf.TensorSpec(shape=(None, len(columns)), dtype=tf.float32)
                 ],
             )
-            b = argument(Tensor(np.float32, ("N", len(columns))))
 
         elif args.model_type == "onnx":
-            input_shape = len(columns)
+            
             onnx_model_ratio_sum = onnx.load(first_file_name)
 
-            inferred_model = onnx.shape_inference.infer_shapes(onnx_model_ratio_sum)
-            print(inferred_model.graph.value_info)
-            print(inferred_model.graph.output)
-            # get the output shape of the model
-            output_shape = (
-                inferred_model.graph.output[0].type.tensor_type.shape.dim[1].dim_value
-            )
-            print(f"Output shape: {output_shape}")
+            # inferred_model = onnx.shape_inference.infer_shapes(onnx_model_ratio_sum)
+            # # get the output shape of the model
+            # output_shape = (
+            #     inferred_model.graph.output[0].type.tensor_type.shape.dim[1].dim_value
+            # )
+            # print(f"Output shape: {output_shape}")
 
-            b = argument(Tensor(np.float32, ("N", input_shape)))
 
-            # To take the ratio of the first model too.
-            (r,) = inline(onnx_model_ratio_sum)(b).values()
-            print(f"{b.type = !s}, {r.type = !s}")
-            if output_shape == 1:
-                r = op.div(r, op.sub(op.const(1.0, dtype="float32"), r))
-            elif output_shape == 2:
-                r_0 = op.squeeze(
-                    op.slice(
-                        r,
-                        op.constant(value=np.array([0, 0])),
-                        op.constant(value=np.array([sys.maxsize, 1])),
-                    ),
-                    axes=op.const([-1]),
-                )
-                r_1 = op.squeeze(
-                    op.slice(
-                        r,
-                        op.constant(value=np.array([0, 1])),
-                        op.constant(value=np.array([sys.maxsize, 2])),
-                    ),
-                    axes=op.const([-1]),
-                )
-                r = op.div(r_1, r_0)
-            else:
-                raise ValueError("The output shape is not 1 or 2")
+            # # To take the ratio of the first model too.
+            # (r,) = inline(onnx_model_ratio_sum)(b).values()
+            # print(f"{b.type = !s}, {r.type = !s}")
+            # if output_shape == 1:
+            #     r = op.div(r, op.sub(op.const(1.0, dtype="float32"), r))
+            # elif output_shape == 2:
+            #     r_0 = op.squeeze(
+            #         op.slice(
+            #             r,
+            #             op.constant(value=np.array([0, 0])),
+            #             op.constant(value=np.array([sys.maxsize, 1])),
+            #         ),
+            #         axes=op.const([-1]),
+            #     )
+            #     r_1 = op.squeeze(
+            #         op.slice(
+            #             r,
+            #             op.constant(value=np.array([0, 1])),
+            #             op.constant(value=np.array([sys.maxsize, 2])),
+            #         ),
+            #         axes=op.const([-1]),
+            #     )
+            #     r = op.div(r_1, r_0)
+            #     print(f"{r_0.type = !s}, {r_1.type = !s}, {r.type = !s}")
+            # else:
+            #     raise ValueError("The output shape is not 1 or 2")
+            r=get_model_tensor_onnx(onnx_model_ratio_sum,b)
 
             onnx_model_ratio_sum = build({"args_0": b}, {"sum_w": r})
-
+            # print(f"{onnx_model_ratio_sum = !s}")
+            
+        second_file_name=os.path.join(in_dir, model_files[1])
         for model_file in model_files[1:]:
             tot_len += 1
             print(f"\n\nAdding {model_file}")
@@ -211,9 +265,11 @@ def main():
 
             print(b)
             (r,) = inline(onnx_model_ratio_sum)(b).values()
-            (r1,) = inline(onnx_model_ratio_add)(b).values()
+            if args.model_type == "keras":
+                (r1,) = inline(onnx_model_ratio_add)(b).values()
             if args.model_type == "onnx":
-                r1 = op.div(r1, op.sub(op.const(1.0, dtype="float32"), r1))
+                # r1 = op.div(r1, op.sub(op.const(1.0, dtype="float32"), r1))
+                r1=get_model_tensor_onnx(onnx_model_ratio_add,b)
             print(r)
             print(r1)
 
@@ -229,7 +285,7 @@ def main():
         onnx_model_final_name = f"{out_dir}/average_model_from_{args.model_type}.onnx"
         save_onnx_model(onnx_model_final, onnx_model_final_name)
         if args.model_type == "onnx":
-            compare_output_onnx_ratio(first_file_name, onnx_model_final_name)
+            compare_output_onnx_ratio(first_file_name, onnx_model_final_name, second_file_name)
 
     else:
         for model_file in model_files:
