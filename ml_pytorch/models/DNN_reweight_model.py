@@ -8,6 +8,7 @@ class DNN(nn.Module):
     def __init__(self, dim_in):
         super().__init__()
         self.linear_relu_stack = nn.Sequential(
+            nn.BatchNorm1d(dim_in),
             nn.Linear(dim_in, 512),
             nn.BatchNorm1d(512),
             nn.ReLU(),
