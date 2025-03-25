@@ -44,6 +44,7 @@ def loop_one_batch(
     event_weights = inputs[:, -1]
     inputs = inputs[:, :-1]
     weights = event_weights * class_weights.flatten()
+    # weights = event_weights * (class_weights.flatten() if not train else 1)
 
     # compute the outputs of the model
     outputs = model(inputs)
@@ -70,7 +71,7 @@ def loop_one_batch(
     # weighted average of the loss
     loss_average = loss.sum() / weights.sum()
     
-    if i==50 and epoch_index==0:
+    if i==500 and epoch_index==0:
         print("outputs", outputs, outputs.shape)
         print("labels", labels, labels.shape)
         print("loss", loss, loss.shape)
@@ -96,7 +97,9 @@ def loop_one_batch(
     tot_num += weights.sum().item()
 
     step_prints = max(1, 0.1 * num_batches)
+    
     if DEBUG:
+        if loss_average.item()>1:  breakpoint()
         if not train: print("loss", loss)
         if not train: print("loss_average", loss_average)
         if not train: print("correct", correct)
@@ -140,6 +143,7 @@ def loop_one_batch(
                 last_loss,
             )
         )
+        # if not train: breakpoint()
 
         # type = "train" if train else "val"
         # tb_writer.add_scalar(f"Accuracy/{type}", last_accuracy, tb_x)
