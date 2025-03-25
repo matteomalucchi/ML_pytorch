@@ -12,7 +12,7 @@ signal_dataset: [DATA_JetMET_JMENano_C_2022_preEE_EraC,DATA_JetMET_JMENano_D_202
 background_dataset: [DATA_JetMET_JMENano_C_2022_preEE_EraC,DATA_JetMET_JMENano_D_2022_preEE_EraD,DATA_JetMET_JMENano_2022_postEE_EraE,DATA_JetMET_JMENano_F_2022_postEE_EraF,DATA_JetMET_JMENano_G_2022_postEE_EraG]
 oversample: True
 
-ML_model: DNN_AN_reweight_model
+ML_model: DNN_reweight_model
 
 data_format: coffea
 
