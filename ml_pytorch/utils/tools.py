@@ -363,7 +363,7 @@ def eval_model(model, loader, loss_fn, type_eval, device, best_epoch):
         elif  all_scores.shape[1] == 1:
             all_scores = torch.nn.functional.sigmoid(all_scores)
     if all_scores.shape[1] == 2:
-            all_scores=all_scores[:,-1]      
+        all_scores=all_scores[:,-1]      
     elif all_scores.shape[1] > 2:
         raise ValueError("The number of output nodes is not 1 or 2")        
         

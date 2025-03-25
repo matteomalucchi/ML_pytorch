@@ -5,7 +5,8 @@ parser = argparse.ArgumentParser()
 parser.add_argument(
     "-c",
     "--config",
-    required=True,
+    required=False,
+    default=None,
     help="Path to the configuration file",
     type=str,
 )
