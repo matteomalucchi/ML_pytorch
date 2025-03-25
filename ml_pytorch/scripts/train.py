@@ -286,7 +286,7 @@ def main():
             # writer.flush()
             validator = avg_vaccuracy if eval_param == "acc" else avg_vloss
             logger.debug(f"Validator: {validator}")
-            if early_stopping and early_stopper.early_stop(validator):
+            if early_stopping and early_stopper.early_stop(validator,epoch):
                 logger.info("Stopping early")
                 break
             epoch += 1

@@ -16,16 +16,17 @@ class EarlyStopper:
         self.counter = 0
         self.min_validation = float('inf') if eval_param == "loss" else -float('inf')
 
-    def early_stop(self, validation):
-        self.logger.info(f"Before: {self.min_validation}")
-        self.logger.info(f"After: {validation}")
-        if self.better_than(validation, self.min_validation, self.eval_param):
-            self.logger.info("Better")
-            self.min_validation = validation
-            self.counter = 0 
-        else:
-            self.logger.info("Worse")
-            self.counter += 1
-            if self.counter >= self.patience:
-                return True
+    def early_stop(self, validation,epoch):
+        if epoch >= 6:
+            self.logger.info(f"After: {validation}")
+            self.logger.info(f"Before: {self.min_validation}")
+            if self.better_than(validation, self.min_validation, self.eval_param):
+                self.logger.info("Better")
+                self.min_validation = validation
+                self.counter = 0 
+            else:
+                self.logger.info("Worse")
+                self.counter += 1
+                if self.counter >= self.patience:
+                    return True
         return False
