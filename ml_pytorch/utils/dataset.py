@@ -12,48 +12,50 @@ logger = logging.getLogger(__name__)
 
 def oversample_dataset(X_dataset):
 
-        X_fts, X_lbl, X_clsw =  X_dataset[:][0], X_dataset[:][1], X_dataset[:][2]
-        
-        #get the signal and background events
-        X_fts_sig = X_fts[X_lbl==1]
-        X_lbl_sig = X_lbl[X_lbl==1]
-        X_clsw_sig = X_clsw[X_lbl==1]
-        
-        X_fts_bkg = X_fts[X_lbl==0]
-        X_lbl_bkg = X_lbl[X_lbl==0]
-        X_clsw_bkg = X_clsw[X_lbl==0]
-        
-        num_events_bkg=int(torch.sum(X_lbl==0))
-        num_events_sig=int(torch.sum(X_lbl==1))
-        
-        oversample_factor =num_events_bkg//num_events_sig+1
-        
-        logger.info(f"Oversample factor: {oversample_factor}")
-        
-        print(X_fts_sig.shape)
-        
-        X_fts_sig_oversampled = X_fts_sig.repeat((oversample_factor,1))[:num_events_bkg]
-        X_lbl_sig_oversampled = X_lbl_sig.repeat((oversample_factor))[:num_events_bkg]
-        X_clsw_sig_oversampled = X_clsw_sig.repeat((oversample_factor, 1))[:num_events_bkg]
-        logger.info(f"Number of signal events before oversampling {X_fts_sig.shape[0]}")
-        logger.info(f"Number of signal events after oversampling {X_fts_sig_oversampled.shape[0]}")
-        
-        X_fts_oversampled=torch.cat((X_fts_sig_oversampled, X_fts_bkg), dim=0)
-        X_lbl_oversampled=torch.cat((X_lbl_sig_oversampled, X_lbl_bkg), dim=0)
-        X_clsw_oversampled=torch.cat((X_clsw_sig_oversampled, X_clsw_bkg), dim=0)
-        
-        #reshuffle the data
-        idx = np.random.permutation(X_fts_oversampled.shape[0])
-        X_fts_oversampled = X_fts_oversampled[idx]
-        X_lbl_oversampled = X_lbl_oversampled[idx]
-        X_clsw_oversampled = X_clsw_oversampled[idx]
+    X_fts, X_lbl, X_clsw = X_dataset[:][0], X_dataset[:][1], X_dataset[:][2]
 
-        oversampled_dataset=torch.utils.data.TensorDataset(X_fts_oversampled, X_lbl_oversampled, X_clsw_oversampled)
-        
-        print(X_fts_oversampled.shape)
+    # get the signal and background events
+    X_fts_sig = X_fts[X_lbl == 1]
+    X_lbl_sig = X_lbl[X_lbl == 1]
+    X_clsw_sig = X_clsw[X_lbl == 1]
 
-        return oversampled_dataset
-    
+    X_fts_bkg = X_fts[X_lbl == 0]
+    X_lbl_bkg = X_lbl[X_lbl == 0]
+    X_clsw_bkg = X_clsw[X_lbl == 0]
+
+    num_events_bkg = int(torch.sum(X_lbl == 0))
+    num_events_sig = int(torch.sum(X_lbl == 1))
+
+    oversample_factor = num_events_bkg // num_events_sig + 1
+
+    logger.info(f"Oversample factor: {oversample_factor}")
+
+    X_fts_sig_oversampled = X_fts_sig.repeat((oversample_factor, 1))[:num_events_bkg]
+    X_lbl_sig_oversampled = X_lbl_sig.repeat((oversample_factor))[:num_events_bkg]
+    X_clsw_sig_oversampled = X_clsw_sig.repeat((oversample_factor, 1))[:num_events_bkg]
+    logger.info(f"Number of background events {X_fts_bkg.shape[0]}")
+    logger.info(f"Number of signal events before oversampling {X_fts_sig.shape[0]}")
+    logger.info(
+        f"Number of signal events after oversampling {X_fts_sig_oversampled.shape[0]}"
+    )
+
+    X_fts_oversampled = torch.cat((X_fts_sig_oversampled, X_fts_bkg), dim=0)
+    X_lbl_oversampled = torch.cat((X_lbl_sig_oversampled, X_lbl_bkg), dim=0)
+    X_clsw_oversampled = torch.cat((X_clsw_sig_oversampled, X_clsw_bkg), dim=0)
+
+    # reshuffle the data
+    idx = np.random.permutation(X_fts_oversampled.shape[0])
+    X_fts_oversampled = X_fts_oversampled[idx]
+    X_lbl_oversampled = X_lbl_oversampled[idx]
+    X_clsw_oversampled = X_clsw_oversampled[idx]
+
+    oversampled_dataset = torch.utils.data.TensorDataset(
+        X_fts_oversampled, X_lbl_oversampled, X_clsw_oversampled
+    )
+    # breakpoint()
+    return oversampled_dataset
+
+
 def get_variables(
     files,
     total_fraction_of_events,
@@ -184,7 +186,7 @@ def get_variables(
                         1,
                     )
                 )
-            
+
             elif f"{collection}_N" in vars_array.keys() and k.split("_")[1] != "N":
                 number_per_event = tuple(vars_array[f"{collection}_N"])
                 if ak.all(number_per_event == number_per_event[0]):
@@ -216,7 +218,6 @@ def get_variables(
         logger.info(f"weights {weights.shape}")
         variables_array = np.append(variables_array, weights, axis=0)
         logger.info(f"variables_array complete {variables_array.shape}")
-
 
     tot_lenght += variables_array.shape[1]
 
@@ -314,27 +315,32 @@ def load_data(cfg, seed):
 
     # compute class weights such that sumw is the same for signal and background and each weight is order of 1
     num_events_bkg = X_bkg[0].shape[1]
-    
+
     logger.info(f"Number of background events  {X_bkg[0].shape[1]}")
     logger.info(f"Number of signal before {X_sig[0].shape[1]}")
-    
+
     # if cfg.oversample:
     #     logger.info("Performing oversampling")
     #     num_events_sig = X_sig[0].shape[1]
-    #     X_sig_f = X_sig[0].repeat((1,num_events_bkg//num_events_sig+1))[:,:num_events_bkg]
-    #     X_sig_l = X_sig[1].repeat((1,num_events_bkg//num_events_sig+1))[:,:num_events_bkg]
+    #     X_sig_f = X_sig[0].repeat((1, num_events_bkg // num_events_sig + 1))[
+    #         :, :num_events_bkg
+    #     ]
+    #     X_sig_l = X_sig[1].repeat((1, num_events_bkg // num_events_sig + 1))[
+    #         :, :num_events_bkg
+    #     ]
     #     X_sig = (X_sig_f, X_sig_l)
     #     logger.info(f"Number of signal events after oversampling {X_sig[0].shape[1]}")
 
     num_events_sig = X_sig[0].shape[1]
-    
+
     # sum of weights
     sumw_sig = X_sig[0][-1].sum()
     sumw_bkg = X_bkg[0][-1].sum()
     logger.info(f"sum of weights before rescaling signal: {sumw_sig}")
     logger.info(f"sum of weights before rescaling backgound: {sumw_bkg}")
 
-    if not cfg.oversample:
+    # if not cfg.oversample:
+    if True:
         if True:
             sig_class_weights = (num_events_sig + num_events_bkg) / (2 * sumw_sig)
             bkg_class_weights = (num_events_sig + num_events_bkg) / (2 * sumw_bkg)
@@ -360,7 +366,7 @@ def load_data(cfg, seed):
     else:
         sig_class_weights = 1.0
         bkg_class_weights = 1.0
-        
+
     rescaled_sig_weights = X_sig[0][-1] * sig_class_weights
     rescaled_bkg_weights = X_bkg[0][-1] * bkg_class_weights
 
@@ -390,16 +396,15 @@ def load_data(cfg, seed):
     logger.info(f"X_lbl shape: {X_lbl.shape}")
     logger.info(f"X_clsw shape: {X_clsw.shape}")
 
-    tot_num_events=num_events_sig + num_events_bkg
+    tot_num_events = num_events_sig + num_events_bkg
     if True:
-        #shuffle the tensor with numpy random
+        # shuffle the tensor with numpy random
         np.random.seed(int(seed))
         idx = np.random.permutation(tot_num_events)
         X_fts = X_fts[idx]
         X_lbl = X_lbl[idx]
         X_clsw = X_clsw[idx]
-    
-    
+
     train_size = math.floor(tot_num_events * cfg.train_fraction)
     val_size = math.floor(tot_num_events * cfg.val_fraction)
     test_size = math.floor(tot_num_events * cfg.test_fraction)
@@ -423,20 +428,13 @@ def load_data(cfg, seed):
     train_dataset, val_dataset, test_dataset = torch.utils.data.random_split(
         X, [train_size, val_size, test_size], generator=gen
     )
-    
-    if cfg.oversample:
-        logger.info("Performing oversampling")
-        # num_events_sig = X_sig[0].shape[1]
-        # X_sig_f = X_sig[0].repeat((1,num_events_bkg//num_events_sig+1))[:,:num_events_bkg]
-        # X_sig_l = X_sig[1].repeat((1,num_events_bkg//num_events_sig+1))[:,:num_events_bkg]
-        # X_sig = (X_sig_f, X_sig_l)
-        # logger.info(f"Number of signal events after oversampling {X_sig[0].shape[1]}")
 
+    if cfg.oversample:
         #perform the oversampling of the signal separately for training, validation and testing datasets
+        logger.info("Performing oversampling")
         train_dataset=oversample_dataset(train_dataset)
-        val_dataset=oversample_dataset(val_dataset)
-        test_dataset=oversample_dataset(test_dataset)
-        
+        # val_dataset=oversample_dataset(val_dataset)
+        # test_dataset=oversample_dataset(test_dataset)
 
     training_loader = None
     val_loader = None
