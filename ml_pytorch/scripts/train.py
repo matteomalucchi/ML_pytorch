@@ -30,7 +30,23 @@ def main():
     start_time = time.time()
     file_dir = os.path.dirname(__file__)
     default_cfg = OmegaConf.load(f"{file_dir}/../defaults/default_configs.yml")
-    cfg_file = OmegaConf.load(args.config)
+    
+    if args.load_model and not args.config:
+        main_dir=os.path.dirname(args.load_model).replace(os.path.dirname(args.load_model).split("/")[-1], "")
+        #find the yml file
+        cfg_file_name = f"{main_dir}/config_parameters.yml"
+        cfg_file = OmegaConf.load(cfg_file_name)
+    elif args.eval_model and not args.config:
+        main_dir=os.path.dirname(args.eval_model).replace(os.path.dirname(args.eval_model).split("/")[-1], "")
+        #find the yml file
+        cfg_file_name = f"{main_dir}/config_parameters.yml"
+        cfg_file = OmegaConf.load(cfg_file_name)
+    else:
+        if not args.config:
+            raise ValueError("Choose the config")
+        cfg_file_name=args.config
+        cfg_file = OmegaConf.load(cfg_file_name)
+        main_dir = None
     
     
     cfg = default_cfg
@@ -40,15 +56,16 @@ def main():
     for key, val in args.__dict__.items():
         if val is not None:
             cfg[key] = val
+            
 
     if cfg.histos:
         from ml_pytorch.scripts.sig_bkg_eval import plot_sig_bkg_distributions, plot_roc_curve
     if cfg.history:
         from ml_pytorch.scripts.plot_history import read_from_txt, plot_history
-        
-    main_dir = cfg.output_dir
+    
+    if not main_dir: main_dir = cfg.output_dir
     name = main_dir.strip("/").split("/")[-1]
-
+    
     best_vloss = 1_000_000.0
     best_vaccuracy = 0.0
     best_epoch = -1
@@ -67,10 +84,6 @@ def main():
     if cfg.load_model or cfg.eval_model:
         # ML_model = importlib.import_module(saved_ML_model_path.replace("/", ".").replace(".py", ""))
         ML_model = importlib.import_module(f"ml_pytorch.models.{cfg.ML_model}")
-        main_dir = os.path.dirname(
-            cfg.load_model if cfg.load_model else cfg.eval_model
-        ).replace("models", "").replace("state_dict", "")
-        print(main_dir)
     else:
         ML_model = importlib.import_module(f"ml_pytorch.models.{cfg.ML_model}")
         try:
@@ -92,18 +105,24 @@ def main():
                     print("Exiting...")
                     sys.exit(0)
     
+    # dump cfg in yml file
+    cfg_out_file_name = f"{main_dir}/config_parameters.yml"
+    OmegaConf.save(cfg, cfg_out_file_name)
     
     ML_model_path=f"{file_dir}/../models/{cfg.ML_model}.py"
-    os.system(f"cp {ML_model_path} {saved_ML_model_path}")
-    os.system(f"cp {args.config} {main_dir}")
     # writer = SummaryWriter(f"runs/DNN_trainer_{timestamp}")
     # Create the logger
     logger_file = f"{main_dir}/logger_{name}.log"
     logger = setup_logger(logger_file, cfg.verbosity)
     
-    logger.debug('='*20)
-    logger.debug('default configs')
-    logger.debug("cfg:\n - %s", "\n - ".join(str(it) for it in default_cfg.items()))
+    if not cfg.eval_model and not cfg.load_model:
+        logger.info("Copying ML model and config to output directory")
+        os.system(f"cp {ML_model_path} {saved_ML_model_path}")
+        os.system(f"cp {args.config} {main_dir}")
+    
+    logger.info('='*20)
+    logger.info('default configs')
+    logger.info("cfg:\n - %s", "\n - ".join(str(it) for it in default_cfg.items()))
 
     logger.info('='*20)
     logger.info('args')
