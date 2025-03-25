@@ -10,9 +10,9 @@ signal_region: [4b_control_regionRun2]
 background_region: [2b_control_region_preWRun2]
 signal_dataset: [DATA_JetMET_JMENano_C_2022_preEE_EraC,DATA_JetMET_JMENano_D_2022_preEE_EraD,DATA_JetMET_JMENano_2022_postEE_EraE,DATA_JetMET_JMENano_F_2022_postEE_EraF,DATA_JetMET_JMENano_G_2022_postEE_EraG]
 background_dataset: [DATA_JetMET_JMENano_C_2022_preEE_EraC,DATA_JetMET_JMENano_D_2022_preEE_EraD,DATA_JetMET_JMENano_2022_postEE_EraE,DATA_JetMET_JMENano_F_2022_postEE_EraF,DATA_JetMET_JMENano_G_2022_postEE_EraG]
-oversample: False
+oversample: True
 
-ML_model: DNN_AN_reweight_model
+ML_model: DNN_reweight_model
 
 data_format: coffea
 
@@ -24,8 +24,8 @@ learning_rate: 1e-2
 learning_rate_schedule: e20_drop95
 
 early_stopping: True
-patience: 10
-min_delta:  1e-5
+patience: 5
+min_delta: 1e-5
 
 eval_param: "acc"
 

@@ -5,27 +5,26 @@ signal_sample: [DATA_JetMET_JMENano_C_skimmed,DATA_JetMET_JMENano_D_skimmed,DATA
 background_sample: [DATA_JetMET_JMENano_C_skimmed,DATA_JetMET_JMENano_D_skimmed,DATA_JetMET_JMENano_E_skimmed,DATA_JetMET_JMENano_F_skimmed,DATA_JetMET_JMENano_G_skimmed]
 
 # region: 4b_region
-run2: True
-signal_region: [4b_control_regionRun2]
-background_region: [2b_control_region_preWRun2]
+run2: False
+signal_region: [4b_control_region]
+background_region: [2b_control_region_preW]
 signal_dataset: [DATA_JetMET_JMENano_C_2022_preEE_EraC,DATA_JetMET_JMENano_D_2022_preEE_EraD,DATA_JetMET_JMENano_2022_postEE_EraE,DATA_JetMET_JMENano_F_2022_postEE_EraF,DATA_JetMET_JMENano_G_2022_postEE_EraG]
 background_dataset: [DATA_JetMET_JMENano_C_2022_preEE_EraC,DATA_JetMET_JMENano_D_2022_preEE_EraD,DATA_JetMET_JMENano_2022_postEE_EraE,DATA_JetMET_JMENano_F_2022_postEE_EraF,DATA_JetMET_JMENano_G_2022_postEE_EraG]
 oversample: True
 
-ML_model: DNN_reweight_model
+ML_model: DNN_AN_reweight_model
 
 data_format: coffea
 
 batch_size: 512
 epochs: 50
 
-learning_rate: 1e-2
-#learning_rate_schedule: constant
-learning_rate_schedule: e20_drop95
+learning_rate: 1e-3
+learning_rate_schedule: e5_drop75
 
 early_stopping: True
-patience: 10
-min_delta: 0
+patience: 5
+min_delta: 1e-5
 
 eval_param: "acc"
 
