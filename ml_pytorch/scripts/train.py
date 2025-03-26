@@ -32,21 +32,20 @@ def main():
     default_cfg = OmegaConf.load(f"{file_dir}/../defaults/default_configs.yml")
     
     if args.load_model and not args.config:
-        main_dir=os.path.dirname(args.load_model).replace(os.path.dirname(args.load_model).split("/")[-1], "")
+        cfg.output_dir=os.path.dirname(args.load_model).replace(os.path.dirname(args.load_model).split("/")[-1], "")
         #find the yml file
-        cfg_file_name = f"{main_dir}/config_parameters.yml"
+        cfg_file_name = f"{cfg.output_dir}/config_parameters.yml"
         cfg_file = OmegaConf.load(cfg_file_name)
     elif args.eval_model and not args.config:
-        main_dir=os.path.dirname(args.eval_model).replace(os.path.dirname(args.eval_model).split("/")[-1], "")
+        cfg.output_dir=os.path.dirname(args.eval_model).replace(os.path.dirname(args.eval_model).split("/")[-1], "")
         #find the yml file
-        cfg_file_name = f"{main_dir}/config_parameters.yml"
+        cfg_file_name = f"{cfg.output_dir}/config_parameters.yml"
         cfg_file = OmegaConf.load(cfg_file_name)
     else:
         if not args.config:
             raise ValueError("Choose the config")
         cfg_file_name=args.config
         cfg_file = OmegaConf.load(cfg_file_name)
-        main_dir = None
     
     
     cfg = default_cfg
@@ -63,7 +62,9 @@ def main():
     if cfg.history:
         from ml_pytorch.scripts.plot_history import read_from_txt, plot_history
     
-    if not main_dir: main_dir = cfg.output_dir
+    if not cfg.output_dir: cfg.output_dir=f"out/{os.path.basename(cfg_file_name).replace('.yml','')}"
+    main_dir = cfg.output_dir
+    
     name = main_dir.strip("/").split("/")[-1]
     
     best_vloss = 1_000_000.0
@@ -105,9 +106,6 @@ def main():
                     print("Exiting...")
                     sys.exit(0)
     
-    # dump cfg in yml file
-    cfg_out_file_name = f"{main_dir}/config_parameters.yml"
-    OmegaConf.save(cfg, cfg_out_file_name)
     
     ML_model_path=f"{file_dir}/../models/{cfg.ML_model}.py"
     # writer = SummaryWriter(f"runs/DNN_trainer_{timestamp}")
@@ -115,10 +113,15 @@ def main():
     logger_file = f"{main_dir}/logger_{name}.log"
     logger = setup_logger(logger_file, cfg.verbosity)
     
+    logger.info(f"Output directory: {main_dir}")
+    
     if not cfg.eval_model and not cfg.load_model:
         logger.info("Copying ML model and config to output directory")
         os.system(f"cp {ML_model_path} {saved_ML_model_path}")
         os.system(f"cp {args.config} {main_dir}")
+        # dump cfg in yml file
+        cfg_out_file_name = f"{main_dir}/config_parameters.yml"
+        OmegaConf.save(cfg, cfg_out_file_name)
     
     logger.info('='*20)
     logger.info('default configs')
@@ -227,6 +230,7 @@ def main():
                 device,
                 time_epoch,
                 scheduler,
+                cfg,
             )
 
             logger.info("time elapsed: {:.2f}s".format(time.time() - time_epoch))
@@ -249,11 +253,11 @@ def main():
                 device,
                 time_epoch,
                 None,
+                cfg,
                 main_dir,
                 best_vloss,
                 best_vaccuracy,
                 best_epoch,
-                eval_param,
                 best_model_name,
             )
 

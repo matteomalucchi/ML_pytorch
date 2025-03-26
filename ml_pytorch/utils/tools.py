@@ -71,12 +71,6 @@ def loop_one_batch(
     # weighted average of the loss
     loss_average = loss.sum() / weights.sum()
     
-    if i==500 and epoch_index==0:
-        print("outputs", outputs, outputs.shape)
-        print("labels", labels, labels.shape)
-        print("loss", loss, loss.shape)
-        print("inputs", inputs, inputs.shape)
-        print("weights", weights, weights.shape)
 
     if train:
         # Reset the gradients of all optimized torch.Tensor
@@ -112,6 +106,13 @@ def loop_one_batch(
         if not train: print("i", i)
 
     if i + 1 >= step_prints * count:
+        if count==2 and epoch_index==0:
+            print("outputs", outputs, outputs.shape)
+            print("labels", labels, labels.shape)
+            print("loss", loss, loss.shape)
+            print("inputs", inputs, inputs.shape)
+            print("weights", weights, weights.shape)
+            
         count += 1
 
         last_loss = running_loss / step_prints  # loss per batch
@@ -188,11 +189,11 @@ def train_val_one_epoch(
     device,
     time_epoch,
     scheduler,
+    cfg,
     main_dir=None,
     best_loss=None,
     best_accuracy=None,
     best_epoch=None,
-    eval_param="loss",
     best_model_name=None,
 ):
     logger.info("Training" if train else "Validation")
@@ -264,15 +265,15 @@ def train_val_one_epoch(
     avg_accuracy = tot_correct / tot_num
 
     # Track best performance, and save the model state
-    if eval_param == "loss":
+    if cfg.eval_param == "loss":
         evaluator=avg_loss
         best_eval=best_loss
-    elif eval_param == "acc":
+    elif cfg.eval_param == "acc":
         evaluator=1-avg_accuracy
         best_eval=1-best_accuracy
     else:
         raise ValueError("Bad evaluator name")
-    if not train and evaluator < best_eval:
+    if not train and evaluator < best_eval - cfg.min_delta:
         best_eval = evaluator
         best_loss = avg_loss
         best_accuracy = avg_accuracy
