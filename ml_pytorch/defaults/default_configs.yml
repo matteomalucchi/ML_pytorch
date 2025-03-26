@@ -35,6 +35,7 @@ test_fraction: 0.25
 
 run2: False
 oversample: False
+undersample: False
 
 num_workers: 4
 data_dirs: [/work/mmalucch/out_hh4b/out_vbf_ggf_dnn_full/]
@@ -48,4 +49,4 @@ load_model: ''
 onnx: True
 pin_memory: False
 overwrite: False
-output_dir: out/test_training
+output_dir: null

@@ -244,6 +244,11 @@ def get_variables(
         if sig_bkg == "signal"
         else torch.zeros_like(variables[0], dtype=torch.float32).unsqueeze(0)
     )
+    
+    #shuffle the variables
+    idx = np.random.permutation(tot_lenght)
+    print(idx)
+    variables=variables[:,idx]
 
     X = (variables, flag_tensor)
     return X, tot_lenght
@@ -252,6 +257,9 @@ def get_variables(
 def load_data(cfg, seed):
     batch_size = cfg.batch_size
     logger.debug(f"Batch size: {batch_size}")
+    
+    #initialize numpy seed
+    np.random.seed(int(seed))
 
     dirs = cfg.data_dirs
 
@@ -312,12 +320,30 @@ def load_data(cfg, seed):
         "background",
         cfg.data_format,
     )
+        
 
     # compute class weights such that sumw is the same for signal and background and each weight is order of 1
-    num_events_bkg = X_bkg[0].shape[1]
 
     logger.info(f"Number of background events  {X_bkg[0].shape[1]}")
-    logger.info(f"Number of signal before {X_sig[0].shape[1]}")
+    logger.info(f"Number of signal events {X_sig[0].shape[1]}")
+    
+    if cfg.oversample and cfg.undersample:
+        raise ValueError("Select only oversample or undersample")
+    
+    if cfg.undersample:
+        logger.info("Performing undersampling of background")
+        logger.info(f"Number of background events before undersampling {X_bkg[0].shape[1]}")
+        num_events_sig = X_sig[0].shape[1]
+        X_bkg_f = X_bkg[0][
+            :, :num_events_sig
+        ]
+        X_bkg_l = X_bkg[1][
+            :, :num_events_sig
+        ]
+        X_bkg = (X_bkg_f, X_bkg_l)
+        logger.info(f"Number of background events after undersampling {X_bkg[0].shape[1]}")
+        
+    
 
     # if cfg.oversample:
     #     logger.info("Performing oversampling")
@@ -331,6 +357,7 @@ def load_data(cfg, seed):
     #     X_sig = (X_sig_f, X_sig_l)
     #     logger.info(f"Number of signal events after oversampling {X_sig[0].shape[1]}")
 
+    num_events_bkg = X_bkg[0].shape[1]
     num_events_sig = X_sig[0].shape[1]
 
     # sum of weights
@@ -399,7 +426,6 @@ def load_data(cfg, seed):
     tot_num_events = num_events_sig + num_events_bkg
     if True:
         # shuffle the tensor with numpy random
-        np.random.seed(int(seed))
         idx = np.random.permutation(tot_num_events)
         X_fts = X_fts[idx]
         X_lbl = X_lbl[idx]
@@ -423,6 +449,7 @@ def load_data(cfg, seed):
     logger.info(f"Validation size: {val_size}")
     logger.info(f"Test size: {test_size}")
 
+    #shuffle and split
     gen = torch.Generator()
     gen.manual_seed(int(seed))
     train_dataset, val_dataset, test_dataset = torch.utils.data.random_split(
