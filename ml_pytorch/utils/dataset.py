@@ -366,8 +366,7 @@ def load_data(cfg, seed):
     logger.info(f"sum of weights before rescaling signal: {sumw_sig}")
     logger.info(f"sum of weights before rescaling backgound: {sumw_bkg}")
 
-    # if not cfg.oversample:
-    if True:
+    if not cfg.oversample:
         if True:
             sig_class_weights = (num_events_sig + num_events_bkg) / (2 * sumw_sig)
             bkg_class_weights = (num_events_sig + num_events_bkg) / (2 * sumw_bkg)
@@ -460,8 +459,8 @@ def load_data(cfg, seed):
         #perform the oversampling of the signal separately for training, validation and testing datasets
         logger.info("Performing oversampling")
         train_dataset=oversample_dataset(train_dataset)
-        # val_dataset=oversample_dataset(val_dataset)
-        # test_dataset=oversample_dataset(test_dataset)
+        val_dataset=oversample_dataset(val_dataset)
+        test_dataset=oversample_dataset(test_dataset)
 
     training_loader = None
     val_loader = None
