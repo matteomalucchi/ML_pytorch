@@ -17,8 +17,13 @@ from ml_pytorch.utils.tools import (
     eval_model,
     export_onnx,
     create_DNN_columns_list,
+    save_pytorch_model,
 )
-from ml_pytorch.defaults.dnn_input_variables import bkg_morphing_dnn_input_variables, test_set, set_with_btag
+from ml_pytorch.defaults.dnn_input_variables import (
+    bkg_morphing_dnn_input_variables,
+    test_set,
+    set_with_btag,
+)
 
 from ml_pytorch.utils.args_train import args
 
@@ -26,28 +31,32 @@ from ml_pytorch.utils.setup_logger import setup_logger
 
 from ml_pytorch.utils.early_stopper import EarlyStopper
 
+
 def main():
     start_time = time.time()
     file_dir = os.path.dirname(__file__)
     default_cfg = OmegaConf.load(f"{file_dir}/../defaults/default_configs.yml")
-    
+
     if args.load_model and not args.config:
-        cfg.output_dir=os.path.dirname(args.load_model).replace(os.path.dirname(args.load_model).split("/")[-1], "")
-        #find the yml file
+        cfg.output_dir = os.path.dirname(args.load_model).replace(
+            os.path.dirname(args.load_model).split("/")[-1], ""
+        )
+        # find the yml file
         cfg_file_name = f"{cfg.output_dir}/config_parameters.yml"
         cfg_file = OmegaConf.load(cfg_file_name)
     elif args.eval_model and not args.config:
-        cfg.output_dir=os.path.dirname(args.eval_model).replace(os.path.dirname(args.eval_model).split("/")[-1], "")
-        #find the yml file
+        cfg.output_dir = os.path.dirname(args.eval_model).replace(
+            os.path.dirname(args.eval_model).split("/")[-1], ""
+        )
+        # find the yml file
         cfg_file_name = f"{cfg.output_dir}/config_parameters.yml"
         cfg_file = OmegaConf.load(cfg_file_name)
     else:
         if not args.config:
             raise ValueError("Choose the config")
-        cfg_file_name=args.config
+        cfg_file_name = args.config
         cfg_file = OmegaConf.load(cfg_file_name)
-    
-    
+
     cfg = default_cfg
     for key, val in cfg_file.items():
         cfg[key] = val
@@ -55,33 +64,35 @@ def main():
     for key, val in args.__dict__.items():
         if val is not None:
             cfg[key] = val
-            
 
     if cfg.histos:
-        from ml_pytorch.scripts.sig_bkg_eval import plot_sig_bkg_distributions, plot_roc_curve
+        from ml_pytorch.scripts.sig_bkg_eval import (
+            plot_sig_bkg_distributions,
+            plot_roc_curve,
+        )
     if cfg.history:
         from ml_pytorch.scripts.plot_history import read_from_txt, plot_history
-    
-    if not cfg.output_dir: cfg.output_dir=f"out/{os.path.basename(cfg_file_name).replace('.yml','')}"
+
+    if not cfg.output_dir:
+        cfg.output_dir = f"out/{os.path.basename(cfg_file_name).replace('.yml','')}"
     main_dir = cfg.output_dir
-    
+
     name = main_dir.strip("/").split("/")[-1]
-    
+
     best_vloss = 1_000_000.0
     best_vaccuracy = 0.0
     best_epoch = -1
     best_model_name = ""
 
     loaded_epoch = -1
-    
+
     n_epochs = cfg.epochs
 
     assert cfg.learning_rate > 0, "learning_rate must be positive"
 
-    
     # copy the ML model to the output directory
-    saved_ML_model_path=f"{main_dir}/ML_model.py"
-        
+    saved_ML_model_path = f"{main_dir}/ML_model.py"
+
     if cfg.load_model or cfg.eval_model:
         # ML_model = importlib.import_module(saved_ML_model_path.replace("/", ".").replace(".py", ""))
         ML_model = importlib.import_module(f"ml_pytorch.models.{cfg.ML_model}")
@@ -105,16 +116,15 @@ def main():
                 else:
                     print("Exiting...")
                     sys.exit(0)
-    
-    
-    ML_model_path=f"{file_dir}/../models/{cfg.ML_model}.py"
+
+    ML_model_path = f"{file_dir}/../models/{cfg.ML_model}.py"
     # writer = SummaryWriter(f"runs/DNN_trainer_{timestamp}")
     # Create the logger
     logger_file = f"{main_dir}/logger_{name}.log"
     logger = setup_logger(logger_file, cfg.verbosity)
-    
+
     logger.info(f"Output directory: {main_dir}")
-    
+
     if not cfg.eval_model and not cfg.load_model:
         logger.info("Copying ML model and config to output directory")
         os.system(f"cp {ML_model_path} {saved_ML_model_path}")
@@ -122,28 +132,30 @@ def main():
         # dump cfg in yml file
         cfg_out_file_name = f"{main_dir}/config_parameters.yml"
         OmegaConf.save(cfg, cfg_out_file_name)
-    
-    logger.info('='*20)
-    logger.info('default configs')
+
+    logger.info("=" * 20)
+    logger.info("default configs")
     logger.info("cfg:\n - %s", "\n - ".join(str(it) for it in default_cfg.items()))
 
-    logger.info('='*20)
-    logger.info('args')
+    logger.info("=" * 20)
+    logger.info("args")
     logger.info("args:\n - %s", "\n - ".join(str(it) for it in args.__dict__.items()))
-    
-    logger.info('='*20)
-    logger.info('configs')
+
+    logger.info("=" * 20)
+    logger.info("configs")
     logger.info("cfg:\n - %s", "\n - ".join(str(it) for it in cfg.items()))
 
     if cfg.input_variables is None:
         logger.debug("Get Input variables from dnn_inputs")
         logger.debug(bkg_morphing_dnn_input_variables)
-        #cfg.input_variables = create_DNN_columns_list(True, True, set_with_btag)
+        # cfg.input_variables = create_DNN_columns_list(True, True, set_with_btag)
         # cfg.input_variables = create_DNN_columns_list(True, True, test_set)
-        cfg.input_variables = create_DNN_columns_list(cfg.run2, bkg_morphing_dnn_input_variables)
+        cfg.input_variables = create_DNN_columns_list(
+            cfg.run2, bkg_morphing_dnn_input_variables
+        )
     input_variables = cfg.input_variables
     logger.info(input_variables)
-        
+
     early_stopping = cfg.early_stopping
     patience = cfg.patience
     min_delta = cfg.min_delta
@@ -159,7 +171,7 @@ def main():
         X_fts,
         X_lbl,
         batch_size,
-    ) = load_data(cfg,cfg.seed)
+    ) = load_data(cfg, cfg.seed)
     if cfg.gpus is not None:
         gpus = [int(i) for i in cfg.gpus.split(",")]
         device = torch.device(gpus[0])
@@ -169,15 +181,17 @@ def main():
     logger.info(f"Using {device} device")
 
     input_size = X_fts.size(1) - 1
-    
+
     # Get validation evaluator (if best model by loss or accuracy)
     eval_param = cfg.eval_param
     logger.debug(f"Eval param: {eval_param}")
     assert eval_param in ["loss", "acc"], "eval_param must be loss or acc"
 
     # Create stopper class
-    early_stopper = EarlyStopper(logger=logger, patience=patience, min_delta=min_delta, eval_param=eval_param)
-    
+    early_stopper = EarlyStopper(
+        logger=logger, patience=patience, min_delta=min_delta, eval_param=eval_param
+    )
+
     # Get model
     model, loss_fn, optimizer, scheduler = ML_model.get_model(
         input_size, device, cfg.learning_rate, cfg.learning_rate_schedule, n_epochs
@@ -196,7 +210,7 @@ def main():
         optimizer.load_state_dict(checkpoint["optimizer"])
         loaded_epoch = checkpoint["epoch"]
         best_model_name = cfg.load_model if cfg.load_model else cfg.eval_model
-        
+
         with open(logger_file, "r") as f:
             for line in reversed(f.readlines()):
                 if "Best epoch" in line:
@@ -212,6 +226,8 @@ def main():
         )
 
     if not cfg.eval_model:
+        stop_training=False
+        
         for epoch in range(n_epochs):
             if epoch <= loaded_epoch:
                 continue
@@ -290,19 +306,31 @@ def main():
             # writer.flush()
             validator = avg_vaccuracy if eval_param == "acc" else avg_vloss
             logger.debug(f"Validator: {validator}")
-            if early_stopping and early_stopper.early_stop(validator,epoch):
+            if early_stopping and early_stopper.early_stop(validator, epoch):
                 logger.info("Stopping early")
-                break
-            epoch += 1
-            logger.info("time elapsed: {:.2f}s".format(time.time() - time_epoch))
+                stop_training = True
+            if epoch == n_epochs - 1:
+                stop_training = True
 
+            logger.info("time elapsed: {:.2f}s".format(time.time() - time_epoch))
+            if stop_training:
+                break
+
+            epoch += 1
+
+        # save the last model
+        save_pytorch_model(
+            main_dir,
+            epoch,
+            model,
+            optimizer,
+        )
+        
     if cfg.history:
         # plot the training and validation loss and accuracy
         print("\n\n\n")
         logger.info("Plotting training and validation loss and accuracy")
-        train_accuracy, train_loss, val_accuracy, val_loss = read_from_txt(
-            logger_file
-        )
+        train_accuracy, train_loss, val_accuracy, val_loss = read_from_txt(logger_file)
 
         plot_history(
             train_accuracy,
@@ -315,7 +343,7 @@ def main():
 
     # load best model
     model.load_state_dict(
-            torch.load(best_model_name if not cfg.eval_model else cfg.eval_model)[
+        torch.load(best_model_name if not cfg.eval_model else cfg.eval_model)[
             "state_dict"
         ]
     )
@@ -334,7 +362,7 @@ def main():
             input_size,
             "cpu",
         )
-    
+
     model.to(device)
     model.eval()
 
@@ -343,7 +371,7 @@ def main():
         logger.info("\n\n\n")
         logger.info("Evaluating best model on test and train dataset")
         logger.info("================================")
-        #torch.cuda.empty_cache()
+        # torch.cuda.empty_cache()
 
         eval_epoch = loaded_epoch if cfg.eval_model else best_epoch
         logger.info("Training dataset\n")
@@ -410,6 +438,7 @@ def main():
     logger.info("Saved output in %s" % main_dir)
 
     logger.info("Total time: %.1f" % (time.time() - start_time))
+
 
 if __name__ == "__main__":
     main()

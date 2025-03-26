@@ -5,7 +5,8 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-DEBUG=False
+DEBUG = False
+
 
 def get_model_parameters_number(model):
     params_num = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -50,14 +51,13 @@ def loop_one_batch(
     outputs = model(inputs)
 
     if outputs.shape[1] == 1:
-        outputs=outputs.flatten()
+        outputs = outputs.flatten()
         y_pred = torch.round(outputs)
-        
+
     else:
         y_pred = outputs.argmax(dim=1)
-        labels=labels.type(dtype=torch.long)
-        
-        
+        labels = labels.type(dtype=torch.long)
+
     # Compute the accuracy
     correct = ((y_pred == labels) * weights).sum().item()
     # correct = ((y_pred == labels).view(1, -1).squeeze() * weights).sum().item()
@@ -70,7 +70,6 @@ def loop_one_batch(
     loss = loss * weights
     # weighted average of the loss
     loss_average = loss.sum() / weights.sum()
-    
 
     if train:
         # Reset the gradients of all optimized torch.Tensor
@@ -91,42 +90,60 @@ def loop_one_batch(
     tot_num += weights.sum().item()
 
     step_prints = max(1, 0.1 * num_batches)
-    
+
     if DEBUG:
-        if loss_average.item()>1:  breakpoint()
-        if not train: print("loss", loss)
-        if not train: print("loss_average", loss_average)
-        if not train: print("correct", correct)
-        if not train: print("running_loss", running_loss)
-        if not train: print("tot_loss", tot_loss)
-        if not train: print("running_correct", running_correct)
-        if not train: print("tot_correct", tot_correct)
-        if not train: print("running_num", running_num)
-        if not train: print("tot_num", tot_num)
-        if not train: print("i", i)
+        if loss_average.item() > 1:
+            breakpoint()
+        if not train:
+            print("loss", loss)
+        if not train:
+            print("loss_average", loss_average)
+        if not train:
+            print("correct", correct)
+        if not train:
+            print("running_loss", running_loss)
+        if not train:
+            print("tot_loss", tot_loss)
+        if not train:
+            print("running_correct", running_correct)
+        if not train:
+            print("tot_correct", tot_correct)
+        if not train:
+            print("running_num", running_num)
+        if not train:
+            print("tot_num", tot_num)
+        if not train:
+            print("i", i)
 
     if i + 1 >= step_prints * count:
-        if count==2 and epoch_index==0:
+        if count == 2 and epoch_index == 0:
             print("outputs", outputs, outputs.shape)
             print("labels", labels, labels.shape)
             print("loss", loss, loss.shape)
             print("inputs", inputs, inputs.shape)
             print("weights", weights, weights.shape)
-            
+
         count += 1
 
         last_loss = running_loss / step_prints  # loss per batch
         last_accuracy = running_correct / running_num  # accuracy per batch
         tb_x = epoch_index * num_batches + i + 1
-        
+
         if DEBUG:
-            if not train: print("\n Prints")
-            if not train: print("i", i)
-            if not train: print("count", count)
-            if not train: print("running_loss", running_loss)
-            if not train: print("running_correct", running_correct)
-            if not train: print("running_num", running_num)
-            if not train: print("step_prints", step_prints)
+            if not train:
+                print("\n Prints")
+            if not train:
+                print("i", i)
+            if not train:
+                print("count", count)
+            if not train:
+                print("running_loss", running_loss)
+            if not train:
+                print("running_correct", running_correct)
+            if not train:
+                print("running_num", running_num)
+            if not train:
+                print("step_prints", step_prints)
 
         logger.info(
             "EPOCH # %d, time %.1f,  %s batch %.1f %% , %s        accuracy: %.4f      //      loss: %.4f"
@@ -179,6 +196,23 @@ def loop_one_batch(
     )
 
 
+def save_pytorch_model(main_dir, epoch_index, model, optimizer):
+    model_dir = f"{main_dir}/models"
+    state_dict_dir = f"{main_dir}/state_dict"
+    os.makedirs(model_dir, exist_ok=True)
+    os.makedirs(state_dict_dir, exist_ok=True)
+    model_name = f"{model_dir}/model_{epoch_index}.pt"
+    state_dict_name = f"{state_dict_dir}/model_{epoch_index}_state_dict.pt"
+    checkpoint = {
+        "epoch": epoch_index,
+        "state_dict": model.state_dict(),
+        "optimizer": optimizer.state_dict(),
+    }
+    torch.save(checkpoint, state_dict_name)
+    torch.save(model, model_name)
+    return state_dict_name
+
+
 def train_val_one_epoch(
     train,
     epoch_index,
@@ -197,7 +231,7 @@ def train_val_one_epoch(
     best_model_name=None,
 ):
     logger.info("Training" if train else "Validation")
-    if train: 
+    if train:
         model.train(train)
     else:
         model.eval()
@@ -263,36 +297,23 @@ def train_val_one_epoch(
 
     avg_loss = tot_loss / len(loader)
     avg_accuracy = tot_correct / tot_num
+    if not train:
+        # Track best performance, and save the model state
+        if cfg.eval_param == "loss":
+            evaluator = avg_loss
+            best_eval = best_loss
+        elif cfg.eval_param == "acc":
+            evaluator = 1 - avg_accuracy
+            best_eval = 1 - best_accuracy
+        else:
+            raise ValueError("Bad evaluator name")
 
-    # Track best performance, and save the model state
-    if cfg.eval_param == "loss":
-        evaluator=avg_loss
-        best_eval=best_loss
-    elif cfg.eval_param == "acc":
-        evaluator=1-avg_accuracy
-        best_eval=1-best_accuracy
-    else:
-        raise ValueError("Bad evaluator name")
     if not train and evaluator < best_eval - cfg.min_delta:
         best_eval = evaluator
         best_loss = avg_loss
         best_accuracy = avg_accuracy
         best_epoch = epoch_index
-
-        model_dir = f"{main_dir}/models"
-        state_dict_dir = f"{main_dir}/state_dict"
-        os.makedirs(model_dir, exist_ok=True)
-        os.makedirs(state_dict_dir, exist_ok=True)
-        model_name = f"{model_dir}/model_{epoch_index}.pt"
-        state_dict_name = f"{state_dict_dir}/model_{epoch_index}_state_dict.pt"
-        checkpoint = {
-            "epoch": epoch_index,
-            "state_dict": model.state_dict(),
-            "optimizer": optimizer.state_dict(),
-        }
-        torch.save(checkpoint, state_dict_name)
-        torch.save(model, model_name)
-        best_model_name = state_dict_name
+        best_model_name = save_pytorch_model(main_dir, epoch_index, model, optimizer)
 
     return (
         avg_loss,
@@ -361,17 +382,17 @@ def eval_model(model, loader, loss_fn, type_eval, device, best_epoch):
 
     avg_loss = tot_loss / len(loader)
     avg_accuracy = tot_correct / tot_num
-    
-    if (torch.any(all_scores <0) or  torch.any(all_scores >1)):
+
+    if torch.any(all_scores < 0) or torch.any(all_scores > 1):
         if all_scores.shape[1] == 2:
             all_scores = torch.nn.functional.softmax(all_scores, dim=1)
-        elif  all_scores.shape[1] == 1:
+        elif all_scores.shape[1] == 1:
             all_scores = torch.nn.functional.sigmoid(all_scores)
     if all_scores.shape[1] == 2:
-        all_scores=all_scores[:,-1]      
+        all_scores = all_scores[:, -1]
     elif all_scores.shape[1] > 2:
-        raise ValueError("The number of output nodes is not 1 or 2")        
-        
+        raise ValueError("The number of output nodes is not 1 or 2")
+
     # concatenate all scores and labels
     all_scores = all_scores.view(-1, 1)
     all_labels = all_labels.view(-1, 1)
@@ -409,9 +430,9 @@ def export_onnx(model, model_name, batch_size, input_size, device):
         },
     )
 
+
 def create_DNN_columns_list(run2, dnn_input_variables):
-    """Create the columns of the DNN input variables
-    """
+    """Create the columns of the DNN input variables"""
     column_list = []
     for x, y in dnn_input_variables.values():
         if run2:
@@ -420,7 +441,7 @@ def create_DNN_columns_list(run2, dnn_input_variables):
                 column_list.append(f"{coll}Run2_{y}:{pos}")
             elif x != "events":
                 column_list.append(f"{x}Run2_{y}")
-            elif "sigma" in y: 
+            elif "sigma" in y:
                 column_list.append(f"{x}_{y}Run2")
             else:
                 column_list.append(f"{x}_{y}")
@@ -431,10 +452,12 @@ def create_DNN_columns_list(run2, dnn_input_variables):
             else:
                 column_list.append(f"{x}_{y}")
 
-    return column_list 
+    return column_list
 
-if __name__=="__main__":
+
+if __name__ == "__main__":
     from ml_pytorch.defaults.dnn_input_variables import bkg_morphing_dnn_input_variables
-    columns = create_DNN_columns_list(True,bkg_morphing_dnn_input_variables)
+
+    columns = create_DNN_columns_list(True, bkg_morphing_dnn_input_variables)
     for var in columns:
         print(var)
