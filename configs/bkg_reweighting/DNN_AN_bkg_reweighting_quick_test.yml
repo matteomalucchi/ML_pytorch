@@ -10,7 +10,7 @@ background_dataset: [DATA_JetMET_JMENano_C_2022_preEE_EraC,DATA_JetMET_JMENano_D
 oversample: True
 run2: True
 
-ML_model: DNN_AN_reweight_model
+ML_model: DNN_softmax_reweight_model
 
 data_format: coffea
 
