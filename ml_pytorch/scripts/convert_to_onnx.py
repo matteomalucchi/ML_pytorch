@@ -55,7 +55,7 @@ def save_onnx_model(onnx_model_final, onnx_model_name):
 
 def get_onnx_output(onnx_model_name, input_data):
     session = ort.InferenceSession(
-        onnx_model_name, providers=ort.get_available_providers()
+        onnx_model_name, providers=["CPUExecutionProvider"]
     )
 
     # print the input/output name and shape
