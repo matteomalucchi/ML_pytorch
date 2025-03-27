@@ -36,6 +36,7 @@ def main():
     start_time = time.time()
     file_dir = os.path.dirname(__file__)
     default_cfg = OmegaConf.load(f"{file_dir}/../defaults/default_configs.yml")
+    cfg = default_cfg
 
     if args.load_model and not args.config:
         cfg.output_dir = os.path.dirname(args.load_model).replace(
@@ -57,7 +58,6 @@ def main():
         cfg_file_name = args.config
         cfg_file = OmegaConf.load(cfg_file_name)
 
-    cfg = default_cfg
     for key, val in cfg_file.items():
         cfg[key] = val
 
@@ -71,7 +71,7 @@ def main():
             plot_roc_curve,
         )
     if cfg.history:
-        from ml_pytorch.scripts.plot_history import read_from_txt, plot_history
+        from ml_pytorch.scripts.plot_history import read_from_txt, plot_history, plot_lr
 
     if not cfg.output_dir:
         cfg.output_dir = f"out/{os.path.basename(cfg_file_name).replace('.yml','')}"
@@ -94,8 +94,15 @@ def main():
     saved_ML_model_path = f"{main_dir}/ML_model.py"
 
     if cfg.load_model or cfg.eval_model:
+        # os.system(f"cp {saved_ML_model_path} {file_dir}/../models/ML_model_loaded.py")
+        sys.path.append(main_dir)
+        print('sys.path',sys.path)
+        import ML_model
+        
         # ML_model = importlib.import_module(saved_ML_model_path.replace("/", ".").replace(".py", ""))
-        ML_model = importlib.import_module(f"ml_pytorch.models.{cfg.ML_model}")
+        # ML_model = importlib.import_module(f"ml_pytorch.models.ML_model_loaded")
+
+        # ML_model = importlib.import_module(f"ml_pytorch.models.{cfg.ML_model}")
     else:
         ML_model = importlib.import_module(f"ml_pytorch.models.{cfg.ML_model}")
         try:
@@ -226,8 +233,8 @@ def main():
         )
 
     if not cfg.eval_model:
-        stop_training=False
-        
+        stop_training = False
+
         for epoch in range(n_epochs):
             if epoch <= loaded_epoch:
                 continue
@@ -249,7 +256,9 @@ def main():
                 cfg,
             )
 
-            logger.info("time elapsed: {:.2f}s".format(time.time() - time_epoch))
+            logger.info(
+                "Time elapsed training: {:.2f}s".format(time.time() - time_epoch)
+            )
 
             # validate
             (
@@ -312,7 +321,7 @@ def main():
             if epoch == n_epochs - 1:
                 stop_training = True
 
-            logger.info("time elapsed: {:.2f}s".format(time.time() - time_epoch))
+            logger.info("Total time elapsed: {:.2f}s".format(time.time() - time_epoch))
             if stop_training:
                 break
 
@@ -325,12 +334,25 @@ def main():
             model,
             optimizer,
         )
-        
+        model.to("cpu")
+
+        model_dir = f"{main_dir}/state_dict/"
+        export_onnx(
+            model,
+            model_dir,
+            batch_size,
+            input_size,
+            "cpu",
+            f"model_last_epoch_{epoch}",
+        )
+
     if cfg.history:
         # plot the training and validation loss and accuracy
         print("\n\n\n")
         logger.info("Plotting training and validation loss and accuracy")
-        train_accuracy, train_loss, val_accuracy, val_loss = read_from_txt(logger_file)
+        train_accuracy, train_loss, val_accuracy, val_loss, lr = read_from_txt(
+            logger_file
+        )
 
         plot_history(
             train_accuracy,
@@ -340,6 +362,7 @@ def main():
             main_dir,
             False,
         )
+        plot_lr(lr, main_dir, False)
 
     # load best model
     model.load_state_dict(
@@ -361,6 +384,11 @@ def main():
             batch_size,
             input_size,
             "cpu",
+            (
+                f"model_best_epoch_{best_epoch}"
+                if not cfg.eval_model
+                else os.path.basename(cfg.eval_model).replace(".pt", "")
+            ),
         )
 
     model.to(device)
@@ -435,9 +463,18 @@ def main():
             logger.info("Plotting ROC curve")
             plot_roc_curve(score_lbl_array_test, main_dir, False)
 
+    # remove ML_model_loaded.py
+    if cfg.load_model or cfg.eval_model:
+        os.system(f"rm {file_dir}/../models/ML_model_loaded.py")
+        logger.info("Removed ML_model_loaded.py")
+
     logger.info("Saved output in %s" % main_dir)
 
-    logger.info("Total time: %.1f" % (time.time() - start_time))
+    # print time in hours and minutes
+    logger.info(
+        "Total time: %s"
+        % str(datetime.timedelta(seconds=int(time.time() - start_time)))
+    )
 
 
 if __name__ == "__main__":
