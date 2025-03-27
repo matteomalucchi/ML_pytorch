@@ -17,6 +17,7 @@ def read_from_txt(file):
         train_loss = []
         val_accuracy = []
         val_loss = []
+        lr=[]
         i = 0
         j = 0
         for line in lines:
@@ -30,6 +31,8 @@ def read_from_txt(file):
                 j += 1
                 if j > 10000:
                     print(line)
+            elif "learning rate" in line:
+                lr.append(float(line.split("rate: ")[1].split("\n")[0]))
 
     print("len train accuracy: ", len(train_accuracy))
     print("len train loss: ", len(train_loss))
@@ -40,7 +43,7 @@ def read_from_txt(file):
     print(train_loss)
     print("Validation loss:")
     print(val_loss)
-    return train_accuracy, train_loss, val_accuracy, val_loss
+    return train_accuracy, train_loss, val_accuracy, val_loss,lr
 
 
 def plot_history(
@@ -103,7 +106,7 @@ def plot_history(
         "2022 (13.6 TeV)",
     )
     hep.cms.text(
-        text="Simulation Preliminary",
+        text="Preliminary",
         loc=0,
     )
 
@@ -111,6 +114,27 @@ def plot_history(
     plt.savefig(f"{dir}/history.png", bbox_inches="tight")
     if show:
         plt.show()
+
+def plot_lr(lr, main_dir, show):
+    plt.figure()
+    plt.plot(lr)
+    plt.xlabel("Epoch")
+    plt.ylabel("Learning rate")
+    hep.cms.lumitext(
+        "2022 (13.6 TeV)",
+    )
+    hep.cms.text(
+        text="Preliminary",
+        loc=0,
+    )
+    plt.grid()
+    # log scale
+    plt.yscale("log")
+    plt.savefig(f"{main_dir}/lr.png", bbox_inches="tight")
+    if show:
+        plt.show()
+
+
 
 def main():
     # plot the history for the training and validation losses and accuracies
@@ -144,7 +168,7 @@ def main():
 
     print(log_file)
 
-    train_accuracy, train_loss, val_accuracy, val_loss = read_from_txt(log_file)
+    train_accuracy, train_loss, val_accuracy, val_loss,lr = read_from_txt(log_file)
 
     plot_history(
         train_accuracy,
@@ -156,6 +180,8 @@ def main():
         args.uniform_filter,
         args.lenght,
     )
+    
+    plot_lr(lr,os.path.dirname(args.input_path), args.show)
 
 if __name__ == "__main__":
     main()
