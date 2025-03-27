@@ -247,7 +247,6 @@ def get_variables(
     
     #shuffle the variables
     idx = np.random.permutation(tot_lenght)
-    print(idx)
     variables=variables[:,idx]
 
     X = (variables, flag_tensor)

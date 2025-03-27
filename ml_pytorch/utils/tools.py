@@ -408,8 +408,9 @@ def eval_model(model, loader, loss_fn, type_eval, device, best_epoch):
     return score_lbl_array, avg_loss, avg_accuracy
 
 
-def export_onnx(model, model_name, batch_size, input_size, device):
-
+def export_onnx(model, model_name, batch_size, input_size, device, onnx_model_name):
+    model_dir = os.path.dirname(model_name)
+    
     if hasattr(model, "export_model"):
         model = model.export_model(model)
 
@@ -418,7 +419,7 @@ def export_onnx(model, model_name, batch_size, input_size, device):
     torch.onnx.export(
         model,
         dummy_input,
-        model_name.replace(".pt", ".onnx"),
+        f"{model_dir}/{onnx_model_name}.onnx",
         verbose=True,
         export_params=True,
         opset_version=13,
