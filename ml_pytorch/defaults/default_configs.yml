@@ -34,7 +34,10 @@ val_fraction: 0.25
 test_fraction: 0.25
 
 run2: False
-oversample: False
+
+# class balancing
+oversample_split: False
+split_oversample: False
 undersample: False
 
 num_workers: 4

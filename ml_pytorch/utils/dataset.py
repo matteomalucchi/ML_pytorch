@@ -83,7 +83,7 @@ def get_variables(
             logger.info(f"Loading file {file_name}")
             file = load(file_name)
             logger.debug(f"sample_list: {sample_list}")
-            if any([s not in list(file["columns"].keys()) for s in sample_list]):
+            if all([s not in list(file["columns"].keys()) for s in sample_list]):
                 logger.error(
                     f"sample_list {sample_list} not in available samples {list(file['columns'].keys())}"
                 )
@@ -93,7 +93,7 @@ def get_variables(
                 logger.debug(list(file["columns"].keys()))
                 if sample in sample_list:
                     logger.debug(f"sample {sample} in file")
-                    if any(
+                    if all(
                         [
                             d not in list(file["columns"][sample].keys())
                             for d in dataset_list
@@ -108,7 +108,7 @@ def get_variables(
                         )
                         if dataset in dataset_list:
                             logger.info("dataset %s", dataset)
-                            if any(
+                            if all(
                                 [
                                     region_file
                                     not in list(file["columns"][sample][dataset].keys())
@@ -144,6 +144,8 @@ def get_variables(
                                             f"sum_genweights: {file['sum_genweights'][dataset]}"
                                         )
                                     logger.info(f"weight: {weights[0]}")
+            logger.info(f"Number of events in file: {len(vars_array)}")
+            
         if len(vars_array) < 1:
             logger.error(
                 f"Could not find any datasets in the files {files} with the sample_list {sample_list} and dataset_list {dataset_list} and region {region_list}"
@@ -299,6 +301,9 @@ def load_data(cfg, seed):
         logger.error(f"Data format {cfg.data_format} not supported")
         raise ValueError
 
+    logger.info(f"Signal files: {sig_files}")
+    logger.info(f"Background files: {bkg_files}")
+
     X_sig, tot_lenght_sig = get_variables(
         sig_files,
         total_fraction_of_events,
@@ -326,7 +331,7 @@ def load_data(cfg, seed):
     logger.info(f"Number of background events  {X_bkg[0].shape[1]}")
     logger.info(f"Number of signal events {X_sig[0].shape[1]}")
     
-    if cfg.oversample and cfg.undersample:
+    if cfg.oversample_split + cfg.split_oversample+ cfg.undersample >1: 
         raise ValueError("Select only oversample or undersample")
     
     if cfg.undersample:
@@ -344,17 +349,18 @@ def load_data(cfg, seed):
         
     
 
-    # if cfg.oversample:
-    #     logger.info("Performing oversampling")
-    #     num_events_sig = X_sig[0].shape[1]
-    #     X_sig_f = X_sig[0].repeat((1, num_events_bkg // num_events_sig + 1))[
-    #         :, :num_events_bkg
-    #     ]
-    #     X_sig_l = X_sig[1].repeat((1, num_events_bkg // num_events_sig + 1))[
-    #         :, :num_events_bkg
-    #     ]
-    #     X_sig = (X_sig_f, X_sig_l)
-    #     logger.info(f"Number of signal events after oversampling {X_sig[0].shape[1]}")
+    if cfg.oversample_split:
+        logger.info("Performing oversampling of signal before splitting")
+        num_events_sig = X_sig[0].shape[1]
+        num_events_bkg = X_bkg[0].shape[1]
+        X_sig_f = X_sig[0].repeat((1, num_events_bkg // num_events_sig + 1))[
+            :, :num_events_bkg
+        ]
+        X_sig_l = X_sig[1].repeat((1, num_events_bkg // num_events_sig + 1))[
+            :, :num_events_bkg
+        ]
+        X_sig = (X_sig_f, X_sig_l)
+        logger.info(f"Number of signal events after oversampling {X_sig[0].shape[1]}")
 
     num_events_bkg = X_bkg[0].shape[1]
     num_events_sig = X_sig[0].shape[1]
@@ -365,7 +371,7 @@ def load_data(cfg, seed):
     logger.info(f"sum of weights before rescaling signal: {sumw_sig}")
     logger.info(f"sum of weights before rescaling backgound: {sumw_bkg}")
 
-    if not cfg.oversample:
+    if not cfg.oversample_split and not cfg.split_oversample and not cfg.undersample:
         if True:
             sig_class_weights = (num_events_sig + num_events_bkg) / (2 * sumw_sig)
             bkg_class_weights = (num_events_sig + num_events_bkg) / (2 * sumw_bkg)
@@ -454,9 +460,9 @@ def load_data(cfg, seed):
         X, [train_size, val_size, test_size], generator=gen
     )
 
-    if cfg.oversample:
+    if cfg.split_oversample:
         #perform the oversampling of the signal separately for training, validation and testing datasets
-        logger.info("Performing oversampling")
+        logger.info("Performing oversampling of signal after splitting")
         train_dataset=oversample_dataset(train_dataset)
         val_dataset=oversample_dataset(val_dataset)
         test_dataset=oversample_dataset(test_dataset)

@@ -5,12 +5,12 @@ signal_sample: [DATA_JetMET_JMENano_C_skimmed,DATA_JetMET_JMENano_D_skimmed,DATA
 background_sample: [DATA_JetMET_JMENano_C_skimmed,DATA_JetMET_JMENano_D_skimmed,DATA_JetMET_JMENano_E_skimmed,DATA_JetMET_JMENano_F_skimmed,DATA_JetMET_JMENano_G_skimmed]
 
 # region: 4b_region
-run2: True
-signal_region: [4b_control_regionRun2]
-background_region: [2b_control_region_preWRun2]
+run2: False
+signal_region: [4b_VR1_control_region]
+background_region: [2b_VR1_control_region_preW]
 signal_dataset: [DATA_JetMET_JMENano_C_2022_preEE_EraC,DATA_JetMET_JMENano_D_2022_preEE_EraD,DATA_JetMET_JMENano_2022_postEE_EraE,DATA_JetMET_JMENano_F_2022_postEE_EraF,DATA_JetMET_JMENano_G_2022_postEE_EraG]
 background_dataset: [DATA_JetMET_JMENano_C_2022_preEE_EraC,DATA_JetMET_JMENano_D_2022_preEE_EraD,DATA_JetMET_JMENano_2022_postEE_EraE,DATA_JetMET_JMENano_F_2022_postEE_EraF,DATA_JetMET_JMENano_G_2022_postEE_EraG]
-oversample_split: True
+split_oversample: True
 
 ML_model: DNN_softmax_reweight_model
 
@@ -33,4 +33,4 @@ train_fraction: 0.7125
 val_fraction: 0.2375
 test_fraction: 0.05
 
-data_dirs: [/work/tharte/datasets/data_samples/data_full_2022/merged/]
+data_dirs: [/work/mmalucch/out_hh4b/out_JMENanoDataFull2022_VR1_SPANETptVary0p3_1p7_Morphing_Softmax_Oversampling_CorrectOrder_Dropout_PADm999_earlyStopping_20kfolds/]

@@ -18,13 +18,6 @@ parser.add_argument(
     type=int,
 )
 parser.add_argument(
-    "-r2",
-    "--run2",
-    action="store_true",
-    help="Load Run2 pairing variables (instead of SPANET)",
-    default=None,
-)
-parser.add_argument(
     "-e",
     "--epochs",
     default=None,
@@ -50,13 +43,6 @@ parser.add_argument(
     "--eval",
     action="store_true",
     help="Evaluate the model",
-    default=None,
-)
-parser.add_argument(
-    "-os",
-    "--oversample",
-    action="store_true",
-    help="If true, the signal samples are copied multiple times to match number of background samples",
     default=None,
 )
 parser.add_argument(

@@ -45,7 +45,6 @@ def loop_one_batch(
     event_weights = inputs[:, -1]
     inputs = inputs[:, :-1]
     weights = event_weights * class_weights.flatten()
-    # weights = event_weights * (class_weights.flatten() if not train else 1)
 
     # compute the outputs of the model
     outputs = model(inputs)
@@ -60,7 +59,6 @@ def loop_one_batch(
 
     # Compute the accuracy
     correct = ((y_pred == labels) * weights).sum().item()
-    # correct = ((y_pred == labels).view(1, -1).squeeze() * weights).sum().item()
 
     # Compute the loss and its gradients
     loss = loss_fn(outputs, labels)

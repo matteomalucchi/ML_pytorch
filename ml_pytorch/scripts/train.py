@@ -1,7 +1,7 @@
 import os
 import torch
 import numpy as np
-from datetime import datetime
+import datetime
 import time
 import sys
 from omegaconf import OmegaConf
