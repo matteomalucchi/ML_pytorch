@@ -53,9 +53,15 @@ def save_onnx_model(onnx_model_final, onnx_model_name):
     onnx.save(onnx_model_final, onnx_model_name)
     print(f"Model saved as {onnx_model_name}")
 
+
 def get_onnx_output(onnx_model_name, input_data):
+    sess_options = ort.SessionOptions()
+
+    sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+    sess_options.intra_op_num_threads = 1
+
     session = ort.InferenceSession(
-        onnx_model_name, providers=["CPUExecutionProvider"]
+        onnx_model_name, sess_options=sess_options, providers=["CPUExecutionProvider"]
     )
 
     # print the input/output name and shape
@@ -68,11 +74,12 @@ def get_onnx_output(onnx_model_name, input_data):
     output_shape = [output.shape for output in session.get_outputs()]
     print("Inputs shape:", input_shape)
     print("Outputs shape:", output_shape)
-    
+
     input_example = {input_name[0]: input_data}
     output_onnx = session.run(output_name, input_example)
-    
+
     return output_onnx[0]
+
 
 def load_events():
     # load a root file
@@ -84,14 +91,14 @@ def load_events():
     input_data = np.array(
         [input_data_dict[col][:n_events] for col in columns], dtype=np.float32
     ).T
-    
-    return  input_data
 
-    
+    return input_data
+
+
 def compare_output_onnx_keras(onnx_model_name, keras_model):
-    input_data=load_events()
-    
-    output_onnx = get_onnx_output(onnx_model_name,input_data)
+    input_data = load_events()
+
+    output_onnx = get_onnx_output(onnx_model_name, input_data)
 
     input_tensor = tf.convert_to_tensor(input_data, dtype=tf.float32)
     # input_tensor = tf.expand_dims(input_tensor, 0)
@@ -103,27 +110,33 @@ def compare_output_onnx_keras(onnx_model_name, keras_model):
     assert np.allclose(output_onnx, output_keras, rtol=1e-03, atol=1e-05)
 
 
-def compare_output_onnx_ratio(onnx_model_name, onnx_model_ratio_name, onnx_model_name_2):
-    input_data=load_events()
-    
+def compare_output_onnx_ratio(
+    onnx_model_name, onnx_model_ratio_name, onnx_model_name_2
+):
+    input_data = load_events()
+
     print(input_data)
-    
+
     output_onnx = get_onnx_output(onnx_model_name, input_data)
     print("output_onnx", output_onnx)
-    print("output_onnx by hand ratio", output_onnx[:,1]/output_onnx[:,0])
-    
+    print("output_onnx by hand ratio", output_onnx[:, 1] / output_onnx[:, 0])
+
     output_onnx_ratio = get_onnx_output(onnx_model_ratio_name, input_data)
-    
+
     if onnx_model_name_2:
         output_onnx_2 = get_onnx_output(onnx_model_name_2, input_data)
         print("output_onnx_2", output_onnx_2)
-        print("output_onnx_2 by hand ratio", output_onnx_2[:,1]/output_onnx_2[:,0])
-        averge_output = (output_onnx[:,1]/output_onnx[:,0] + output_onnx_2[:,1]/output_onnx_2[:,0])/2
+        print("output_onnx_2 by hand ratio", output_onnx_2[:, 1] / output_onnx_2[:, 0])
+        averge_output = (
+            output_onnx[:, 1] / output_onnx[:, 0]
+            + output_onnx_2[:, 1] / output_onnx_2[:, 0]
+        ) / 2
         print("averge_output by hand", averge_output)
-    
-    print("output_onnx_ratio",output_onnx_ratio)
 
-def get_model_tensor_onnx(onnx_model,b):
+    print("output_onnx_ratio", output_onnx_ratio)
+
+
+def get_model_tensor_onnx(onnx_model, b):
     inferred_model = onnx.shape_inference.infer_shapes(onnx_model)
 
     # get the output shape of the model
@@ -131,7 +144,6 @@ def get_model_tensor_onnx(onnx_model,b):
         inferred_model.graph.output[0].type.tensor_type.shape.dim[1].dim_value
     )
     print(f"Output shape: {output_shape}")
-
 
     # To take the ratio of the first model too.
     (r,) = inline(onnx_model)(b).values()
@@ -159,26 +171,27 @@ def get_model_tensor_onnx(onnx_model,b):
         print(f"{r_0.type = !s}, {r_1.type = !s}, {r.type = !s}")
     else:
         raise ValueError("The output shape is not 1 or 2")
-    
+
     return r
+
 
 def main():
     if args.input.endswith(".onnx") or args.input.endswith(".keras"):
         in_dir = os.path.dirname(args.input)
-        model_files=[os.path.basename(args.input)]
+        model_files = [os.path.basename(args.input)]
         args.model_type = "keras" if args.input.endswith(".keras") else "onnx"
     else:
         in_dir = args.input
 
         model_files = [x for x in os.listdir(in_dir) if x.endswith(args.model_type)]
         model_files = [x for x in model_files if "average_model_from" not in x]
-    
+
     out_dir = args.output if args.output else in_dir
     os.makedirs(out_dir, exist_ok=True)
-    
+
     if args.debug:
         model_files = model_files[:2]
-    
+
     print(model_files)
     print("Lenght of input", len(columns))
 
@@ -186,7 +199,7 @@ def main():
         print(f"Processing {model_files[0]}")
 
         tot_len = 1
-        first_file_name=os.path.join(in_dir, model_files[0])
+        first_file_name = os.path.join(in_dir, model_files[0])
         b = argument(Tensor(np.float32, ("N", len(columns))))
         if args.model_type == "keras":
             model = tf.keras.models.load_model(first_file_name)
@@ -202,21 +215,23 @@ def main():
             )
 
         elif args.model_type == "onnx":
-            
+
             onnx_model_ratio_sum = onnx.load(first_file_name)
 
-            r=get_model_tensor_onnx(onnx_model_ratio_sum,b)
+            r = get_model_tensor_onnx(onnx_model_ratio_sum, b)
 
             onnx_model_ratio_sum = build({"args_0": b}, {"sum_w": r})
             # print(f"{onnx_model_ratio_sum = !s}")
-        second_file_name=None
+        second_file_name = None
         if len(model_files) > 1:
-            second_file_name=os.path.join(in_dir, model_files[1])
+            second_file_name = os.path.join(in_dir, model_files[1])
             for model_file in model_files[1:]:
                 tot_len += 1
                 print(f"\n\nAdding {model_file}")
                 if args.model_type == "keras":
-                    model_add = tf.keras.models.load_model(os.path.join(in_dir, model_file))
+                    model_add = tf.keras.models.load_model(
+                        os.path.join(in_dir, model_file)
+                    )
                     model_ratio_add = tf.keras.models.Model(
                         inputs=model_add.input,
                         outputs=model_add.output[:, 0] / 1 - model_add.output[:, 1],
@@ -238,7 +253,7 @@ def main():
                     (r1,) = inline(onnx_model_ratio_add)(b).values()
                 if args.model_type == "onnx":
                     # r1 = op.div(r1, op.sub(op.const(1.0, dtype="float32"), r1))
-                    r1=get_model_tensor_onnx(onnx_model_ratio_add,b)
+                    r1 = get_model_tensor_onnx(onnx_model_ratio_add, b)
                 print(r)
                 print(r1)
 
@@ -254,7 +269,9 @@ def main():
         onnx_model_final_name = f"{out_dir}/average_model_from_{args.model_type}.onnx"
         save_onnx_model(onnx_model_final, onnx_model_final_name)
         if args.model_type == "onnx":
-            compare_output_onnx_ratio(first_file_name, onnx_model_final_name, second_file_name)
+            compare_output_onnx_ratio(
+                first_file_name, onnx_model_final_name, second_file_name
+            )
 
     else:
         for model_file in model_files:
