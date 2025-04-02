@@ -73,8 +73,16 @@ def main():
     if cfg.history:
         from ml_pytorch.scripts.plot_history import read_from_txt, plot_history, plot_lr
 
+    #base dir is /work/<username>/
+    base_dir = f"/work/{os.environ['USER']}"
+    # check if exists
+    if not os.path.exists(base_dir):
+        base_dir="./out"
+    else:
+        base_dir = f"{base_dir}/out_ML_pytorch"
+
     if not cfg.output_dir:
-        cfg.output_dir = f"out/{os.path.basename(cfg_file_name).replace('.yml','')}"
+        cfg.output_dir = f"{base_dir}/{os.path.basename(cfg_file_name).replace('.yml','')}"
     main_dir = cfg.output_dir
 
     name = main_dir.strip("/").split("/")[-1]
