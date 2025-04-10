@@ -84,10 +84,10 @@ def get_variables(
             file = load(file_name)
             logger.debug(f"sample_list: {sample_list}")
             if all([s not in list(file["columns"].keys()) for s in sample_list]):
-                logger.error(
+                logger.warning(
                     f"sample_list {sample_list} not in available samples {list(file['columns'].keys())}"
                 )
-                raise ValueError
+                # raise ValueError
             for sample in list(file["columns"].keys()):
                 logger.info("sample %s", sample)
                 logger.debug(list(file["columns"].keys()))

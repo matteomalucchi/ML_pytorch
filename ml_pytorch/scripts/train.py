@@ -19,11 +19,6 @@ from ml_pytorch.utils.tools import (
     create_DNN_columns_list,
     save_pytorch_model,
 )
-from ml_pytorch.defaults.dnn_input_variables import (
-    bkg_morphing_dnn_input_variables,
-    test_set,
-    set_with_btag,
-)
 
 from ml_pytorch.utils.args_train import args
 
@@ -160,14 +155,15 @@ def main():
     logger.info("configs")
     logger.info("cfg:\n - %s", "\n - ".join(str(it) for it in cfg.items()))
 
-    if cfg.input_variables is None:
-        logger.debug("Get Input variables from dnn_inputs")
-        logger.debug(bkg_morphing_dnn_input_variables)
-        # cfg.input_variables = create_DNN_columns_list(True, True, set_with_btag)
-        # cfg.input_variables = create_DNN_columns_list(True, True, test_set)
+    if type(cfg.input_variables) == str:
+        logger.info("Get Input variables from dnn_inputs")
+        logger.info(cfg.input_variables)
+        dnn_input_variables_file=importlib.import_module(f"ml_pytorch.defaults.{cfg.input_variables}")
+        
         cfg.input_variables = create_DNN_columns_list(
-            cfg.run2, bkg_morphing_dnn_input_variables
+            cfg.run2, dnn_input_variables_file.dnn_input_variables
         )
+        
     input_variables = cfg.input_variables
     logger.info(input_variables)
 
