@@ -564,6 +564,8 @@ def plot_roc_curve(score_lbl_tensor_test, dir, show):
     plt.xlabel("True positive rate")
     plt.ylabel("False positive rate")
     plt.legend(loc="upper left")
+    plt.yscale("log")
+    
     hep.cms.lumitext(
         "2022 (13.6 TeV)",
     )

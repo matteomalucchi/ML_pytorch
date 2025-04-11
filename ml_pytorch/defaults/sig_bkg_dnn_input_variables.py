@@ -2,7 +2,7 @@ from collections import OrderedDict
 
 dnn_input_variables = OrderedDict(
     [
-        ("era", ["events", "era"]),
+        # ("era", ["events", "era"]),
         ("HT", ["events", "HT"]),
         ("hh_vec_mass", ["HH", "mass"]),
         ("hh_vec_pt", ["HH", "pt"]),
