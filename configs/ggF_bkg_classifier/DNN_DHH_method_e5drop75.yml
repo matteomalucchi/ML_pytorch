@@ -21,7 +21,7 @@ epochs: 50
 
 learning_rate: 1e-3
 #learning_rate_schedule: constant
-learning_rate_schedule: e20_drop75
+learning_rate_schedule: e5_drop75
 
 early_stopping: True
 patience: 5

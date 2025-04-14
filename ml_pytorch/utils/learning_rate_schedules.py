@@ -29,6 +29,8 @@ def get_lr_scheduler(lr_schedule, optimizer, n_epochs):
         scheduler = get_delayed_drop_schedule(optimizer, 20, 0.75)
     elif lr_schedule == "e5_drop75":
         scheduler = get_delayed_drop_schedule(optimizer, 5, 0.75)
+    elif lr_schedule == "e5_drop95":
+        scheduler = get_delayed_drop_schedule(optimizer, 5, 0.95)
     elif lr_schedule == "e20_drop95":
         scheduler = get_delayed_drop_schedule(optimizer, 20, 0.95)
     elif lr_schedule == "e30_drop95":

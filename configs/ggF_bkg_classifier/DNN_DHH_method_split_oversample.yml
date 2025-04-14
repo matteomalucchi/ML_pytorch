@@ -10,7 +10,7 @@ background_dataset: [DATA_JetMET_JMENano_C_2022_preEE_EraC,DATA_JetMET_JMENano_D
 background_sample: [DATA_JetMET_JMENano_C_skimmed,DATA_JetMET_JMENano_D_skimmed,DATA_JetMET_JMENano_E_skimmed,DATA_JetMET_JMENano_F_skimmed,DATA_JetMET_JMENano_G_skimmed]
 background_region: [2b_signal_region_postWRun2]
 
-#oversample_split: True
+split_oversample: True
 
 ML_model: DNN_softmax_reweight_model
 
