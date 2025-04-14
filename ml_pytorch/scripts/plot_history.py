@@ -112,6 +112,8 @@ def plot_history(
 
     plt.grid()
     plt.savefig(f"{dir}/history.png", bbox_inches="tight")
+    plt.savefig(f"{dir}/history.pdf", bbox_inches="tight")
+    plt.savefig(f"{dir}/history.svg", bbox_inches="tight")
     if show:
         plt.show()
 
@@ -131,6 +133,8 @@ def plot_lr(lr, main_dir, show):
     # log scale
     plt.yscale("log")
     plt.savefig(f"{main_dir}/lr.png", bbox_inches="tight")
+    plt.savefig(f"{main_dir}/lr.pdf", bbox_inches="tight")
+    plt.savefig(f"{main_dir}/lr.svg", bbox_inches="tight")
     if show:
         plt.show()
 
