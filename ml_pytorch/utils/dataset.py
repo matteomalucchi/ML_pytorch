@@ -84,10 +84,10 @@ def get_variables(
             file = load(file_name)
             logger.debug(f"sample_list: {sample_list}")
             if all([s not in list(file["columns"].keys()) for s in sample_list]):
-                logger.error(
+                logger.warning(
                     f"sample_list {sample_list} not in available samples {list(file['columns'].keys())}"
                 )
-                raise ValueError
+                # raise ValueError
             for sample in list(file["columns"].keys()):
                 logger.info("sample %s", sample)
                 logger.debug(list(file["columns"].keys()))
@@ -143,8 +143,7 @@ def get_variables(
                                         logger.info(
                                             f"sum_genweights: {file['sum_genweights'][dataset]}"
                                         )
-                                    logger.info(f"weight: {weights[0]}")
-            logger.info(f"Number of events in file: {len(vars_array)}")
+                                    logger.info(f"weight: {weights[-1]}")
             
         if len(vars_array) < 1:
             logger.error(
@@ -210,6 +209,9 @@ def get_variables(
                 variables_dict[k] = ak.to_numpy(ak.unflatten(vars_array[k], 1))
 
         weights = np.expand_dims(weights, axis=0)
+        
+        #normalize the weights to have mean of 1
+        weights = weights / np.mean(weights)
 
         variables_array = np.concatenate(
             [variables_dict[input] for input in input_variables], axis=1
