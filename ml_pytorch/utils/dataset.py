@@ -143,8 +143,7 @@ def get_variables(
                                         logger.info(
                                             f"sum_genweights: {file['sum_genweights'][dataset]}"
                                         )
-                                    logger.info(f"weight: {weights[0]}")
-            logger.info(f"Number of events in file: {len(vars_array)}")
+                                    logger.info(f"weight: {weights[-1]}")
             
         if len(vars_array) < 1:
             logger.error(

@@ -459,7 +459,7 @@ def main():
                 main_dir,
                 False,
                 [],
-                # [0.3363, 0.3937], #TODO:remove default values
+                # [0.3363, 0.3937],
                 train_test_fractions[1],
             )
         if cfg.roc:

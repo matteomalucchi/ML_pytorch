@@ -138,7 +138,7 @@ def plot_sig_bkg_distributions(
     show,
     rescale,
     test_fraction,
-    signal_eff,
+    signal_eff=0.2,
     get_max_significance=False,
 ):
     # plot the signal and background distributions
@@ -483,11 +483,10 @@ def plot_sig_bkg_distributions(
             dnn_score_target,
             color="grey",
             linestyle="--",
-            label="Sig efficiency {:.2f}\nBkg rejection {:.2f}\nDNN score {:.2f}\nSignificance {:.2f}".format(
+            label="Sig efficiency {:.2f}\nBkg rejection {:.2f}\nDNN score {:.2f}".format(
                 signal_eff,
                 bkg_rejection,
                 dnn_score_target,
-                significance_above_target,
             ),
         )
         handles_legend.append(line_target)
