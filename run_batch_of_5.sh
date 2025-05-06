@@ -19,7 +19,7 @@ echo "Created batch directory: $batch_dir"
 for i in {0..4}; do
 	run_dir="$batch_dir/run$(printf "%02d" $(($i+$3)))"
 	echo "Running script with output to: $run_dir, seed $(($i+$3))"
-	ml_train -o "$run_dir" -c $config_file -s $(($i+$3))
+	ml_train -o "$run_dir" --eval --onnx --roc --histos --history --gpus 0 -n 4 -c $config_file -s $(($i+$3))
 done
 
 # Create best_models directory
