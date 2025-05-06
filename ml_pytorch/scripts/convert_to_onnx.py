@@ -8,9 +8,8 @@ import argparse
 import onnxruntime as ort
 import uproot
 
-from ml_pytorch.defaults.dnn_input_variables import (
-    bkg_morphing_dnn_input_variables,
-    sig_bkg_dnn_input_variables,
+from ml_pytorch.defaults.bkg_morphing_dnn_input_variables import (
+    dnn_input_variables,
 )
 
 parser = argparse.ArgumentParser(description="Convert keras to onnx or average models")
@@ -43,7 +42,7 @@ if args.model_type == "keras":
     import tf2onnx
 
 
-columns = list(bkg_morphing_dnn_input_variables.keys())
+columns = list(dnn_input_variables.keys())
 
 
 def save_onnx_model(onnx_model_final, onnx_model_name):
