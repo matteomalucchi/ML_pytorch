@@ -223,40 +223,6 @@ def plot_sig_bkg_distributions(
         rescale if rescale else [1, 1],
     ):
 
-        # counts_test, bins = np.histogram(
-        #     score_test,
-        #     weights=weight_test,
-        #     bins=30,
-        #     density=False,
-        #     range=(0, 1),
-        # )
-        # counts_train, bins = np.histogram(
-        #     score_train,
-        #     weights=weight_train,
-        #     bins=30,
-        #     density=False,
-        #     range=(0, 1),
-        # )
-        # bin_centers = 0.5 * (bins[:-1] + bins[1:])
-        # # Calculate bin widths
-        # bin_width = bins[1:] - bins[:-1]
-
-        # # Calculate standard deviation per bin
-        # # Calculate error bars by rescaling standard deviation
-        # errors_test = np.sqrt(counts_test) / np.sum(counts_test * bin_width)
-        # norm_counts_test = counts_test / np.sum(counts_test * bin_width)
-        # errors_train = np.sqrt(counts_train) / np.sum(counts_train * bin_width)
-        # norm_counts_train = counts_train / np.sum(counts_train * bin_width)
-
-        # ratio = norm_counts_test / norm_counts_train
-        # err_num = np.sqrt(counts_test)
-        # err_den = np.sqrt(counts_train)
-        # ratio_err_test = np.sqrt(
-        #     (err_num / counts_train) ** 2
-        #     + (counts_test * err_den / counts_train**2) ** 2
-        # )
-        # ratio_band_train = err_den / counts_train
-
         bins = np.linspace(0, 1, 31)
         bin_centers = (bins[1:] + bins[:-1]) / 2
         bin_width = bins[1] - bins[0]
@@ -515,9 +481,13 @@ def plot_sig_bkg_distributions(
         loc=0,
     )
     plt.savefig(f"{dir}/sig_bkg_distributions.png", bbox_inches="tight", dpi=300)
+    plt.savefig(f"{dir}/sig_bkg_distributions.pdf", bbox_inches="tight", dpi=300)
+    plt.savefig(f"{dir}/sig_bkg_distributions.svg", bbox_inches="tight", dpi=300)
     ax.set_ylim(bottom=1e-2, top=max_bin**4)
     ax.set_yscale("log")
     plt.savefig(f"{dir}/sig_bkg_distributions_log.png", bbox_inches="tight", dpi=300)
+    plt.savefig(f"{dir}/sig_bkg_distributions_log.pdf", bbox_inches="tight", dpi=300)
+    plt.savefig(f"{dir}/sig_bkg_distributions_log.svg", bbox_inches="tight", dpi=300)
     if show:
         plt.show()
 
@@ -573,6 +543,8 @@ def plot_roc_curve(score_lbl_tensor_test, dir, show):
         loc=0,
     )
     plt.savefig(f"{dir}/roc_curve.png", bbox_inches="tight", dpi=300)
+    plt.savefig(f"{dir}/roc_curve.pdf", bbox_inches="tight", dpi=300)
+    plt.savefig(f"{dir}/roc_curve.svg", bbox_inches="tight", dpi=300)
     if show:
         plt.show()
 
