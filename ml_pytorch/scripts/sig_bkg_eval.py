@@ -81,7 +81,7 @@ def my_roc_auc(
 
 
 def compute_significance(
-    sig_eff,
+    signal_eff,
     counts_test_list,
     bin_centers,
     bin_width,
@@ -95,7 +95,7 @@ def compute_significance(
 
     signal_cumulative_integral = np.cumsum(counts_test_list[0][::-1] * bin_width)
     # find the bin with the signal efficiency closest to target
-    bin_index = np.argmin(np.abs(signal_cumulative_integral[::-1] - sig_eff))
+    bin_index = np.argmin(np.abs(signal_cumulative_integral[::-1] - signal_eff))
     # get the DNN score for the target signal efficiency
     dnn_score_target = bin_centers[bin_index]
     # compute the background rejection at target signal efficiency
@@ -138,7 +138,7 @@ def plot_sig_bkg_distributions(
     show,
     rescale,
     test_fraction,
-    plot_significance=False,
+    signal_eff=0.2,
     get_max_significance=False,
 ):
     # plot the signal and background distributions
@@ -378,8 +378,15 @@ def plot_sig_bkg_distributions(
     print(f"\nNumber of signal events in the test dataset: {n_sig}")
     print(f"Number of background events in the test dataset: {n_bkg}")
     print(f"Significance: {significance:.2f}\n")
+    
+    handles_legend = [
+        sig_train[2][0],
+        legend_test_list[0],
+        bkg_train[2][0],
+        legend_test_list[1],
+    ]
 
-    if plot_significance:
+    if signal_eff != -1:
         if get_max_significance:
             max_significance = -1
             for sig_eff_target in np.linspace(0.0, 1.0, 30):
@@ -407,9 +414,8 @@ def plot_sig_bkg_distributions(
                         n_bkg_above_target,
                         significance_above_target,
                     ) = infos_significance
-                    sig_eff = sig_eff_target
+                    signal_eff = sig_eff_target
         else:
-            sig_eff = 0.8
             (
                 dnn_score_target,
                 bkg_rejection,
@@ -417,7 +423,7 @@ def plot_sig_bkg_distributions(
                 n_bkg_above_target,
                 significance_above_target,
             ) = compute_significance(
-                sig_eff,
+                signal_eff,
                 counts_test_list,
                 bin_centers,
                 bin_width,
@@ -430,10 +436,10 @@ def plot_sig_bkg_distributions(
             )
 
         print(
-            f"\n###########\nNumber of signal events above {sig_eff:.3f} signal efficiency threshold: {n_sig_above_target:.3f}"
+            f"\n###########\nNumber of signal events above {signal_eff:.3f} signal efficiency threshold: {n_sig_above_target:.3f}"
         )
         print(
-            f"Number of background events above {sig_eff:.3f} signal efficiency threshold: {n_bkg_above_target:.3f}"
+            f"Number of background events above {signal_eff:.3f} signal efficiency threshold: {n_bkg_above_target:.3f}"
         )
         print(
             f"Significance ({dnn_score_target:.3f} DNN cut): {significance_above_target:.3f}"
@@ -443,20 +449,13 @@ def plot_sig_bkg_distributions(
             dnn_score_target,
             color="grey",
             linestyle="--",
-            label="Sig efficiency {:.2f}\nBkg rejection {:.2f}\nDNN score {:.2f}\nSignificance {:.2f}".format(
-                sig_eff,
+            label="Sig efficiency {:.2f}\nBkg rejection {:.2f}\nDNN score {:.2f}".format(
+                signal_eff,
                 bkg_rejection,
                 dnn_score_target,
-                significance_above_target,
             ),
         )
         handles_legend.append(line_target)
-    handles_legend = [
-        sig_train[2][0],
-        legend_test_list[0],
-        bkg_train[2][0],
-        legend_test_list[1],
-    ]
 
     ax_ratio.set_xlabel("Output score")
     ax.set_ylabel("Normalized counts")
@@ -571,6 +570,11 @@ def main():
         ],  # 2.889e-6 4.567e-5 (=1/sumgenweights*10) #9.71589e-7, 1.79814e-5] #  3.453609602837785e-05,0.00017658439204048897,
         help="Rescale the signal and background when computing the number of expected events",
     )
+    parser.add_argument(
+        "-e", "--signal-eff", default=-1, help="Signal efficiency to cut", type=float
+    )
+    
+    
     parser.print_help()
     args = parser.parse_args()
 
@@ -599,7 +603,7 @@ def main():
         args.show,
         args.rescale,
         train_test_fractions[1],
-        plot_significance=False,
+        signal_eff=args.signal_eff,
         get_max_significance=False,
     )
 
