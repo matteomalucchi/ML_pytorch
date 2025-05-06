@@ -6,8 +6,8 @@ background_sample: [DATA_JetMET_JMENano_E_skimmed,DATA_JetMET_JMENano_F_skimmed,
 
 # region: 4b_region
 run2: False
-signal_region: [4b_control_regionRun2]
-background_region: [2b_control_region_preWRun2]
+signal_region: [4b_control_region]
+background_region: [2b_control_region_preW]
 signal_dataset: [DATA_JetMET_JMENano_2022_postEE_EraE,DATA_JetMET_JMENano_F_2022_postEE_EraF,DATA_JetMET_JMENano_G_2022_postEE_EraG]
 background_dataset: [DATA_JetMET_JMENano_2022_postEE_EraE,DATA_JetMET_JMENano_F_2022_postEE_EraF,DATA_JetMET_JMENano_G_2022_postEE_EraG]
 oversample_split: True
@@ -20,7 +20,7 @@ batch_size: 512
 epochs: 50
 
 learning_rate: 1e-3
-learning_rate_schedule: e5_drop75
+learning_rate_schedule: e20_drop75
 
 early_stopping: True
 patience: 5
