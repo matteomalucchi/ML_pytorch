@@ -33,4 +33,4 @@ train_fraction: 0.7125
 val_fraction: 0.2375
 test_fraction: 0.05
 
-data_dirs: [/work/tharte/datasets/data_samples/bg_morph_2022_SPANET_baseline/,/work/tharte/datasets/data_samples/signal_allklambda_spanet_baseline/SM/]
+data_dirs: [/work/tharte/datasets/data_samples/bg_morph_2022_SPANET_baseline_new_fixed/,/work/tharte/datasets/data_samples/bg_morph_2022_SPANET_baseline_new_fixed/]
