@@ -87,7 +87,7 @@ def get_variables(
                 logger.warning(
                     f"sample_list {sample_list} not in available samples {list(file['columns'].keys())}"
                 )
-                # raise ValueError
+            
             for sample in list(file["columns"].keys()):
                 logger.info("sample %s", sample)
                 logger.debug(list(file["columns"].keys()))
@@ -152,6 +152,17 @@ def get_variables(
             raise ValueError
 
         logger.info(f"Found datasets: {len(vars_array)}")
+        try:
+            # check that all datasets have been found
+            # NOTE: the assert could be set to >= in general
+            assert len(vars_array)==len(dataset_list)
+        except AssertionError:
+            logger.error(
+                f"Not all datasets were found in the files {files} with the sample_list {sample_list} and dataset_list {dataset_list} and region {region_list}"
+            )
+            raise AssertionError
+        
+        
         # Merge multiple lists:
         keys = set().union(*vars_array)
         logger.info(keys)

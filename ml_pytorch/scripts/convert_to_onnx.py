@@ -265,7 +265,7 @@ def main():
         a = op.div(r_sum, op.constant(value_float=tot_len))
 
         onnx_model_final = build({"args_0": b}, {"avg_w": a})
-        onnx_model_final_name = f"{out_dir}/average_model_from_{args.model_type}.onnx"
+        onnx_model_final_name = f"{out_dir}/average_model_from_{args.model_type}.onnx" if not args.debug else f"{out_dir}/debug.onnx"
         save_onnx_model(onnx_model_final, onnx_model_final_name)
         if args.model_type == "onnx":
             compare_output_onnx_ratio(
