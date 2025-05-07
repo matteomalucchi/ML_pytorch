@@ -539,7 +539,7 @@ def plot_roc_curve(score_lbl_tensor_test, dir, show):
         "2022 (13.6 TeV)",
     )
     hep.cms.text(
-        text="Simulation Preliminary",
+        text="Preliminary",
         loc=0,
     )
     plt.savefig(f"{dir}/roc_curve.png", bbox_inches="tight", dpi=300)
