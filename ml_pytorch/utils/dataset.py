@@ -25,6 +25,10 @@ def oversample_dataset(X_dataset):
 
     num_events_bkg = int(torch.sum(X_lbl == 0))
     num_events_sig = int(torch.sum(X_lbl == 1))
+    
+    # TODO: FIX
+    if num_events_sig>num_events_bkg:
+        raise ValueError("Number of signal events is greater than number of background events. This will be fixed in the oversampling function")
 
     oversample_factor = num_events_bkg // num_events_sig + 1
 

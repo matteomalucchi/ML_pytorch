@@ -85,7 +85,7 @@ def load_events():
     file_name = "/pnfs/psi.ch/cms/trivcat/store/user/mmalucch/file_root/JetMET_2022EE_2b_signal_region_to_4b_soumya_january2025.root"
     tree = uproot.open(file_name)["tree"]
     input_data_dict = tree.arrays(columns, library="np")
-    n_events = 5000
+    n_events = 10
     # get the input data as a numpy array
     input_data = np.array(
         [input_data_dict[col][:n_events] for col in columns], dtype=np.float32
@@ -271,6 +271,10 @@ def main():
             compare_output_onnx_ratio(
                 first_file_name, onnx_model_final_name, second_file_name
             )
+            
+        if args.debug:
+            #rm the deubg.onnx model
+            os.remove(onnx_model_final_name)
 
     else:
         for model_file in model_files:
