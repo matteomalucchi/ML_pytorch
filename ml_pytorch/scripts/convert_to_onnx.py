@@ -37,6 +37,8 @@ parser.add_argument(
 )
 args = parser.parse_args()
 
+SAVE_SINGLE_RATIOS = False
+
 if args.model_type == "keras":
     import tensorflow as tf
     import tf2onnx
@@ -77,7 +79,7 @@ def get_onnx_output(onnx_model_name, input_data):
     input_example = {input_name[0]: input_data}
     output_onnx = session.run(output_name, input_example)
 
-    return output_onnx[0]
+    return output_onnx
 
 
 def load_events():
@@ -97,7 +99,7 @@ def load_events():
 def compare_output_onnx_keras(onnx_model_name, keras_model):
     input_data = load_events()
 
-    output_onnx = get_onnx_output(onnx_model_name, input_data)
+    output_onnx = get_onnx_output(onnx_model_name, input_data)[0]
 
     input_tensor = tf.convert_to_tensor(input_data, dtype=tf.float32)
     # input_tensor = tf.expand_dims(input_tensor, 0)
@@ -113,29 +115,29 @@ def compare_output_onnx_ratio(
     onnx_model_name, onnx_model_ratio_name, onnx_model_name_2
 ):
     input_data = load_events()
-
+    print("\n\nonnx_model_ratio_name",onnx_model_ratio_name)
     print(input_data)
 
-    output_onnx = get_onnx_output(onnx_model_name, input_data)
+    output_onnx = get_onnx_output(onnx_model_name, input_data)[0]
     print("output_onnx", output_onnx)
     print("output_onnx by hand ratio", output_onnx[:, 1] / output_onnx[:, 0])
 
     output_onnx_ratio = get_onnx_output(onnx_model_ratio_name, input_data)
 
     if onnx_model_name_2:
-        output_onnx_2 = get_onnx_output(onnx_model_name_2, input_data)
+        output_onnx_2 = get_onnx_output(onnx_model_name_2, input_data)[0]
         print("output_onnx_2", output_onnx_2)
         print("output_onnx_2 by hand ratio", output_onnx_2[:, 1] / output_onnx_2[:, 0])
         averge_output = (
             output_onnx[:, 1] / output_onnx[:, 0]
             + output_onnx_2[:, 1] / output_onnx_2[:, 0]
         ) / 2
-        print("averge_output by hand", averge_output)
+        print("\n\naverge_output by hand", averge_output)
 
     print("output_onnx_ratio", output_onnx_ratio)
 
 
-def get_model_tensor_onnx(onnx_model, b):
+def get_ratio_model_tensor_onnx(onnx_model, b):
     inferred_model = onnx.shape_inference.infer_shapes(onnx_model)
 
     # get the output shape of the model
@@ -214,13 +216,18 @@ def main():
             )
 
         elif args.model_type == "onnx":
-
             onnx_model_ratio_sum = onnx.load(first_file_name)
 
-            r = get_model_tensor_onnx(onnx_model_ratio_sum, b)
+            r = get_ratio_model_tensor_onnx(onnx_model_ratio_sum, b)
+            r_list = []
+            r_list.append(r) 
 
             onnx_model_ratio_sum = build({"args_0": b}, {"sum_w": r})
-            # print(f"{onnx_model_ratio_sum = !s}")
+            onnx_model_ratio_list = onnx_model_ratio_sum
+            
+            if SAVE_SINGLE_RATIOS:
+                save_onnx_model(onnx_model_ratio_sum, f"{out_dir}/ratio_{model_files[0]}")
+        
         second_file_name = None
         if len(model_files) > 1:
             second_file_name = os.path.join(in_dir, model_files[1])
@@ -252,7 +259,12 @@ def main():
                     (r1,) = inline(onnx_model_ratio_add)(b).values()
                 if args.model_type == "onnx":
                     # r1 = op.div(r1, op.sub(op.const(1.0, dtype="float32"), r1))
-                    r1 = get_model_tensor_onnx(onnx_model_ratio_add, b)
+                    r1 = get_ratio_model_tensor_onnx(onnx_model_ratio_add, b)
+                    r_list.append(r1)
+                    
+                    if SAVE_SINGLE_RATIOS:
+                        onnx_model_ratio = build({"args_0": b}, {"ratio_w": r1})
+                        save_onnx_model(onnx_model_ratio, f"{out_dir}/ratio_{model_file}")
                 print(r)
                 print(r1)
 
@@ -261,6 +273,12 @@ def main():
                 onnx_model_ratio_sum = build({"args_0": b}, {"sum_w": s})
 
         print(f"\ntotal length: {tot_len}")
+        
+        # Output all individual ratios
+        onnx_model_ratio_list = build({"args_0": b}, {f"ratio_{i}": r for i, r in enumerate(r_list)})
+        onnx_model_ratios_name= f"{out_dir}/all_ratios_model_{args.model_type}.onnx" 
+        save_onnx_model(onnx_model_ratio_list, onnx_model_ratios_name)
+        
         (r_sum,) = inline(onnx_model_ratio_sum)(b).values()
         a = op.div(r_sum, op.constant(value_float=tot_len))
 
@@ -270,6 +288,9 @@ def main():
         if args.model_type == "onnx":
             compare_output_onnx_ratio(
                 first_file_name, onnx_model_final_name, second_file_name
+            )
+            compare_output_onnx_ratio(
+                first_file_name, onnx_model_ratios_name, second_file_name
             )
             
         if args.debug:
