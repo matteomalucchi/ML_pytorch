@@ -1,0 +1,33 @@
+input_variables: bkg_morphing_dnn_DeltaProb_input_variables
+
+signal_sample: [DATA_JetMET_JMENano_E_skimmed,DATA_JetMET_JMENano_F_skimmed,DATA_JetMET_JMENano_G_skimmed]
+background_sample: [DATA_JetMET_JMENano_E_skimmed,DATA_JetMET_JMENano_F_skimmed,DATA_JetMET_JMENano_G_skimmed]
+
+run2: False
+signal_region: [4b_control_region]
+background_region: [2b_control_region_preW]
+signal_dataset: [DATA_JetMET_JMENano_E_2022_postEE_EraE,DATA_JetMET_JMENano_F_2022_postEE_EraF,DATA_JetMET_JMENano_G_2022_postEE_EraG]
+background_dataset: [DATA_JetMET_JMENano_E_2022_postEE_EraE,DATA_JetMET_JMENano_F_2022_postEE_EraF,DATA_JetMET_JMENano_G_2022_postEE_EraG]
+oversample_split: True
+
+ML_model: DNN_softmax_reweight_model
+
+data_format: coffea
+
+batch_size: 512
+epochs: 50
+
+learning_rate: 1e-3
+learning_rate_schedule: e20_drop75
+
+early_stopping: True
+patience: 5
+min_delta: 1e-5
+
+eval_param: "acc"
+
+train_fraction: 0.7125
+val_fraction: 0.2375
+test_fraction: 0.05
+
+data_dirs: [/work/mmalucch/out_hh4b/SigBkg/out_2022postEE_ggFSPANetDataset_SPANETptVary0p3_1p7_Morphing_DNN_AN_1e-3_e20drop75_minDelta1em5_SPANet_only2022postEE_noEarlyStopping_20folds_DeltaProbability/]
