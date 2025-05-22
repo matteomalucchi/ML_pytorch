@@ -127,6 +127,8 @@ def get_variables(
                             ):
                                 if region_file in region_list:
                                     logger.info("region_file %s", region_file)
+                                    logger.info(f"FOUND DATA : {file_name} {sample} {dataset} {region_file}")
+                                    
                                     vars_array.append(
                                         file["columns"][sample][dataset][region_file]
                                     )

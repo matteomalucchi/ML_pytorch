@@ -7,10 +7,7 @@ import numpy as np
 import argparse
 import onnxruntime as ort
 import uproot
-
-from ml_pytorch.defaults.bkg_morphing_dnn_input_variables import (
-    dnn_input_variables,
-)
+import importlib
 
 parser = argparse.ArgumentParser(description="Convert keras to onnx or average models")
 parser.add_argument("-i", "--input", type=str, required=True, help="Input directory")
@@ -35,6 +32,12 @@ parser.add_argument(
     default="onnx",
     help="Parameter to determine, what type of model is being converted (onnx or keras)",
 )
+parser.add_argument(
+    "-v",
+    "--input-variables",
+    default="bkg_morphing_dnn_input_variables",
+    help="Input variables",
+)
 args = parser.parse_args()
 
 SAVE_SINGLE_RATIOS = False
@@ -43,6 +46,11 @@ if args.model_type == "keras":
     import tensorflow as tf
     import tf2onnx
 
+dnn_input_variables_module = importlib.import_module(
+    f"ml_pytorch.defaults.{args.input_variables}"
+)
+dnn_input_variables = dnn_input_variables_module.dnn_input_variables
+print(f"Input variables: {dnn_input_variables}")
 
 columns = list(dnn_input_variables.keys())
 
@@ -115,7 +123,7 @@ def compare_output_onnx_ratio(
     onnx_model_name, onnx_model_ratio_name, onnx_model_name_2
 ):
     input_data = load_events()
-    print("\n\nonnx_model_ratio_name",onnx_model_ratio_name)
+    print("\n\nonnx_model_ratio_name", onnx_model_ratio_name)
     print(input_data)
 
     output_onnx = get_onnx_output(onnx_model_name, input_data)[0]
@@ -185,7 +193,11 @@ def main():
         in_dir = args.input
 
         model_files = [x for x in os.listdir(in_dir) if x.endswith(args.model_type)]
-        model_files = [x for x in model_files if "average_model_from" not in x]
+        model_files = [
+            x
+            for x in model_files
+            if "average_model_from" not in x and "all_ratios" not in x
+        ]
 
     out_dir = args.output if args.output else in_dir
     os.makedirs(out_dir, exist_ok=True)
@@ -220,14 +232,16 @@ def main():
 
             r = get_ratio_model_tensor_onnx(onnx_model_ratio_sum, b)
             r_list = []
-            r_list.append(r) 
+            r_list.append(r)
 
             onnx_model_ratio_sum = build({"args_0": b}, {"sum_w": r})
             onnx_model_ratio_list = onnx_model_ratio_sum
-            
+
             if SAVE_SINGLE_RATIOS:
-                save_onnx_model(onnx_model_ratio_sum, f"{out_dir}/ratio_{model_files[0]}")
-        
+                save_onnx_model(
+                    onnx_model_ratio_sum, f"{out_dir}/ratio_{model_files[0]}"
+                )
+
         second_file_name = None
         if len(model_files) > 1:
             second_file_name = os.path.join(in_dir, model_files[1])
@@ -261,10 +275,12 @@ def main():
                     # r1 = op.div(r1, op.sub(op.const(1.0, dtype="float32"), r1))
                     r1 = get_ratio_model_tensor_onnx(onnx_model_ratio_add, b)
                     r_list.append(r1)
-                    
+
                     if SAVE_SINGLE_RATIOS:
                         onnx_model_ratio = build({"args_0": b}, {"ratio_w": r1})
-                        save_onnx_model(onnx_model_ratio, f"{out_dir}/ratio_{model_file}")
+                        save_onnx_model(
+                            onnx_model_ratio, f"{out_dir}/ratio_{model_file}"
+                        )
                 print(r)
                 print(r1)
 
@@ -273,28 +289,39 @@ def main():
                 onnx_model_ratio_sum = build({"args_0": b}, {"sum_w": s})
 
         print(f"\ntotal length: {tot_len}")
-        
+
         # Output all individual ratios
-        onnx_model_ratio_list = build({"args_0": b}, {f"ratio_{i}": r for i, r in enumerate(r_list)})
-        onnx_model_ratios_name= f"{out_dir}/all_ratios_model_{args.model_type}.onnx" 
+        onnx_model_ratio_list = build(
+            {"args_0": b}, {f"ratio_{i}": r for i, r in enumerate(r_list)}
+        )
+        onnx_model_ratios_name = f"{out_dir}/all_ratios_model_{args.model_type}.onnx"
         save_onnx_model(onnx_model_ratio_list, onnx_model_ratios_name)
-        
+
         (r_sum,) = inline(onnx_model_ratio_sum)(b).values()
         a = op.div(r_sum, op.constant(value_float=tot_len))
 
         onnx_model_final = build({"args_0": b}, {"avg_w": a})
-        onnx_model_final_name = f"{out_dir}/average_model_from_{args.model_type}.onnx" if not args.debug else f"{out_dir}/debug.onnx"
+        onnx_model_final_name = (
+            f"{out_dir}/average_model_from_{args.model_type}.onnx"
+            if not args.debug
+            else f"{out_dir}/debug.onnx"
+        )
         save_onnx_model(onnx_model_final, onnx_model_final_name)
         if args.model_type == "onnx":
-            compare_output_onnx_ratio(
-                first_file_name, onnx_model_final_name, second_file_name
-            )
-            compare_output_onnx_ratio(
-                first_file_name, onnx_model_ratios_name, second_file_name
-            )
-            
+            try:
+                compare_output_onnx_ratio(
+                    first_file_name, onnx_model_final_name, second_file_name
+                )
+                compare_output_onnx_ratio(
+                    first_file_name, onnx_model_ratios_name, second_file_name
+                )
+            except uproot.exceptions.KeyInFileError:
+                print(
+                    "ERROR: The model is not compatible with the input data. Please check the input data."
+                )
+
         if args.debug:
-            #rm the deubg.onnx model
+            # rm the deubg.onnx model
             os.remove(onnx_model_final_name)
 
     else:

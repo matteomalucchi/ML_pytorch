@@ -19,17 +19,16 @@ batch_size: 512
 epochs: 50
 
 learning_rate: 1e-3
-#learning_rate_schedule: constant
 learning_rate_schedule: e5_drop75
 
 early_stopping: True
 patience: 5
 min_delta: 1e-5
 
-eval_param: "acc"
+eval_param: "loss"
 
 train_fraction: 0.7125
 val_fraction: 0.2375
 test_fraction: 0.05
 
-data_dirs: [/work/mmalucch/out_hh4b/SigBkg/out_2022postEE_ggFSPANetDataset_SPANETptVary0p3_1p7_Morphing_DNN_AN_1e-3_e20drop75_minDelta1em5_SPANet_only2022postEE_noEarlyStopping_20folds_DeltaProbability/]
+data_dirs: [/work/mmalucch/out_hh4b/SigBkg/out_2022postEE_ggFSPANetDataset_SPANETptVary0p3_1p7_Morphing_DNN_AN_1e-3_e20drop75_minDelta1em5_SPANet_only2022postEE_noEarlyStopping_20folds_DeltaProbabilityMorphing/]
