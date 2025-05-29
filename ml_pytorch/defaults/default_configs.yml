@@ -1,6 +1,8 @@
 input_variables:
     [JetGood_pt, JetGood_eta, JetGood_phi, JetGood_mass, JetGood_btagPNetB]
 
+preprocess_variables_functions: {}
+
 signal_sample: [VBF_HHto4B]
 background_sample: [GluGlutoHHto4B]
 

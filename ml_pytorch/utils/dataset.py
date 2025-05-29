@@ -9,6 +9,7 @@ import awkward as ak
 
 logger = logging.getLogger(__name__)
 
+from ml_pytorch.defaults.preprocess_variables_functions import functions_dict
 
 def oversample_dataset(X_dataset):
 
@@ -68,7 +69,8 @@ def get_variables(
     dataset_list,
     region_list,
     sig_bkg,
-    data_format="root",
+    data_format,
+    preprocess_variables_functions,
 ):
     tot_lenght = 0
     if data_format == "root":
@@ -183,6 +185,12 @@ def get_variables(
             logger.info(k)
             # unflatten all the jet variables
             collection = k.split("_")[0]
+            
+            if k in preprocess_variables_functions:
+                logger.info(f"Applying preprocessing function {preprocess_variables_functions[k]} to variable {k}")
+                logger.info(f"vars_array[k] before {vars_array[k]}")
+                vars_array[k] = functions_dict[preprocess_variables_functions[k][0]](vars_array[k], *preprocess_variables_functions[k][1])
+                logger.info(f"vars_array[k] after {vars_array[k]}")
 
             # check if collection_N is present to unflatten the variables
             if ":" in k:
@@ -332,6 +340,7 @@ def load_data(cfg, seed):
         cfg.signal_region,
         "signal",
         cfg.data_format,
+        cfg.preprocess_variables_functions,
     )
     X_bkg, tot_lenght_bkg = get_variables(
         bkg_files,
@@ -342,6 +351,7 @@ def load_data(cfg, seed):
         cfg.background_region,
         "background",
         cfg.data_format,
+        cfg.preprocess_variables_functions,
     )
         
 
