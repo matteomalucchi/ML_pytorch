@@ -1,6 +1,10 @@
 # ML_pytorch
 
-Repository with basic machine learning algorithms implemented in PyTorch.
+Repository with basic machine learning algorithms implemented in PyTorch. 
+
+The coffea files used as inputs are based on the output of [PocketCoffea](https://github.com/PocketCoffea/PocketCoffea/tree/main). In particular, the framework was developed based on the output of the 
+[AnalysisConfigs](https://github.com/matteomalucchi/AnalysisConfigs) repository, which is a collection of analysis configurations for the PocketCoffea framework.
+
 
 # Installation
 To create the micromamba environment, you can use the following command:

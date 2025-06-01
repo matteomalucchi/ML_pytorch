@@ -123,7 +123,7 @@ def compare_output_onnx_ratio(
     onnx_model_name, onnx_model_ratio_name, onnx_model_name_2
 ):
     input_data = load_events()
-    print("\n\nonnx_model_ratio_name", onnx_model_ratio_name)
+    print("\n\n compare output")
     print(input_data)
 
     output_onnx = get_onnx_output(onnx_model_name, input_data)[0]
@@ -143,7 +143,7 @@ def compare_output_onnx_ratio(
         print("\n\naverge_output by hand", averge_output)
 
     print("output_onnx_ratio", output_onnx_ratio)
-
+    print("for ", onnx_model_ratio_name)
 
 def get_ratio_model_tensor_onnx(onnx_model, b):
     inferred_model = onnx.shape_inference.infer_shapes(onnx_model)

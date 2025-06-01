@@ -1,11 +1,11 @@
-input_variables: sig_bkg_dnn_DeltaProb_input_variables
+input_variables: sig_bkg_dnn_BinnedArctanhDeltaProb_input_variables
 
-preprocess_variables_functions:
-  {
-    "events_Delta_pairing_probabilities":
-      # function name, additional arguments
-      ["binned_arctanh_2bins", [2.44]],
-  }
+# preprocess_variables_functions:
+#   {
+#     "events_Delta_pairing_probabilities":
+#       # function name, additional arguments
+#       ["binned_arctanh_2bins", [2.44]],
+#   }
 
 run2: False
 
@@ -64,5 +64,5 @@ test_fraction: 0.05
 
 data_dirs:
   [
-    /work/mmalucch/out_hh4b/SigBkg/out_2022postEE_ggFSPANetDataset_SPANETptVary0p3_1p7_Morphing_DNN_AN_1e-3_e20drop75_minDelta1em5_SPANet_only2022postEE_noEarlyStopping_20folds_DeltaProbabilityMorphing/,
+    /work/mmalucch/out_hh4b/SigBkg/out_2022postEE_ggFSPANetDataset_SPANETptVary0p3_1p7_Morphing_DNN_AN_1e-3_e20drop75_minDelta1em5_SPANet_only2022postEE_noEarlyStopping_20folds_DeltaProbabilityMorphing_SigBkg_DNN_ptFlatSPANet_class_weights_e5drop75_postEE_BinnedArctanhDeltaProb/
   ]
