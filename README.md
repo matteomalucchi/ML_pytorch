@@ -32,7 +32,7 @@ echo $CUDA_VISIBLE_DEVICES # or echo $SLURM_JOB_GPUS
 To execute an example training, evaluate the model on the test set, plot the history and plot the signal/background histograms, you can use the following command:
 
 ```bash
-python  ml_pytorch/scripts/train.py  -c configs/example_DNN_config_ggF_VBF.yml
+ml_train  -c configs/example_DNN_config_ggF_VBF.yml
 ```
 
 To execute 5 runs in a node without the interactive access to the GPU node (the given config and folder names are just examples):

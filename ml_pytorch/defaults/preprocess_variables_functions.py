@@ -17,10 +17,18 @@ def pad_arctanh(x, pad_limit, pad_value=-999.0):
     """
     
     arctanh_x = np.arctanh(x)
-    # if np.any(np.abs(arctanh_x) > pad_limit):
     arctanh_x = np.where(arctanh_x > pad_limit, pad_value, arctanh_x)
         
     return arctanh_x
+
+def arctanh(x):
+    """
+    Apply arctanh transformation to the input array x.
+    """
+    
+    arctanh_x = np.arctanh(x)
+    return arctanh_x
+    
 
 
 functions_dict={}
