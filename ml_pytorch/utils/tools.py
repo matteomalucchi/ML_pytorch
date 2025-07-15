@@ -194,12 +194,14 @@ def loop_one_batch(
     )
 
 
-def save_pytorch_model(main_dir, epoch_index, model, optimizer):
+def save_pytorch_model(main_dir, epoch_index, model, optimizer, save_model):
     model_dir = f"{main_dir}/models"
     state_dict_dir = f"{main_dir}/state_dict"
-    os.makedirs(model_dir, exist_ok=True)
+    if save_model:
+        os.makedirs(model_dir, exist_ok=True)
+        model_name = f"{model_dir}/model_{epoch_index}.pt"
+        torch.save(model, model_name)
     os.makedirs(state_dict_dir, exist_ok=True)
-    model_name = f"{model_dir}/model_{epoch_index}.pt"
     state_dict_name = f"{state_dict_dir}/model_{epoch_index}_state_dict.pt"
     checkpoint = {
         "epoch": epoch_index,
@@ -207,7 +209,6 @@ def save_pytorch_model(main_dir, epoch_index, model, optimizer):
         "optimizer": optimizer.state_dict(),
     }
     torch.save(checkpoint, state_dict_name)
-    torch.save(model, model_name)
     return state_dict_name
 
 
@@ -311,7 +312,7 @@ def train_val_one_epoch(
         best_loss = avg_loss
         best_accuracy = avg_accuracy
         best_epoch = epoch_index
-        best_model_name = save_pytorch_model(main_dir, epoch_index, model, optimizer)
+        best_model_name = save_pytorch_model(main_dir, epoch_index, model, optimizer, cfg.save_model)
 
     return (
         avg_loss,

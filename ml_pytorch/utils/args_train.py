@@ -46,6 +46,13 @@ parser.add_argument(
     default=None,
 )
 parser.add_argument(
+    "-sm",
+    "--save-model",
+    action="store_true",
+    help="Save also the model next to the state dict",
+    default=False,
+)
+parser.add_argument(
     "-g", "--gpus", default=None, help="GPU numbers separated by a comma", type=str
 )
 parser.add_argument(
