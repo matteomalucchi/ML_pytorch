@@ -33,4 +33,4 @@ train_fraction: 0.7125
 val_fraction: 0.2375
 test_fraction: 0.05
 
-data_dirs: [/work/tharte/datasets/data_samples/data_postEE_spanet_ptflat/]
+data_dirs: [/work/tharte/datasets/samples_models_no_reweight/data_postEE_spanet_ptflat/]

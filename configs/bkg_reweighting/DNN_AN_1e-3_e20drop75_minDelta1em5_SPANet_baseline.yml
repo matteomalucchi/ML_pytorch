@@ -33,4 +33,4 @@ train_fraction: 0.7125
 val_fraction: 0.2375
 test_fraction: 0.05
 
-data_dirs: [/work/tharte/datasets/data_samples/data_full_2022_spanet_baseline_new/merged/]
+data_dirs: [/work/tharte/datasets/samples_models_no_reweight/data_full_2022_spanet_baseline_new/merged/]
