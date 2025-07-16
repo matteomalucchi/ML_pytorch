@@ -1,15 +1,15 @@
 #!/bin/bash
 #SBATCH --account=gpu_gres
 #SBATCH --job-name=bg_reweight_20_trainings
-#SBATCH --cpus-per-task=5
-#SBATCH --mem-per-cpu=6000
+#SBATCH --cpus-per-task=10
+#SBATCH --mem-per-cpu=8000
 #SBATCH --time=8:30:00
 #SBATCH -p gpu
 #SBATCH --gres=gpu:1
 #SBATCH --array=0-3%2  # 4 array jobs total, 2 runs at a time
 
 # ---- Script starts here ----
-
+LOAD_LAST=false
 # Fix: Proper Bash arithmetic for array task ID
 INIT_SEED=$((5 * SLURM_ARRAY_TASK_ID))
 
@@ -21,14 +21,63 @@ OUT_DIR=../out/bkg_reweighting/DNN_AN_1e-3_e20drop75_minDelta1em5_SPANet_inclusi
 for i in {0..4}; do
     SEED=$((i + INIT_SEED))
     RUN_DIR="${OUT_DIR}/run$(printf "%02d" $SEED)"
+    MODEL_DIR="$RUN_DIR/state_dict"
     mkdir -p "$RUN_DIR"
 
-    echo "[$SLURM_ARRAY_TASK_ID] Launching training with seed $SEED -> $RUN_DIR"
+	if $LOAD_LAST; then
+		for ((epoch=50; epoch>=1; epoch--)); do
+			candidate="$MODEL_DIR/model_${epoch}_state_dict.pt"
+			echo "Searching for $candidate"
+			if [[ -f "$candidate" ]]; then
+				MODEL_PATH="$candidate"
+				echo "Resuming from: $MODEL_PATH"
+				break
+			fi
+		done
+	fi
 
+    echo "[$SLURM_ARRAY_TASK_ID] Launching training with seed $SEED -> $RUN_DIR"
+	
+	echo $MODEL_DIR
     # Run each training in background (&) to parallelize
-    ml_train -o "$RUN_DIR" \
-             --eval --onnx --roc --histos --history \
-             --gpus 0 -n 1 -c "$CONFIG_FILE" -s "$SEED" --overwrite &
+	shopt -s nullglob
+    BEST_MODEL=$(ls "$MODEL_DIR"/*best_epoch*.onnx 2>/dev/null | head -n 1)
+	echo $BEST_MODEL
+	# Capture matching files into an arrayV
+	matches=("$MODEL_DIR"/*best_epoch*.onnx)
+
+	# Set BEST_MODEL only if we found matches
+	if [[ "$LOAD_LAST" == true && ${#matches[@]} -gt 0 ]]; then
+		echo "Skipping this run, because it is already finished"
+	elif [[ -s "./comet_token.key" ]]; then
+		{
+			read -r API_UNAME 
+			read -r API_KEY
+		} <./comet_token.key
+		echo "found Name $API_UNAME"
+		echo "found Key $API_KEY"
+		if $LOAD_LAST; then
+			ml_train -o "$RUN_DIR" \
+					 --eval --onnx --roc --histos --history \
+					 --gpus 0 -n 2 -c "$CONFIG_FILE" -s "$SEED" --load-model $MODEL_PATH --comet-token $API_KEY --comet-name $API_UNAME &
+		else
+			ml_train -o "$RUN_DIR" \
+					 --eval --onnx --roc --histos --history \
+					 --gpus 0 -n 2 -c "$CONFIG_FILE" -s "$SEED" --overwrite --comet-token $API_KEY --comet-name $API_UNAME &
+		fi
+	else
+		if $LOAD_LAST; then
+			ml_train -o "$RUN_DIR" \
+					 --eval --onnx --roc --histos --history \
+					 --gpus 0 -n 2 -c "$CONFIG_FILE" -s "$SEED" --load-model $MODEL_PATH &
+		else
+			ml_train -o "$RUN_DIR" \
+					 --eval --onnx --roc --histos --history \
+					 --gpus 0 -n 2 -c "$CONFIG_FILE" -s "$SEED" --overwrite &
+		fi
+
+	fi
+
 done
 
 # Wait for all background jobs to finish

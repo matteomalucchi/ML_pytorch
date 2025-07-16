@@ -1,9 +1,9 @@
 import os
-import torch
 import numpy as np
 import datetime
 import time
 import sys
+
 from omegaconf import OmegaConf
 import importlib
 
@@ -25,6 +25,13 @@ from ml_pytorch.utils.args_train import args
 from ml_pytorch.utils.setup_logger import setup_logger
 
 from ml_pytorch.utils.early_stopper import EarlyStopper
+
+if args.comet_token:
+    from comet_ml import start
+    from comet_ml.integration.pytorch import log_model
+
+import torch
+
 
 
 def main():
@@ -170,6 +177,24 @@ def main():
     early_stopping = cfg.early_stopping
     patience = cfg.patience
     min_delta = cfg.min_delta
+    
+    # setup comet logger:
+    if args.comet_token:
+        assert args.comet_name
+        logger.info("Setting up Comet logger")
+        comet_logger = start(
+            api_key=args.comet_token,
+            project_name="DNN training",
+            workspace=args.comet_name,
+#            experiment_config={"auto_output_logging": "simple"},
+            )
+        cfg_dict = OmegaConf.to_container(cfg, resolve=True)
+        try:
+            del cfg_dict["comet_token"]
+        except KeyError:
+            logger.info("No 'comet_token' key found in dictionary")
+        comet_logger.log_parameters(cfg_dict)
+
 
     # Load data
     (
@@ -375,6 +400,9 @@ def main():
         ]
     )
     model.eval()
+
+    if args.comet_token:
+        log_model(comet_logger, model=model, model_name=f"model_best_epoch_{best_epoch}")
 
     if cfg.onnx:
         # export the model to ONNX

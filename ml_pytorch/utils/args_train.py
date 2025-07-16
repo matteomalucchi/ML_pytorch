@@ -53,6 +53,22 @@ parser.add_argument(
     default=False,
 )
 parser.add_argument(
+    "-ct",
+    "--comet-token",
+    required=False,
+    default=None,
+    help="Token to register job on comet for job monitoring (`comet.com`)",
+    type=str,
+)
+parser.add_argument(
+    "-cn",
+    "--comet-name",
+    required=False,
+    default=None,
+    help="Username to register job on comet for job monitoring (`comet.com`)",
+    type=str,
+)
+parser.add_argument(
     "-g", "--gpus", default=None, help="GPU numbers separated by a comma", type=str
 )
 parser.add_argument(

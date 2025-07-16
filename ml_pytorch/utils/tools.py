@@ -38,9 +38,9 @@ def loop_one_batch(
     type_eval,
 ):
     inputs, labels, class_weights = data
-    inputs = inputs.to(device)
-    labels = labels.to(device)
-    class_weights = class_weights.to(device)
+    inputs = inputs.to(device, non_blocking=True)
+    labels = labels.to(device, non_blocking=True)
+    class_weights = class_weights.to(device, non_blocking=True)
 
     event_weights = inputs[:, -1]
     inputs = inputs[:, :-1]
@@ -194,9 +194,10 @@ def loop_one_batch(
     )
 
 
-def save_pytorch_model(main_dir, epoch_index, model, optimizer, save_model):
+def save_pytorch_model(main_dir, epoch_index, model, optimizer, save_model=False):
     model_dir = f"{main_dir}/models"
     state_dict_dir = f"{main_dir}/state_dict"
+    save_model=False
     if save_model:
         os.makedirs(model_dir, exist_ok=True)
         model_name = f"{model_dir}/model_{epoch_index}.pt"
