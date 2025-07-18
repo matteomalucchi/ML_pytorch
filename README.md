@@ -35,9 +35,29 @@ To execute an example training, evaluate the model on the test set, plot the his
 ml_train  -c configs/example_DNN_config_ggF_VBF.yml
 ```
 
+To execute either a 20x training for background reweighting or to run a `sig_bkg_classifier` model, there are two scripts that can be run with slurm:
+```bash
+# Outside of any node activate your environment (e.g. `micromamba activate ML_pytorch`)
+# Inside the files, the name of the config files has to be written. The output folder will have the same name
+cd jobs/
+# For 20x training:
+sbatch run_20_trainings_in_4_parallel.sh
+# For sig_bkg_reweighting
+sbatch run_sig_bkg_classifier.sh
 To execute 5 runs in a node without the interactive access to the GPU node (the given config and folder names are just examples):
 ```
-# Outside of any node activate your environment (e.g. `micromamba activate ML_pytorch`)
-# Then run this command:
-sbatch --account gpu_gres --job-name "InteractiveJob" --cpus-per-task 4 --mem-per-cpu 5000 --time 12:00:00  -p gpu --gres=gpu:1 --wrap=". ./run_batch_of_5.sh /work/tharte/datasets/ML_pytorch/configs/bkg_reweighting/DNN_AN_1e-3_e20drop75_minDelta1em5_SPANet_postEE.yml out/bkg_reweighting/SPANET_ptFlat_20_runs_postEE 0"
+
+Additionally, there are now options to send the metrics of the training to [COMET](https://www.comet.com/site) (academics accounts are available for free):
+To set it up together with the files mentioned above:
+```bash
+# Create file with token and username:
+touch comet_token.key
+# open the file with the editor of your choice
+vim comet_token.key
+# in the first line write your username, and in the second line, write your token (to be retrieved on the website):
+# <uname>
+# <token>
 ```
+The scripts will read this file if it exists and automatically sends the information to `ml_pytorch`
+
+
