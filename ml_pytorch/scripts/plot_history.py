@@ -55,6 +55,7 @@ def plot_history(
     show,
     uniform_filter=10,
     lenght=-1,
+    comet_logger=None,
 ):
     infos_dict = {
         "accuracy": {"train": train_accuracy[:lenght], "val": val_accuracy[:lenght]},
@@ -111,13 +112,15 @@ def plot_history(
     )
 
     plt.grid()
+    if comet_logger:
+        comet_logger.log_figure("history", plt)
     plt.savefig(f"{dir}/history.png", bbox_inches="tight")
     plt.savefig(f"{dir}/history.pdf", bbox_inches="tight")
     plt.savefig(f"{dir}/history.svg", bbox_inches="tight")
     if show:
         plt.show()
 
-def plot_lr(lr, main_dir, show):
+def plot_lr(lr, main_dir, show, comet_logger=None):
     plt.figure()
     plt.plot(lr)
     plt.xlabel("Epoch")
@@ -132,6 +135,8 @@ def plot_lr(lr, main_dir, show):
     plt.grid()
     # log scale
     plt.yscale("log")
+    if comet_logger:
+        comet_logger.log_figure("learning_rate", plt)
     plt.savefig(f"{main_dir}/lr.png", bbox_inches="tight")
     plt.savefig(f"{main_dir}/lr.pdf", bbox_inches="tight")
     plt.savefig(f"{main_dir}/lr.svg", bbox_inches="tight")

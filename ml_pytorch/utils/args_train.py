@@ -69,6 +69,15 @@ parser.add_argument(
     type=str,
 )
 parser.add_argument(
+    "-ctg",
+    "--comet-tags",
+    required=False,
+    nargs="+",
+    default=None,
+    help="Username to register job on comet for job monitoring (`comet.com`)",
+    type=str,
+)
+parser.add_argument(
     "-g", "--gpus", default=None, help="GPU numbers separated by a comma", type=str
 )
 parser.add_argument(

@@ -140,6 +140,7 @@ def plot_sig_bkg_distributions(
     test_fraction,
     signal_eff=0.2,
     get_max_significance=False,
+    comet_logger=None,
 ):
     # plot the signal and background distributions
     sig_score_train, bkg_score_train = handle_arrays(score_lbl_tensor_train, 0)
@@ -480,11 +481,15 @@ def plot_sig_bkg_distributions(
         ax=ax,
         loc=0,
     )
+    if comet_logger:
+        comet_logger.log_figure("sig_bkg_distributions", plt)
     plt.savefig(f"{dir}/sig_bkg_distributions.png", bbox_inches="tight", dpi=300)
     plt.savefig(f"{dir}/sig_bkg_distributions.pdf", bbox_inches="tight", dpi=300)
     plt.savefig(f"{dir}/sig_bkg_distributions.svg", bbox_inches="tight", dpi=300)
     ax.set_ylim(bottom=1e-2, top=max_bin**4)
     ax.set_yscale("log")
+    if comet_logger:
+        comet_logger.log_figure("sig_bkg_distributions_log", plt)
     plt.savefig(f"{dir}/sig_bkg_distributions_log.png", bbox_inches="tight", dpi=300)
     plt.savefig(f"{dir}/sig_bkg_distributions_log.pdf", bbox_inches="tight", dpi=300)
     plt.savefig(f"{dir}/sig_bkg_distributions_log.svg", bbox_inches="tight", dpi=300)
@@ -492,7 +497,7 @@ def plot_sig_bkg_distributions(
         plt.show()
 
 
-def plot_roc_curve(score_lbl_tensor_test, dir, show):
+def plot_roc_curve(score_lbl_tensor_test, dir, show, comet_logger=None):
     # plot the ROC curve
     fig, ax = plt.subplots()
     try:
@@ -542,6 +547,8 @@ def plot_roc_curve(score_lbl_tensor_test, dir, show):
         text="Preliminary",
         loc=0,
     )
+    if comet_logger:
+        comet_logger.log_figure("roc_curve", plt)
     plt.savefig(f"{dir}/roc_curve.png", bbox_inches="tight", dpi=300)
     plt.savefig(f"{dir}/roc_curve.pdf", bbox_inches="tight", dpi=300)
     plt.savefig(f"{dir}/roc_curve.svg", bbox_inches="tight", dpi=300)
