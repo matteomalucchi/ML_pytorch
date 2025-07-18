@@ -10,7 +10,6 @@
 
 # ---- Script starts here ----
 LOAD_LAST=false
-# Fix: Proper Bash arithmetic for array task ID
 INIT_SEED=$((5 * SLURM_ARRAY_TASK_ID))
 
 # Set config and output directories
@@ -54,16 +53,17 @@ for i in {0..4}; do
 			read -r API_UNAME 
 			read -r API_KEY
 		} <./comet_token.key
+		API_TAGS=("DNN_training" "bkg_reweighting" "slurm")
 		echo "found Name $API_UNAME"
 		echo "found Key $API_KEY"
 		if $LOAD_LAST; then
 			ml_train -o "$RUN_DIR" \
 					 --eval --onnx --roc --histos --history \
-					 --gpus 0 -n 2 -c "$CONFIG_FILE" -s "$SEED" --load-model $MODEL_PATH --comet-token $API_KEY --comet-name $API_UNAME &
+					 --gpus 0 -n 2 -c "$CONFIG_FILE" -s "$SEED" --load-model $MODEL_PATH --comet-token $API_KEY --comet-name $API_UNAME --comet-tags $API_TAGS &
 		else
 			ml_train -o "$RUN_DIR" \
 					 --eval --onnx --roc --histos --history \
-					 --gpus 0 -n 2 -c "$CONFIG_FILE" -s "$SEED" --overwrite --comet-token $API_KEY --comet-name $API_UNAME &
+					 --gpus 0 -n 2 -c "$CONFIG_FILE" -s "$SEED" --overwrite --comet-token $API_KEY --comet-name $API_UNAME --comet-tags $API_TAGS &
 		fi
 	else
 		if $LOAD_LAST; then

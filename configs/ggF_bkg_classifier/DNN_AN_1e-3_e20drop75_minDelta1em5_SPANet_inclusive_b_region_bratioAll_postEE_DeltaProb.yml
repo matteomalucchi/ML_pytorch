@@ -1,13 +1,5 @@
 input_variables: sig_bkg_dnn_DeltaProb_input_variables
 
-preprocess_variables_functions:
-  {
-    "events_Delta_pairing_probabilities":
-      # function name, additional arguments
-      ["arctanh", []],
-  }
-
-
 run2: False
 
 signal_region: [4b_signal_region]
