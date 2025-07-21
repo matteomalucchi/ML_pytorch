@@ -39,4 +39,4 @@ train_fraction: 0.7125
 val_fraction: 0.2375
 test_fraction: 0.05
 
-data_dirs: [/work/tharte/datasets/samples_models_with_bkg_reweight/spanet_ptflat_inclusive_b_trained_bratio_ArctanhDeltaProb/]
+data_dirs: [/work/tharte/datasets/sig_bkg_classifier/samples_models_with_bkg_reweight/spanet_ptflat_inclusive_b_trained_bratio_ArctanhDeltaProb/]
