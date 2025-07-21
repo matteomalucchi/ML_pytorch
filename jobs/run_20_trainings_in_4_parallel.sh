@@ -11,10 +11,11 @@
 # ---- Script starts here ----
 LOAD_LAST=false
 INIT_SEED=$((5 * SLURM_ARRAY_TASK_ID))
+CONFIG=DNN_AN_1e-3_e20drop75_minDelta1em5_SPANet_inclusive_b_region_bratioAll_postEE_ArctanhDeltaProb_not_spanet_jet5
 
 # Set config and output directories
-CONFIG_FILE=../configs/bkg_reweighting/DNN_AN_1e-3_e20drop75_minDelta1em5_SPANet_inclusive_b_region_bratioAll_postEE_DeltaProb.yml
-OUT_DIR=../out/bkg_reweighting/DNN_AN_1e-3_e20drop75_minDelta1em5_SPANet_inclusive_b_region_bratioAll_postEE_DeltaProb
+OUT_DIR="../out/bkg_reweighting/${CONFIG}"
+CONFIG_FILE="../configs/bkg_reweighting/${CONFIG}.yml"
 
 # Start 5 jobs in parallel
 for i in {0..4}; do
