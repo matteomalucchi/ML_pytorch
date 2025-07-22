@@ -1,30 +1,33 @@
-import os
-import torch
-import numpy as np
 import datetime
-import time
-import sys
-from omegaconf import OmegaConf
 import importlib
+import os
+import sys
+import time
 
-# PyTorch TensorBoard support
-# from torch.utils.tensorboard import SummaryWriter
-
-from ml_pytorch.utils.dataset import load_data
-from ml_pytorch.utils.tools import (
-    get_model_parameters_number,
-    train_val_one_epoch,
-    eval_model,
-    export_onnx,
-    create_DNN_columns_list,
-    save_pytorch_model,
-)
+import numpy as np
+from omegaconf import OmegaConf
 
 from ml_pytorch.utils.args_train import args
 
-from ml_pytorch.utils.setup_logger import setup_logger
-
+# PyTorch TensorBoard support
+# from torch.utils.tensorboard import SummaryWriter
+from ml_pytorch.utils.dataset import load_data
 from ml_pytorch.utils.early_stopper import EarlyStopper
+from ml_pytorch.utils.setup_logger import setup_logger
+from ml_pytorch.utils.tools import (
+    create_DNN_columns_list,
+    eval_model,
+    export_onnx,
+    get_model_parameters_number,
+    save_pytorch_model,
+    train_val_one_epoch,
+)
+
+if args.comet_token:
+    from comet_ml import start
+    from comet_ml.integration.pytorch import log_model
+
+import torch
 
 
 def main():
@@ -62,25 +65,26 @@ def main():
 
     if cfg.histos:
         from ml_pytorch.scripts.sig_bkg_eval import (
-            plot_sig_bkg_distributions,
             plot_roc_curve,
+            plot_sig_bkg_distributions,
         )
     if cfg.history:
-        from ml_pytorch.scripts.plot_history import read_from_txt, plot_history, plot_lr
+        from ml_pytorch.scripts.plot_history import plot_history, plot_lr, read_from_txt
 
-    #base dir is /work/<username>/
+    # base dir is /work/<username>/
     base_dir = f"/work/{os.environ['USER']}"
     # check if exists
     if not os.path.exists(base_dir):
-        base_dir="./out"
+        base_dir = "./out"
     else:
         base_dir = f"{base_dir}/out_ML_pytorch"
 
     if not cfg.output_dir:
-        cfg.output_dir = f"{base_dir}/{os.path.basename(cfg_file_name).replace('.yml','')}"
+        cfg.output_dir = f"{base_dir}/{os.path.basename(cfg_file_name).replace('.yml', '')}"
     main_dir = cfg.output_dir
 
     name = main_dir.strip("/").split("/")[-1]
+    name_configuration = main_dir.strip("/").split("/")[-2]
 
     best_vloss = 1_000_000.0
     best_vaccuracy = 0.0
@@ -99,9 +103,9 @@ def main():
     if cfg.load_model or cfg.eval_model:
         # os.system(f"cp {saved_ML_model_path} {file_dir}/../models/ML_model_loaded.py")
         sys.path.append(main_dir)
-        print('sys.path',sys.path)
+        print('sys.path', sys.path)
         import ML_model
-        
+
         # ML_model = importlib.import_module(saved_ML_model_path.replace("/", ".").replace(".py", ""))
         # ML_model = importlib.import_module(f"ml_pytorch.models.ML_model_loaded")
 
@@ -155,21 +159,42 @@ def main():
     logger.info("configs")
     logger.info("cfg:\n - %s", "\n - ".join(str(it) for it in cfg.items()))
 
-    if type(cfg.input_variables) == str:
+    if isinstance(cfg.input_variables, str):
         logger.info("Get Input variables from dnn_inputs")
         logger.info(cfg.input_variables)
-        dnn_input_variables_file=importlib.import_module(f"ml_pytorch.defaults.{cfg.input_variables}")
-        
+        dnn_input_variables_file = importlib.import_module(f"ml_pytorch.defaults.{cfg.input_variables}")
+
         cfg.input_variables = create_DNN_columns_list(
             cfg.run2, dnn_input_variables_file.dnn_input_variables
         )
-        
+
     input_variables = cfg.input_variables
     logger.info(input_variables)
 
     early_stopping = cfg.early_stopping
     patience = cfg.patience
     min_delta = cfg.min_delta
+
+    # setup comet logger:
+    if args.comet_token:
+        assert args.comet_name
+        logger.info("Setting up Comet logger")
+        comet_logger = start(
+            api_key=args.comet_token,
+            project_name="DNN training",
+            workspace=args.comet_name,
+            )
+        cfg_dict = OmegaConf.to_container(cfg, resolve=True)
+        try:
+            del cfg_dict["comet_token"]
+        except KeyError:
+            logger.info("No 'comet_token' key found in dictionary")
+        logger.info(f"Recording tags {args.comet_tags}")
+        comet_logger.log_parameters(cfg_dict)
+        comet_logger.add_tags(args.comet_tags)
+        comet_logger.set_name(f"{name_configuration}_s{cfg.seed}")
+    else:
+        comet_logger = None
 
     # Load data
     (
@@ -232,7 +257,7 @@ def main():
                     best_vaccuracy = float(line.split(",")[2].split(":")[1])
                     break
         logger.info(
-            f"Loaded model from %s, epoch %d, best val loss: %.4f, best val accuracy: %.4f"
+            "Loaded model from %s, epoch %d, best val loss: %.4f, best val accuracy: %.4f"
             % (best_model_name, loaded_epoch, best_vloss, best_vaccuracy)
         )
 
@@ -301,6 +326,11 @@ def main():
                 "Best epoch # %d, best val loss: %.4f, best val accuracy: %.4f"
                 % (best_epoch, best_vloss, best_vaccuracy)
             )
+            if comet_logger:
+                comet_logger.log_metric("loss_epoch_train", avg_loss, epoch=epoch)
+                comet_logger.log_metric("loss_epoch_val", avg_vloss, epoch=epoch)
+                comet_logger.log_metric("accuracy_epoch_train", avg_accuracy, epoch=epoch)
+                comet_logger.log_metric("accuracy_epoch_val", avg_vaccuracy, epoch=epoch)
 
             # Log the running loss averaged per batch
             # for both training and validation
@@ -352,7 +382,7 @@ def main():
 
     if cfg.history:
         # plot the training and validation loss and accuracy
-        print("\n\n\n")
+        logger.info("\n\n\n")
         logger.info("Plotting training and validation loss and accuracy")
         train_accuracy, train_loss, val_accuracy, val_loss, lr = read_from_txt(
             logger_file
@@ -365,8 +395,9 @@ def main():
             val_loss,
             main_dir,
             False,
+            comet_logger=comet_logger,
         )
-        plot_lr(lr, main_dir, False)
+        plot_lr(lr, main_dir, False, comet_logger=comet_logger)
 
     # load best model
     model.load_state_dict(
@@ -376,9 +407,12 @@ def main():
     )
     model.eval()
 
+    if args.comet_token:
+        log_model(comet_logger, model=model, model_name=f"model_best_epoch_{best_epoch}")
+
     if cfg.onnx:
         # export the model to ONNX
-        print("\n\n\n")
+        logger.info("\n\n\n")
         logger.info("Exporting model to ONNX")
         # move model to cpu
         model.to("cpu")
@@ -426,7 +460,7 @@ def main():
             device,
             eval_epoch,
         )
-        print("================================")
+        logger.info("================================")
         logger.info(
             "Best epoch # %d, loss val: %.4f, accuracy val: %.4f"
             % (best_epoch, best_vloss, best_vaccuracy)
@@ -441,7 +475,6 @@ def main():
         )
         train_test_fractions = np.array([cfg.train_fraction, cfg.test_fraction])
 
-
         if args.save_numpy:
             # save the score and label arrays
             np.savez(
@@ -450,10 +483,10 @@ def main():
                 score_lbl_array_test=score_lbl_array_test,
                 train_test_fractions=train_test_fractions,
             )
-
+            
         # plot the signal and background distributions
         if cfg.histos:
-            print("\n\n\n")
+            logger.info("\n\n\n")
             logger.info("Plotting signal and background distributions")
             plot_sig_bkg_distributions(
                 score_lbl_array_train,
@@ -463,11 +496,12 @@ def main():
                 [],
                 # [0.3363, 0.3937],
                 train_test_fractions[1],
+                comet_logger=comet_logger,
             )
         if cfg.roc:
-            print("\n\n\n")
+            logger.info("\n\n\n")
             logger.info("Plotting ROC curve")
-            plot_roc_curve(score_lbl_array_test, main_dir, False)
+            plot_roc_curve(score_lbl_array_test, main_dir, False, comet_logger=comet_logger)
 
     # remove ML_model_loaded.py
     if cfg.load_model or cfg.eval_model:

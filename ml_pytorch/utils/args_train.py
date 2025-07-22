@@ -46,6 +46,38 @@ parser.add_argument(
     default=None,
 )
 parser.add_argument(
+    "-sm",
+    "--save-model",
+    action="store_true",
+    help="Save also the model next to the state dict",
+    default=False,
+)
+parser.add_argument(
+    "-ct",
+    "--comet-token",
+    required=False,
+    default=None,
+    help="Token to register job on comet for job monitoring (`comet.com`)",
+    type=str,
+)
+parser.add_argument(
+    "-cn",
+    "--comet-name",
+    required=False,
+    default=None,
+    help="Username to register job on comet for job monitoring (`comet.com`)",
+    type=str,
+)
+parser.add_argument(
+    "-ctg",
+    "--comet-tags",
+    required=False,
+    nargs="+",
+    default=None,
+    help="Username to register job on comet for job monitoring (`comet.com`)",
+    type=str,
+)
+parser.add_argument(
     "-g", "--gpus", default=None, help="GPU numbers separated by a comma", type=str
 )
 parser.add_argument(
