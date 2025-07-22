@@ -4,7 +4,7 @@ preprocess_variables_functions:
   {
     "events_Delta_pairing_probabilities":
       # function name, additional arguments
-      ["arctanh", []],
+      ["binned_arctanh_2bins", [3.2]],
   }
 
 signal_sample: [DATA_JetMET_JMENano_E_skimmed,DATA_JetMET_JMENano_F_skimmed,DATA_JetMET_JMENano_G_skimmed]

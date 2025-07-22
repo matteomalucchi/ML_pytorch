@@ -475,14 +475,15 @@ def main():
         )
         train_test_fractions = np.array([cfg.train_fraction, cfg.test_fraction])
 
-        # save the score and label arrays
-        # np.savez(
-        #     f"{main_dir}/score_lbl_array.npz",
-        #     score_lbl_array_train=score_lbl_array_train,
-        #     score_lbl_array_test=score_lbl_array_test,
-        #     train_test_fractions=train_test_fractions,
-        # )
-
+        if args.save_numpy:
+            # save the score and label arrays
+            np.savez(
+                f"{main_dir}/score_lbl_array.npz",
+                score_lbl_array_train=score_lbl_array_train,
+                score_lbl_array_test=score_lbl_array_test,
+                train_test_fractions=train_test_fractions,
+            )
+            
         # plot the signal and background distributions
         if cfg.histos:
             logger.info("\n\n\n")
