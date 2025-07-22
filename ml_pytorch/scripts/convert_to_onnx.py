@@ -317,7 +317,7 @@ def main():
                 )
             except uproot.exceptions.KeyInFileError:
                 print(
-                    "ERROR: The model is not compatible with the input data. Please check the input data."
+                    "WARNING: The model is not compatible with the input data. Skipping comparison."
                 )
 
         if args.debug:

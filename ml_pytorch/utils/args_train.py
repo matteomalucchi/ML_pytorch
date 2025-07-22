@@ -103,6 +103,13 @@ parser.add_argument(
     help="Seed for event shuffling and weights initialization",
     type=str,
 )
+parser.add_argument(
+    "-s-n",
+    "--save-numpy",
+    default=None,
+    help="Save numpy arrays of the output scores",
+    action="store_true",
+)
 
 
 # parser.print_help()
