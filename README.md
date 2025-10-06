@@ -38,12 +38,12 @@ ml_train  -c configs/example_DNN_config_ggF_VBF.yml
 To execute either a 20x training for background reweighting or to run a `sig_bkg_classifier` model, there are two scripts that can be run with slurm:
 ```bash
 # Outside of any node activate your environment (e.g. `micromamba activate ML_pytorch`)
-# Inside the files, the name of the config files has to be written. The output folder will have the same name
 cd jobs/
+# If the output folder is not provided, it will have the same name as the config file without the extension
 # For 20x training:
-sbatch run_20_trainings_in_4_parallel.sh
+sbatch run_20_trainings_in_4_parallel.sh <config_file> <output_folder>
 # For sig_bkg_reweighting
-sbatch run_sig_bkg_classifier.sh
+sbatch run_sig_bkg_classifier.sh <config_file> <output_folder>
 ```
 
 
