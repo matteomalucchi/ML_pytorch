@@ -6,7 +6,10 @@
 #SBATCH --time=8:30:00
 #SBATCH -p gpu
 #SBATCH --gres=gpu:1
-#SBATCH --array=0-3%2  # 4 array jobs total, 2 runs at a time
+#SBATCH --array=0-3%4  # 4 array jobs total, 4 runs at a time
+
+# Note: to change the number to be ran at the same time
+# scontrol update ArrayTaskThrottle=<count> JobId=<jobid>
 
 # ---- Script starts here ----
 

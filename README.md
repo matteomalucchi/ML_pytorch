@@ -1,13 +1,14 @@
 # ML_pytorch
 
-Repository with basic machine learning algorithms implemented in PyTorch. 
+Repository with basic machine learning algorithms implemented in PyTorch.
 
-The coffea files used as inputs are based on the output of [PocketCoffea](https://github.com/PocketCoffea/PocketCoffea/tree/main). In particular, the framework was developed based on the output of the 
+The coffea files used as inputs are based on the output of [PocketCoffea](https://github.com/PocketCoffea/PocketCoffea/tree/main). In particular, the framework was developed based on the output of the
 [AnalysisConfigs](https://github.com/matteomalucchi/AnalysisConfigs) repository, which is a collection of analysis configurations for the PocketCoffea framework.
 
+## Installation
 
-# Installation
 To create the micromamba environment, you can use the following command:
+
 ```bash
 salloc --account gpu_gres --job-name "InteractiveJob" --cpus-per-task 4 --mem-per-cpu 3000 --time 01:00:00  -p gpu --gres=gpu:1
 micromamba env create -f ML_pytorch_env.yml
@@ -17,8 +18,10 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
-# Connect to node with a gpu
+## Connect to node with a gpu
+
 To connect to a node with a gpu, you can use the following command:
+
 ```bash
 # connect to a node with a gpu
 salloc --account gpu_gres --job-name "InteractiveJob" --cpus-per-task 4 --mem-per-cpu 3000 --time 01:00:00  -p gpu --gres=gpu:1
@@ -28,7 +31,8 @@ micromamba activate ML_pytorch
 echo $CUDA_VISIBLE_DEVICES # or echo $SLURM_JOB_GPUS
 ```
 
-# Examples
+## Examples
+
 To execute an example training, evaluate the model on the test set, plot the history and plot the signal/background histograms, you can use the following command:
 
 ```bash
@@ -36,18 +40,23 @@ ml_train  -c configs/example_DNN_config_ggF_VBF.yml
 ```
 
 To execute either a 20x training for background reweighting or to run a `sig_bkg_classifier` model, there are two scripts that can be run with slurm:
+
 ```bash
 # Outside of any node activate your environment (e.g. `micromamba activate ML_pytorch`)
 cd jobs/
 # If the output folder is not provided, it will have the same name as the config file without the extension
-# For 20x training:
+# For 20x training for bkg reweighting:
 sbatch run_20_trainings_in_4_parallel.sh <config_file> <output_folder>
+# when this has finished, you can merge the results with:
+cd <output_folder>
+ml_onnx -i best_models -o best_models -ar -v bkg_morphing_dnn_DeltaProb_input_variables
+
 # For sig_bkg_reweighting
 sbatch run_sig_bkg_classifier.sh <config_file> <output_folder>
 ```
 
-
 To execute 5 runs in a node without the interactive access to the GPU node (the given config and folder names are just examples):
+
 ```bash
 # Outside of any node activate your environment (e.g. `micromamba activate ML_pytorch`)
 
@@ -57,6 +66,7 @@ sbatch --account gpu_gres --job-name "InteractiveJob" --cpus-per-task 4 --mem-pe
 
 Additionally, there are now options to send the metrics of the training to [COMET](https://www.comet.com/site) (academics accounts are available for free):
 To set it up together with the files mentioned above:
+
 ```bash
 # Create file with token and username:
 touch comet_token.key
@@ -66,6 +76,5 @@ vim comet_token.key
 # <uname>
 # <token>
 ```
+
 The scripts will read this file if it exists and automatically sends the information to `ml_pytorch`
-
-
