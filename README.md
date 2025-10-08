@@ -39,6 +39,8 @@ To execute an example training, evaluate the model on the test set, plot the his
 ml_train  -c configs/example_DNN_config_ggF_VBF.yml
 ```
 
+## Training on a cluster with slurm
+
 To execute either a 20x training for background reweighting or to run a `sig_bkg_classifier` model, there are two scripts that can be run with slurm:
 
 ```bash
@@ -63,6 +65,22 @@ To execute 5 runs in a node without the interactive access to the GPU node (the 
 # Then run this command:
 sbatch --account gpu_gres --job-name "InteractiveJob" --cpus-per-task 4 --mem-per-cpu 5000 --time 12:00:00  -p gpu --gres=gpu:1 --wrap=". ./run_batch_of_5.sh /work/tharte/datasets/ML_pytorch/configs/bkg_reweighting/DNN_AN_1e-3_e20drop75_minDelta1em5_SPANet_postEE.yml out/bkg_reweighting/SPANET_ptFlat_20_runs_postEE 0"
 ```
+
+## Additional scripts
+
+The training will produce the ONNX model to be used in PocketCoffea for background morphing, as well as plots with the training history, the ROC curve and an overtraining check.
+
+These plots can be produced using the following command:
+
+```bash
+# Plot the history of a training 
+ml_history -i <training_log_file>
+
+# Plot the ROC curve and overtraining check
+ml_sb -i <training_directory>
+```
+
+## COMET integration
 
 Additionally, there are now options to send the metrics of the training to [COMET](https://www.comet.com/site) (academics accounts are available for free):
 To set it up together with the files mentioned above:
