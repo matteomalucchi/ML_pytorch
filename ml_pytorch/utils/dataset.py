@@ -6,6 +6,9 @@ import logging
 import os
 from coffea.util import load
 import awkward as ak
+import pyarrow.parquet as pq
+import pyarrow.dataset as ds
+import glob
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +84,60 @@ def get_variables(
             variables_array = np.array(
                 [file[input].array(library="np") for input in input_variables]
             )
+    elif data_format == "parquet":
+        # function to load input files from chunks of .parquet the structure here presupposes 
+        # that each directory contains a single region of a single dataset
+
+        # here we loop over the directories
+        for i, file_name in enumerate(files):
+            logger.info(f"Loading directory {file_name}")
+
+            # load the flat varibles
+            dataset = ds.dataset(file_name, format="parquet")
+            logger.debug(f"input_variables {input_variables}")
+
+            vars = [x for x in input_variables if ":" not in x]
+            table = dataset.to_table(columns=vars)
+            variables_array = ak.from_arrow(table)
+
+            # load the jagged variables and add them flattened to the variables array
+            jagged_variables = []
+            max_pos = 0
+
+            for k in input_variables:
+                if ":" in k:
+                    variable_name, pos = k.split(":")
+                    if variable_name not in jagged_variables:
+                        jagged_variables.append(variable_name)
+                    if int(pos) > max_pos:
+                        max_pos = int(pos)
+
+            table = dataset.to_table()
+            jagged_variables_array = ak.from_arrow(table)
+            logger.debug(f"jagged_variables {jagged_variables}")
+
+            # add the wanted number of flattened features from the jagged variables to the feature array
+            for k in jagged_variables:
+                for pos in range(max_pos + 1):
+                    variables_array[k + ":" + str(pos)] = jagged_variables_array[k][:, int(pos)]
+
+            # apply any preprocessing function to the variables
+            for k in input_variables:
+                if k in preprocess_variables_functions:
+                    logger.info(f"Applying preprocessing function {preprocess_variables_functions[k]} to variable {k}")
+                    logger.info(f"vars_array[k] before {variables_array[k]}")
+                    variables_array[k] = functions_dict[preprocess_variables_functions[k][0]](variables_array[k], *preprocess_variables_functions[k][1])
+                    logger.info(f"vars_array[k] after {variables_array[k]}")
+
+            # add the weights normalized to mean 1
+            variables_array["weights"] = jagged_variables_array["weight"] / np.mean(jagged_variables_array["weight"])
+
+            # concatenate in a single numpy matrix of shape (num_variables, num_events)
+            variables_array = [ak.to_numpy(variables_array[f]) for f in input_variables + ["weights"]]
+            variables_array = np.array(variables_array)
+
+            logger.info(f"variables_array complete shape {variables_array.shape}")
+            
     elif data_format == "coffea":
         vars_array = []
         weights = []
@@ -185,7 +242,6 @@ def get_variables(
             logger.info(k)
             # unflatten all the jet variables
             collection = k.split("_")[0]
-            
             if k in preprocess_variables_functions:
                 logger.info(f"Applying preprocessing function {preprocess_variables_functions[k]} to variable {k}")
                 logger.info(f"vars_array[k] before {vars_array[k]}")
@@ -311,6 +367,18 @@ def load_data(cfg, seed):
                 for background in cfg.background_sample:
                     if background in file and "SR" in file:
                         bkg_files.append(x + file)
+    elif cfg.data_format == "parquet":
+        for x in dirs:
+            logger.info(f"Looking for files in {x}")
+            subdirs = os.listdir(x)
+            for s in subdirs:
+                logger.debug(f"Found file {s}")
+                if s in cfg.signal_dataset:
+                    for region in cfg.signal_region:
+                        sig_files.append(x + s + "/" + region)
+                if s in cfg.background_dataset:
+                    for region in cfg.signal_region:
+                        bkg_files.append(x + s + "/" + region)
     elif cfg.data_format == "coffea":
         sig_files = [
             direct + file
