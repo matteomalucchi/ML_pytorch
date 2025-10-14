@@ -76,13 +76,9 @@ def get_onnx_output(onnx_model_name, input_data):
     # print the input/output name and shape
     input_name = [input.name for input in session.get_inputs()]
     output_name = [output.name for output in session.get_outputs()]
-    print("Inputs name:", input_name)
-    print("Outputs name:", output_name)
 
     input_shape = [input.shape for input in session.get_inputs()]
     output_shape = [output.shape for output in session.get_outputs()]
-    print("Inputs shape:", input_shape)
-    print("Outputs shape:", output_shape)
 
     input_example = {input_name[0]: input_data}
     output_onnx = session.run(output_name, input_example)
@@ -120,30 +116,37 @@ def compare_output_onnx_keras(onnx_model_name, keras_model):
 
 
 def compare_output_onnx_ratio(
-    onnx_model_name, onnx_model_ratio_name, onnx_model_name_2
+    onnx_model_name, onnx_model_ratio_name, onnx_model_name_2, average
 ):
     input_data = load_events()
-    print("\n\n compare output")
-    print(input_data)
+    print("#############################\n\n compare output")
 
     output_onnx = get_onnx_output(onnx_model_name, input_data)[0]
+    output_onnx_ratio = output_onnx[:, 1] / output_onnx[:, 0]
     print("output_onnx", output_onnx)
     print("output_onnx by hand ratio", output_onnx[:, 1] / output_onnx[:, 0])
 
-    output_onnx_ratio = get_onnx_output(onnx_model_ratio_name, input_data)
 
     if onnx_model_name_2:
         output_onnx_2 = get_onnx_output(onnx_model_name_2, input_data)[0]
+        output_onnx_ratio_2 = output_onnx_2[:, 1] / output_onnx_2[:, 0]
         print("output_onnx_2", output_onnx_2)
         print("output_onnx_2 by hand ratio", output_onnx_2[:, 1] / output_onnx_2[:, 0])
-        averge_output = (
-            output_onnx[:, 1] / output_onnx[:, 0]
-            + output_onnx_2[:, 1] / output_onnx_2[:, 0]
-        ) / 2
-        print("\n\naverge_output by hand", averge_output)
+        if average:
+            output_by_hand = (output_onnx_ratio + output_onnx_ratio_2) / 2
+        else:
+            output_by_hand = [output_onnx_ratio, output_onnx_ratio_2]
+        print("\noutput_by_hand by hand", output_by_hand)
 
-    print("output_onnx_ratio", output_onnx_ratio)
+    output_onnx_ratio = get_onnx_output(onnx_model_ratio_name, input_data)
+    print("output onnx directly from pad", output_onnx_ratio)
     print("for ", onnx_model_ratio_name)
+    
+    
+    assert np.allclose(
+        output_onnx_ratio,
+        output_by_hand if onnx_model_name_2 else output_onnx_ratio
+    )
 
 def get_ratio_model_tensor_onnx(onnx_model, b):
     inferred_model = onnx.shape_inference.infer_shapes(onnx_model)
@@ -307,13 +310,13 @@ def main():
             else f"{out_dir}/debug.onnx"
         )
         save_onnx_model(onnx_model_final, onnx_model_final_name)
-        if args.model_type == "onnx":
+        if args.model_type == "onnx" and args.debug:
             try:
                 compare_output_onnx_ratio(
-                    first_file_name, onnx_model_final_name, second_file_name
+                    first_file_name, onnx_model_final_name, second_file_name, True
                 )
                 compare_output_onnx_ratio(
-                    first_file_name, onnx_model_ratios_name, second_file_name
+                    first_file_name, onnx_model_ratios_name, second_file_name, False
                 )
             except uproot.exceptions.KeyInFileError:
                 print(
