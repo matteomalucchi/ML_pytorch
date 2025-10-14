@@ -1,3 +1,4 @@
+import sys
 import uproot
 import numpy as np
 import torch
@@ -9,6 +10,9 @@ import awkward as ak
 import pyarrow.parquet as pq
 import pyarrow.dataset as ds
 import glob
+import json
+
+from urllib.parse import urlsplit
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +70,7 @@ def oversample_dataset(X_dataset):
 
 def get_variables(
     files,
+    parquet_files,
     total_fraction_of_events,
     input_variables,
     sample_list,
@@ -89,12 +94,33 @@ def get_variables(
         # that each directory contains a single region of a single dataset
 
         # here we loop over the directories
-        for i, file_name in enumerate(files):
+        for i, file_name in enumerate(parquet_files):
             logger.info(f"Loading directory {file_name}")
+
+            # here i select the corresponding dataset to the parquet directory I'm looking at 
+            matching_dataset = [ds for ds in dataset_list if ds in file_name]
+            if len(matching_dataset) != 1:
+                logger.warning(
+                    f"Could not find a unique matching dataset for {file_name} from the list {dataset_list}"
+                )
+            matching_dataset = matching_dataset[0]
+            logger.info(f"Matching dataset {matching_dataset}")
+
+            # here i select the corresponding .coffea file as well
+            matching_coffea = [cf for cf in files if matching_dataset in cf]
+            if len(matching_coffea) != 1:
+                logger.warning(
+                    f"Could not find a unique matching coffea file for {file_name} from the list {files}"
+                )
+            matching_coffea = matching_coffea[0]
 
             # load the flat varibles
             dataset = ds.dataset(file_name, format="parquet")
             logger.debug(f"input_variables {input_variables}")
+
+            # load the corresponding .coffea file to get the sum of genweights
+            logger.info(f"Loading metacondition from {matching_coffea}")
+            file = load(matching_coffea)
 
             vars = [x for x in input_variables if ":" not in x]
             table = dataset.to_table(columns=vars)
@@ -130,7 +156,11 @@ def get_variables(
                     logger.info(f"vars_array[k] after {variables_array[k]}")
 
             # add the weights normalized to mean 1
-            variables_array["weights"] = jagged_variables_array["weight"] / np.mean(jagged_variables_array["weight"])
+            variables_array["weights"] = jagged_variables_array["weight"] / (
+                                            file["sum_genweights"][matching_dataset]
+                                            if matching_dataset in file["sum_genweights"]
+                                            else 1
+                                        )
 
             # concatenate in a single numpy matrix of shape (num_variables, num_events)
             variables_array = [ak.to_numpy(variables_array[f]) for f in input_variables + ["weights"]]
@@ -357,6 +387,9 @@ def load_data(cfg, seed):
     sig_files = []
     bkg_files = []
 
+    sig_parquet_files = []
+    bkg_parquet_files = []
+
     if cfg.data_format == "root":
         for x in dirs:
             files = os.listdir(x)
@@ -367,31 +400,41 @@ def load_data(cfg, seed):
                 for background in cfg.background_sample:
                     if background in file and "SR" in file:
                         bkg_files.append(x + file)
-    elif cfg.data_format == "parquet":
-        for x in dirs:
-            logger.info(f"Looking for files in {x}")
-            subdirs = os.listdir(x)
-            for s in subdirs:
-                logger.debug(f"Found file {s}")
-                if s in cfg.signal_dataset:
-                    for region in cfg.signal_region:
-                        sig_files.append(x + s + "/" + region)
-                if s in cfg.background_dataset:
-                    for region in cfg.signal_region:
-                        bkg_files.append(x + s + "/" + region)
-    elif cfg.data_format == "coffea":
-        sig_files = [
-            direct + file
-            for direct in dirs
-            for file in os.listdir(direct)
-            if file.endswith(".coffea")
-        ]
-        bkg_files = [
-            direct + file
-            for direct in dirs
-            for file in os.listdir(direct)
-            if file.endswith(".coffea")
-        ]
+    elif (cfg.data_format == "coffea") or (cfg.data_format == "parquet"):
+
+        for direct in dirs:
+            if not os.path.isdir(direct):
+                raise FileNotFoundError(f"Data directory not found: {direct}")
+            for file in os.listdir(direct):
+                if file.endswith(".coffea"):
+                    if any(signal in file for signal in cfg.signal_dataset):
+                        sig_files.append(direct + file)
+                    if any(background in file for background in cfg.background_dataset):
+                        bkg_files.append(direct + file)
+        print (sig_files)
+        print (bkg_files)
+
+        if cfg.data_format == "parquet":
+            print(cfg.data_format, "merda")
+            for dir in dirs:
+                with open(f"{dir}/config.json", "r") as f:
+                    config = json.load(f)
+                parquet_dirs_path = root_to_local(config["workflow"]["workflow_options"]["save_chunk"])
+
+                if not os.path.isdir(parquet_dirs_path):
+                    raise FileNotFoundError(f"Local path not found on this node: {parquet_dirs_path}")
+
+                for entry in os.scandir(parquet_dirs_path):
+                    logger.debug(f"Looking for files in {entry.path}")
+                    print(entry.name)
+                    if entry.name in cfg.signal_dataset:
+                        for region in cfg.signal_region:
+                            sig_parquet_files.append(entry.path + "/" + region)
+                    if entry.name in cfg.background_dataset:
+                        for region in cfg.signal_region:
+                            bkg_parquet_files.append(entry.path + "/" + region)
+            logger.info(f"parquet sig files: {sig_parquet_files}")
+            logger.info(f"parquet bkg files: {bkg_parquet_files}")
     else:
         logger.error(f"Data format {cfg.data_format} not supported")
         raise ValueError
@@ -401,6 +444,7 @@ def load_data(cfg, seed):
 
     X_sig, tot_lenght_sig = get_variables(
         sig_files,
+        sig_parquet_files,
         total_fraction_of_events,
         cfg.input_variables,
         cfg.signal_sample,
@@ -412,6 +456,7 @@ def load_data(cfg, seed):
     )
     X_bkg, tot_lenght_bkg = get_variables(
         bkg_files,
+        bkg_parquet_files,
         total_fraction_of_events,
         cfg.input_variables,
         cfg.background_sample,
@@ -611,3 +656,15 @@ def load_data(cfg, seed):
         X_lbl,
         batch_size,
     )
+
+def root_to_local(path_or_url: str):
+    """Turn 'root://host:port//abs/path' into '/abs/path'. Leave local paths unchanged."""
+    if path_or_url.startswith("root://"):
+        u = urlsplit(path_or_url)        # scheme='root', netloc='host:port', path='//abs/path'
+        p = u.path
+        while p.startswith("//"):        # normalize to single leading slash
+            p = p[1:]
+        if not p.startswith("/"):
+            p = "/" + p
+        return p
+    return path_or_url
