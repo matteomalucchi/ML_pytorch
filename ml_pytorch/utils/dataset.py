@@ -1,3 +1,4 @@
+import sys
 import uproot
 import numpy as np
 import torch
@@ -6,6 +7,12 @@ import logging
 import os
 from coffea.util import load
 import awkward as ak
+import pyarrow.parquet as pq
+import pyarrow.dataset as ds
+import glob
+import json
+
+from urllib.parse import urlsplit
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +70,7 @@ def oversample_dataset(X_dataset):
 
 def get_variables(
     files,
+    parquet_files,
     total_fraction_of_events,
     input_variables,
     sample_list,
@@ -81,6 +89,85 @@ def get_variables(
             variables_array = np.array(
                 [file[input].array(library="np") for input in input_variables]
             )
+    elif data_format == "parquet":
+        # function to load input files from chunks of .parquet the structure here presupposes 
+        # that each directory contains a single region of a single dataset
+
+        # here we loop over the directories
+        for i, file_name in enumerate(parquet_files):
+            logger.info(f"Loading directory {file_name}")
+
+            # here i select the corresponding dataset to the parquet directory I'm looking at 
+            matching_dataset = [ds for ds in dataset_list if ds in file_name]
+            if len(matching_dataset) != 1:
+                logger.warning(
+                    f"Could not find a unique matching dataset for {file_name} from the list {dataset_list}"
+                )
+            matching_dataset = matching_dataset[0]
+            logger.info(f"Matching dataset {matching_dataset}")
+
+            # here i select the corresponding .coffea file as well
+            matching_coffea = [cf for cf in files if matching_dataset in cf]
+            if len(matching_coffea) != 1:
+                logger.warning(
+                    f"Could not find a unique matching coffea file for {file_name} from the list {files}"
+                )
+            matching_coffea = matching_coffea[0]
+
+            # load the flat varibles
+            dataset = ds.dataset(file_name, format="parquet")
+            logger.debug(f"input_variables {input_variables}")
+
+            # load the corresponding .coffea file to get the sum of genweights
+            logger.info(f"Loading metacondition from {matching_coffea}")
+            file = load(matching_coffea)
+
+            vars = [x for x in input_variables if ":" not in x]
+            table = dataset.to_table(columns=vars)
+            variables_array = ak.from_arrow(table)
+
+            # load the jagged variables and add them flattened to the variables array
+            jagged_variables = []
+            max_pos = 0
+
+            for k in input_variables:
+                if ":" in k:
+                    variable_name, pos = k.split(":")
+                    if variable_name not in jagged_variables:
+                        jagged_variables.append(variable_name)
+                    if int(pos) > max_pos:
+                        max_pos = int(pos)
+
+            table = dataset.to_table()
+            jagged_variables_array = ak.from_arrow(table)
+            logger.debug(f"jagged_variables {jagged_variables}")
+
+            # add the wanted number of flattened features from the jagged variables to the feature array
+            for k in jagged_variables:
+                for pos in range(max_pos + 1):
+                    variables_array[k + ":" + str(pos)] = jagged_variables_array[k][:, int(pos)]
+
+            # apply any preprocessing function to the variables
+            for k in input_variables:
+                if k in preprocess_variables_functions:
+                    logger.info(f"Applying preprocessing function {preprocess_variables_functions[k]} to variable {k}")
+                    logger.info(f"vars_array[k] before {variables_array[k]}")
+                    variables_array[k] = functions_dict[preprocess_variables_functions[k][0]](variables_array[k], *preprocess_variables_functions[k][1])
+                    logger.info(f"vars_array[k] after {variables_array[k]}")
+
+            # add the weights normalized to mean 1
+            variables_array["weights"] = jagged_variables_array["weight"] / (
+                                            file["sum_genweights"][matching_dataset]
+                                            if matching_dataset in file["sum_genweights"]
+                                            else 1
+                                        )
+
+            # concatenate in a single numpy matrix of shape (num_variables, num_events)
+            variables_array = [ak.to_numpy(variables_array[f]) for f in input_variables + ["weights"]]
+            variables_array = np.array(variables_array)
+
+            logger.info(f"variables_array complete shape {variables_array.shape}")
+            
     elif data_format == "coffea":
         vars_array = []
         weights = []
@@ -185,7 +272,6 @@ def get_variables(
             logger.info(k)
             # unflatten all the jet variables
             collection = k.split("_")[0]
-            
             if k in preprocess_variables_functions:
                 logger.info(f"Applying preprocessing function {preprocess_variables_functions[k]} to variable {k}")
                 logger.info(f"vars_array[k] before {vars_array[k]}")
@@ -301,6 +387,9 @@ def load_data(cfg, seed):
     sig_files = []
     bkg_files = []
 
+    sig_parquet_files = []
+    bkg_parquet_files = []
+
     if cfg.data_format == "root":
         for x in dirs:
             files = os.listdir(x)
@@ -311,19 +400,39 @@ def load_data(cfg, seed):
                 for background in cfg.background_sample:
                     if background in file and "SR" in file:
                         bkg_files.append(x + file)
-    elif cfg.data_format == "coffea":
-        sig_files = [
-            direct + file
-            for direct in dirs
-            for file in os.listdir(direct)
-            if file.endswith(".coffea")
-        ]
-        bkg_files = [
-            direct + file
-            for direct in dirs
-            for file in os.listdir(direct)
-            if file.endswith(".coffea")
-        ]
+    elif (cfg.data_format == "coffea") or (cfg.data_format == "parquet"):
+        for direct in dirs:
+            if not os.path.isdir(direct):
+                raise FileNotFoundError(f"Data directory not found: {direct}")
+            for file in os.listdir(direct):
+                if file.endswith(".coffea"):
+                    if any(signal in file for signal in cfg.signal_dataset):
+                        sig_files.append(direct + file)
+                    if any(background in file for background in cfg.background_dataset):
+                        bkg_files.append(direct + file)
+        logger.info(f"coffea sig files: {sig_files}")
+        logger.info(f"coffea bkg files: {bkg_files}")
+
+        if cfg.data_format == "parquet":
+            for dir in dirs:
+                with open(f"{dir}/config.json", "r") as f:
+                    config = json.load(f)
+                parquet_dirs_path = root_to_local(config["workflow"]["workflow_options"]["save_chunk"])
+
+                if not os.path.isdir(parquet_dirs_path):
+                    raise FileNotFoundError(f"Local path not found on this node: {parquet_dirs_path}")
+
+                for entry in os.scandir(parquet_dirs_path):
+                    logger.debug(f"Looking for files in {entry.path}")
+                    print(entry.name)
+                    if entry.name in cfg.signal_dataset:
+                        for region in cfg.signal_region:
+                            sig_parquet_files.append(entry.path + "/" + region)
+                    if entry.name in cfg.background_dataset:
+                        for region in cfg.signal_region:
+                            bkg_parquet_files.append(entry.path + "/" + region)
+            logger.info(f"parquet sig files: {sig_parquet_files}")
+            logger.info(f"parquet bkg files: {bkg_parquet_files}")
     else:
         logger.error(f"Data format {cfg.data_format} not supported")
         raise ValueError
@@ -333,6 +442,7 @@ def load_data(cfg, seed):
 
     X_sig, tot_lenght_sig = get_variables(
         sig_files,
+        sig_parquet_files,
         total_fraction_of_events,
         cfg.input_variables,
         cfg.signal_sample,
@@ -344,6 +454,7 @@ def load_data(cfg, seed):
     )
     X_bkg, tot_lenght_bkg = get_variables(
         bkg_files,
+        bkg_parquet_files,
         total_fraction_of_events,
         cfg.input_variables,
         cfg.background_sample,
@@ -543,3 +654,15 @@ def load_data(cfg, seed):
         X_lbl,
         batch_size,
     )
+
+def root_to_local(path_or_url: str):
+    """Turn 'root://host:port//abs/path' into '/abs/path'. Leave local paths unchanged."""
+    if path_or_url.startswith("root://"):
+        u = urlsplit(path_or_url)        # scheme='root', netloc='host:port', path='//abs/path'
+        p = u.path
+        while p.startswith("//"):        # normalize to single leading slash
+            p = p[1:]
+        if not p.startswith("/"):
+            p = "/" + p
+        return p
+    return path_or_url
