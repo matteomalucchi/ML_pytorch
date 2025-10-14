@@ -401,7 +401,6 @@ def load_data(cfg, seed):
                     if background in file and "SR" in file:
                         bkg_files.append(x + file)
     elif (cfg.data_format == "coffea") or (cfg.data_format == "parquet"):
-
         for direct in dirs:
             if not os.path.isdir(direct):
                 raise FileNotFoundError(f"Data directory not found: {direct}")
@@ -411,11 +410,10 @@ def load_data(cfg, seed):
                         sig_files.append(direct + file)
                     if any(background in file for background in cfg.background_dataset):
                         bkg_files.append(direct + file)
-        print (sig_files)
-        print (bkg_files)
+        logger.info(f"coffea sig files: {sig_files}")
+        logger.info(f"coffea bkg files: {bkg_files}")
 
         if cfg.data_format == "parquet":
-            print(cfg.data_format, "merda")
             for dir in dirs:
                 with open(f"{dir}/config.json", "r") as f:
                     config = json.load(f)
