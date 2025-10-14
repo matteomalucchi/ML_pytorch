@@ -79,12 +79,14 @@ def main():
     else:
         base_dir = f"{base_dir}/out_ML_pytorch"
 
+
     if not cfg.output_dir:
         cfg.output_dir = f"{base_dir}/{os.path.basename(cfg_file_name).replace('.yml', '')}"
     main_dir = cfg.output_dir
 
-    name = main_dir.strip("/").split("/")[-1]
+    name = main_dir.strip("/").split("/")[-1] #actually run number
     name_configuration = main_dir.strip("/").split("/")[-2]
+    type = main_dir.strip("/").split("/")[-3]
 
     best_vloss = 1_000_000.0
     best_vaccuracy = 0.0
@@ -181,8 +183,8 @@ def main():
         logger.info("Setting up Comet logger")
         comet_logger = start(
             api_key=args.comet_token,
-            project_name="DNN training",
-            workspace=args.comet_name,
+            project_name=name_configuration,
+            workspace=f"hh4b-{type.replace('_', '-')}",
             )
         cfg_dict = OmegaConf.to_container(cfg, resolve=True)
         try:
@@ -191,7 +193,7 @@ def main():
             logger.info("No 'comet_token' key found in dictionary")
         logger.info(f"Recording tags {args.comet_tags}")
         comet_logger.log_parameters(cfg_dict)
-        comet_logger.add_tags(args.comet_tags)
+        comet_logger.add_tags([*args.comet_tags, name_configuration, f"s{cfg.seed}"])
         comet_logger.set_name(f"{name_configuration}_s{cfg.seed}")
     else:
         comet_logger = None

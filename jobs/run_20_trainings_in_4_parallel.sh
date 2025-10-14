@@ -19,7 +19,7 @@ if [[ -z "$1" ]]; then
     exit 1
 fi
 
-CONFIG="$1"
+CONFIG=${1%.yml}
 OUT_DIR="${2:-../out/bkg_reweighting/${CONFIG}}"
 CONFIG_FILE="../configs/bkg_reweighting/${CONFIG}.yml"
 
