@@ -6,3 +6,4 @@ out*/
 *.egg-info
 slurm*out
 test/
+jobs/comet_token.key

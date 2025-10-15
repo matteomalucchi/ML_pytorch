@@ -69,6 +69,14 @@ parser.add_argument(
     type=str,
 )
 parser.add_argument(
+    "-cw",
+    "--comet-workspace",
+    required=False,
+    default=None,
+    help="Workspace in which to register the model",
+    type=str,
+)
+parser.add_argument(
     "-ctg",
     "--comet-tags",
     required=False,
