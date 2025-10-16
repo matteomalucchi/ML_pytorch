@@ -55,3 +55,4 @@ onnx: True
 pin_memory: False
 overwrite: False
 output_dir: null
+novars: True

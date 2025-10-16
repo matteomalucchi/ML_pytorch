@@ -79,8 +79,8 @@ def get_variables(
     sig_bkg,
     data_format,
     preprocess_variables_functions,
+    novars=False,
 ):
-    NOVARS=False
     if data_format == "root":
         for i, file_name in enumerate(files):
             logger.info(f"Loading file {file_name}")
@@ -217,7 +217,7 @@ def get_variables(
                                 if region_file in region_list:
                                     logger.info("region_file %s", region_file)
                                     logger.info(f"FOUND DATA : {file_name} {sample} {dataset} {region_file}")
-                                    if NOVARS:
+                                    if novars:
                                         vars_array.append(
                                             file["columns"][sample][dataset][region_file]
                                         )
@@ -473,6 +473,7 @@ def load_data(cfg, seed):
         "signal",
         cfg.data_format,
         cfg.preprocess_variables_functions,
+        cfg.novars
     )
     X_bkg, tot_lenght_bkg = get_variables(
         bkg_files,
@@ -485,6 +486,7 @@ def load_data(cfg, seed):
         "background",
         cfg.data_format,
         cfg.preprocess_variables_functions,
+        cfg.novars
     )
 
 
