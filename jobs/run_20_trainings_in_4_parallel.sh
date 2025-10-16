@@ -15,13 +15,14 @@
 
 # Check arguments
 if [[ -z "$1" ]]; then
-    echo "Usage: $0 <CONFIG> [OUT_DIR]"
+    echo "Usage: $0 <CONFIG> [OUT_DIR] [ADDITIONAL_ARGS...]"
     exit 1
 fi
 
-CONFIG="$1"
+CONFIG=${1%.yml}
 OUT_DIR="${2:-../out/bkg_reweighting/${CONFIG}}"
-CONFIG_FILE="../configs/bkg_reweighting/${CONFIG}.yml"
+CONFIG_FILE="../configs/hh4b_bkg_reweighting/${CONFIG}.yml"
+EXTRA_ARGS=("${@:3}")
 
 LOAD_LAST=false
 INIT_SEED=$((5 * SLURM_ARRAY_TASK_ID))
@@ -29,6 +30,9 @@ INIT_SEED=$((5 * SLURM_ARRAY_TASK_ID))
 echo "Using CONFIG: $CONFIG"
 echo "Using CONFIG_FILE: $CONFIG_FILE"
 echo "Output directory: $OUT_DIR"
+if [[ ${#EXTRA_ARGS[@]} -gt 0 ]]; then
+    echo "Forwarding extra arguments to ml_train: ${EXTRA_ARGS[*]}"
+fi
 
 # Start 5 jobs in parallel
 for i in {0..4}; do
@@ -51,15 +55,10 @@ for i in {0..4}; do
 
     echo "[$SLURM_ARRAY_TASK_ID] Launching training with seed $SEED -> $RUN_DIR"
 
-	echo $MODEL_DIR
-    # Run each training in background (&) to parallelize
     shopt -s nullglob
     BEST_MODEL=$(ls "$MODEL_DIR"/*best_epoch*.onnx 2>/dev/null | head -n 1)
-echo $BEST_MODEL
-	# Capture matching files into an arrayV
     matches=("$MODEL_DIR"/*best_epoch*.onnx)
 
-	# Set BEST_MODEL only if we found matches
     if [[ "$LOAD_LAST" == true && ${#matches[@]} -gt 0 ]]; then
         echo "Skipping this run, because it is already finished"
     elif [[ -s "./comet_token.key" ]]; then
@@ -77,24 +76,28 @@ echo $BEST_MODEL
                      --gpus 0 -n 2 -c "$CONFIG_FILE" -s "$SEED" \
                      --load-model "$MODEL_PATH" \
                      --comet-token "$API_KEY" --comet-name "$API_UNAME" \
-                     --comet-tags "${API_TAGS[@]}" &
+                     --comet-tags "${API_TAGS[@]}" \
+                     "${EXTRA_ARGS[@]}" &
         else
             ml_train -o "$RUN_DIR" \
                      --eval --onnx --roc --histos --history \
                      --gpus 0 -n 2 -c "$CONFIG_FILE" -s "$SEED" --overwrite \
                      --comet-token "$API_KEY" --comet-name "$API_UNAME" \
-                     --comet-tags "${API_TAGS[@]}" &
+                     --comet-tags "${API_TAGS[@]}" \
+                     "${EXTRA_ARGS[@]}" &
         fi
     else
         if $LOAD_LAST; then
             ml_train -o "$RUN_DIR" \
                      --eval --onnx --roc --histos --history \
                      --gpus 0 -n 2 -c "$CONFIG_FILE" -s "$SEED" \
-                     --load-model "$MODEL_PATH" &
+                     --load-model "$MODEL_PATH" \
+                     "${EXTRA_ARGS[@]}" &
         else
             ml_train -o "$RUN_DIR" \
                      --eval --onnx --roc --histos --history \
-                     --gpus 0 -n 2 -c "$CONFIG_FILE" -s "$SEED" --overwrite &
+                     --gpus 0 -n 2 -c "$CONFIG_FILE" -s "$SEED" --overwrite \
+                     "${EXTRA_ARGS[@]}" &
         fi
     fi
 

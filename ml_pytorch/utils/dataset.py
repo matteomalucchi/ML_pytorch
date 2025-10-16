@@ -79,8 +79,8 @@ def get_variables(
     sig_bkg,
     data_format,
     preprocess_variables_functions,
+    novars=False,
 ):
-    tot_lenght = 0
     if data_format == "root":
         for i, file_name in enumerate(files):
             logger.info(f"Loading file {file_name}")
@@ -217,29 +217,50 @@ def get_variables(
                                 if region_file in region_list:
                                     logger.info("region_file %s", region_file)
                                     logger.info(f"FOUND DATA : {file_name} {sample} {dataset} {region_file}")
-                                    
-                                    vars_array.append(
-                                        file["columns"][sample][dataset][region_file]
-                                    )
-                                    weights.append(
-                                        file["columns"][sample][dataset][region_file][
-                                            "weight"
-                                        ].value
-                                        / (
-                                            file["sum_genweights"][dataset]
-                                            if dataset in file["sum_genweights"]
-                                            else 1
+                                    if novars:
+                                        vars_array.append(
+                                            file["columns"][sample][dataset][region_file]
                                         )
-                                    )
-                                    if dataset in file["sum_genweights"]:
-                                        logger.info(
-                                            f"original weight: {file['columns'][sample][dataset][region_file]['weight'].value[0]}"
+                                        weights.append(
+                                            file["columns"][sample][dataset][region_file][
+                                                "weight"
+                                            ].value
+                                            / (
+                                                file["sum_genweights"][dataset]
+                                                if dataset in file["sum_genweights"]
+                                                else 1
+                                            )
                                         )
-                                        logger.info(
-                                            f"sum_genweights: {file['sum_genweights'][dataset]}"
+                                        if dataset in file["sum_genweights"]:
+                                            logger.info(
+                                                f"original weight: {file['columns'][sample][dataset][region_file]['weight'].value[0]}"
+                                            )
+                                            logger.info(
+                                                f"sum_genweights: {file['sum_genweights'][dataset]}"
+                                            )
+                                    else:
+                                        vars_array.append(
+                                            file["columns"][sample][dataset][region_file]["nominal"]
                                         )
+                                        weights.append(
+                                            file["columns"][sample][dataset][region_file]["nominal"][
+                                                "weight"
+                                            ].value
+                                            / (
+                                                file["sum_genweights"][dataset]
+                                                if dataset in file["sum_genweights"]
+                                                else 1
+                                            )
+                                        )
+                                        if dataset in file["sum_genweights"]:
+                                            logger.info(
+                                                f"original weight: {file['columns'][sample][dataset][region_file]['nominal']['weight'].value[0]}"
+                                            )
+                                            logger.info(
+                                                f"sum_genweights: {file['sum_genweights'][dataset]}"
+                                            )
                                     logger.info(f"weight: {weights[-1]}")
-            
+
         if len(vars_array) < 1:
             logger.error(
                 f"Could not find any datasets in the files {files} with the sample_list {sample_list} and dataset_list {dataset_list} and region {region_list}"
@@ -250,14 +271,13 @@ def get_variables(
         try:
             # check that all datasets have been found
             # NOTE: the assert could be set to >= in general
-            assert len(vars_array)==len(dataset_list)
+            assert len(vars_array) == len(dataset_list)
         except AssertionError:
             logger.error(
                 f"Not all datasets were found in the files {files} with the sample_list {sample_list} and dataset_list {dataset_list} and region {region_list}"
             )
             raise AssertionError
-        
-        
+
         # Merge multiple lists:
         keys = set().union(*vars_array)
         logger.info(keys)
@@ -334,7 +354,6 @@ def get_variables(
         variables_array = np.append(variables_array, weights, axis=0)
         logger.info(f"variables_array complete {variables_array.shape}")
 
-    tot_lenght += variables_array.shape[1]
 
     # concatenate all the variables into a single torch tensor
     if "variables" not in locals():
@@ -350,7 +369,10 @@ def get_variables(
             ),
             dim=1,
         )[:, : math.ceil(total_fraction_of_events * variables_array.shape[1])]
-    logger.info(f"variable length {len(variables[0])}")
+    
+    tot_lenght = len(variables[0])
+    logger.info(f"variables length {tot_lenght}")
+    
 
     logger.info(f"number of {sig_bkg} events: {variables.shape[1]}")
 
@@ -407,9 +429,9 @@ def load_data(cfg, seed):
             for file in os.listdir(direct):
                 if file.endswith(".coffea"):
                     if any(signal in file for signal in cfg.signal_dataset):
-                        sig_files.append(direct + file)
+                        sig_files.append(os.path.join(direct, file))
                     if any(background in file for background in cfg.background_dataset):
-                        bkg_files.append(direct + file)
+                        bkg_files.append(os.path.join(direct, file))
         logger.info(f"coffea sig files: {sig_files}")
         logger.info(f"coffea bkg files: {bkg_files}")
 
@@ -451,6 +473,7 @@ def load_data(cfg, seed):
         "signal",
         cfg.data_format,
         cfg.preprocess_variables_functions,
+        cfg.novars
     )
     X_bkg, tot_lenght_bkg = get_variables(
         bkg_files,
@@ -463,8 +486,9 @@ def load_data(cfg, seed):
         "background",
         cfg.data_format,
         cfg.preprocess_variables_functions,
+        cfg.novars
     )
-        
+
 
     # compute class weights such that sumw is the same for signal and background and each weight is order of 1
 

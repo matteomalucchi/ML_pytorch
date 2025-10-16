@@ -69,6 +69,14 @@ parser.add_argument(
     type=str,
 )
 parser.add_argument(
+    "-cw",
+    "--comet-workspace",
+    required=False,
+    default=None,
+    help="Workspace in which to register the model",
+    type=str,
+)
+parser.add_argument(
     "-ctg",
     "--comet-tags",
     required=False,
@@ -142,7 +150,12 @@ parser.add_argument(
     help="Save numpy arrays of the output scores",
     action="store_true",
 )
-
+# parser.add_argument(
+#     "--novars",
+#     action="store_true",
+#     help="If true, old save format without saved variations is expected",
+#     default=False,
+# )
 
 # parser.print_help()
 args = parser.parse_args()

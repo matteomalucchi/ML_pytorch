@@ -11,13 +11,13 @@
 
 # Check arguments
 if [[ -z "$1" ]]; then
-    echo "Usage: $0 <CONFIG> [OUT_DIR]"
+    echo "Usage: $0 <CONFIG> [OUT_DIR] [ADDITIONAL_ARGS...]"
     exit 1
 fi
 
-CONFIG="$1"
+CONFIG=${1%.yml}
 OUT_DIR="${2:-../out/sig_bkg_classifier/${CONFIG}}"
-CONFIG_FILE="../configs/ggF_bkg_classifier/${CONFIG}.yml"
+CONFIG_FILE="../configs/hh4b_sig_bkg_classifier/${CONFIG}.yml"
 
 LOAD_LAST=false
 i=100
@@ -28,6 +28,9 @@ MODEL_DIR="$RUN_DIR/state_dict"
 echo "Using CONFIG: $CONFIG"
 echo "Using CONFIG_FILE: $CONFIG_FILE"
 echo "Output directory: $OUT_DIR"
+if [[ ${#EXTRA_ARGS[@]} -gt 0 ]]; then
+    echo "Forwarding extra arguments to ml_train: ${EXTRA_ARGS[*]}"
+fi
 
 mkdir -p "$RUN_DIR"
 
@@ -64,24 +67,27 @@ elif [[ -s "./comet_token.key" ]]; then
                  --gpus 0 -n 2 -c "$CONFIG_FILE" -s "$SEED" \
                  --load-model "$MODEL_PATH" \
                  --comet-token "$API_KEY" --comet-name "$API_UNAME" \
-                 --comet-tags "${API_TAGS[@]}" --overwrite
+                 --comet-tags "${API_TAGS[@]}" --overwrite \
+                 "${EXTRA_ARGS[@]}"
     else
         ml_train -o "$RUN_DIR" \
                  --eval --onnx --roc --histos --history \
                  --gpus 0 -n 2 -c "$CONFIG_FILE" -s "$SEED" \
-                 --overwrite \
                  --comet-token "$API_KEY" --comet-name "$API_UNAME" \
-                 --comet-tags "${API_TAGS[@]}" --overwrite
+                 --comet-tags "${API_TAGS[@]}" --overwrite \
+                 "${EXTRA_ARGS[@]}"
     fi
 else
     if $LOAD_LAST; then
         ml_train -o "$RUN_DIR" \
                  --eval --onnx --roc --histos --history \
                  --gpus 0 -n 2 -c "$CONFIG_FILE" -s "$SEED" \
-                 --load-model "$MODEL_PATH" --overwrite
+                 --load-model "$MODEL_PATH" --overwrite \
+                 "${EXTRA_ARGS[@]}"
     else
         ml_train -o "$RUN_DIR" \
                  --eval --onnx --roc --histos --history \
-                 --gpus 0 -n 2 -c "$CONFIG_FILE" -s "$SEED" --overwrite
+                 --gpus 0 -n 2 -c "$CONFIG_FILE" -s "$SEED" --overwrite \
+                 "${EXTRA_ARGS[@]}"
     fi
 fi
