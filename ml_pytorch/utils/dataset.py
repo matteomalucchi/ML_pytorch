@@ -80,7 +80,6 @@ def get_variables(
     data_format,
     preprocess_variables_functions,
 ):
-    tot_lenght = 0
     if data_format == "root":
         for i, file_name in enumerate(files):
             logger.info(f"Loading file {file_name}")
@@ -334,7 +333,6 @@ def get_variables(
         variables_array = np.append(variables_array, weights, axis=0)
         logger.info(f"variables_array complete {variables_array.shape}")
 
-    tot_lenght += variables_array.shape[1]
 
     # concatenate all the variables into a single torch tensor
     if "variables" not in locals():
@@ -350,7 +348,10 @@ def get_variables(
             ),
             dim=1,
         )[:, : math.ceil(total_fraction_of_events * variables_array.shape[1])]
-    logger.info(f"variable length {len(variables[0])}")
+    
+    tot_lenght = len(variables[0])
+    logger.info(f"variables length {tot_lenght}")
+    
 
     logger.info(f"number of {sig_bkg} events: {variables.shape[1]}")
 
