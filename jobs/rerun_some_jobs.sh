@@ -15,7 +15,7 @@
 # INIT_SEED=$((2 * SLURM_ARRAY_TASK_ID + 14))
 
 # Set config and output directories
-CONFIG_FILE=../configs/bkg_reweighting/DNN_AN_1e-3_e20drop75_minDelta1em5_SPANet_inclusive_b_region_bratioAll_postEE_DeltaProb.yml
+CONFIG_FILE=../configs/hh4b_bkg_reweighting/DNN_AN_1e-3_e20drop75_minDelta1em5_SPANet_inclusive_b_region_bratioAll_postEE_DeltaProb.yml
 OUT_DIR=../out/bkg_reweighting/DNN_AN_1e-3_e20drop75_minDelta1em5_SPANet_inclusive_b_region_bratioAll_postEE_DeltaProb
 
 # Start 5 jobs in parallel
