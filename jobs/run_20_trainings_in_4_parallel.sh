@@ -21,7 +21,7 @@ fi
 
 CONFIG=${1%.yml}
 OUT_DIR="${2:-../out/bkg_reweighting/${CONFIG}}"
-CONFIG_FILE="../configs/bkg_reweighting/${CONFIG}.yml"
+CONFIG_FILE="../configs/hh4b_bkg_reweighting/${CONFIG}.yml"
 
 LOAD_LAST=false
 INIT_SEED=$((5 * SLURM_ARRAY_TASK_ID))
@@ -55,7 +55,7 @@ for i in {0..4}; do
     # Run each training in background (&) to parallelize
     shopt -s nullglob
     BEST_MODEL=$(ls "$MODEL_DIR"/*best_epoch*.onnx 2>/dev/null | head -n 1)
-echo $BEST_MODEL
+    echo $BEST_MODEL
 	# Capture matching files into an arrayV
     matches=("$MODEL_DIR"/*best_epoch*.onnx)
 

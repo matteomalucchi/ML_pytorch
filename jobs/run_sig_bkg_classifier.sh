@@ -17,7 +17,7 @@ fi
 
 CONFIG="$1"
 OUT_DIR="${2:-../out/sig_bkg_classifier/${CONFIG}}"
-CONFIG_FILE="../configs/ggF_bkg_classifier/${CONFIG}.yml"
+CONFIG_FILE="../configs/hh4b_sig_bkg_classifier/${CONFIG}.yml"
 
 LOAD_LAST=false
 i=100

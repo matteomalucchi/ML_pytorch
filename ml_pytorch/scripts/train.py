@@ -183,7 +183,7 @@ def main():
         comet_logger = start(
             api_key=args.comet_token,
             project_name=name_configuration,
-            workspace=args.comet_workspace if args.comet_workspace else f"hh4b-{type_configuration.replace('_', '-')}",
+            workspace=args.comet_workspace if args.comet_workspace else type_configuration.replace('_', '-'),
             )
         cfg_dict = OmegaConf.to_container(cfg, resolve=True)
         try:
