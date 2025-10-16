@@ -5,3 +5,4 @@ mplhep==0.3.55
 ordered_set
 spox
 onnxruntime
+comet_ml==3.53.2

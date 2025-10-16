@@ -86,10 +86,8 @@ Additionally, there are now options to send the metrics of the training to [COME
 To set it up together with the files mentioned above:
 
 ```bash
-# Create file with token and username:
-touch comet_token.key
-# open the file with the editor of your choice
-vim comet_token.key
+# Open the file with the editor of your choice
+vim jobs/comet_token.key
 # in the first line write your username, and in the second line, write your token (to be retrieved on the website):
 # <uname>
 # <token>
