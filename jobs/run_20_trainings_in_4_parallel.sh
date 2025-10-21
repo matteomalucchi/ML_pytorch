@@ -122,3 +122,20 @@ for i in {0..4}; do
         echo "No best model found in $MODEL_DIR for seed $SEED"
     fi
 done
+
+
+# ---- Compute the average of the ratios of the best models ----
+echo "Running ONNX aggregation step..."
+cd "$OUT_DIR" || { echo "Error: Failed to cd into $OUT_DIR"; exit 1; }
+
+if ml_onnx -i best_models -o best_models -ar -v bkg_morphing_dnn_input_variables; then
+    echo "ml_onnx completed successfully with bkg_morphing_dnn_input_variables"
+else
+    echo "Primary ml_onnx command failed, retrying with bkg_morphing_dnn_DeltaProb_input_variables..."
+    if ml_onnx -i best_models -o best_models -ar -v bkg_morphing_dnn_DeltaProb_input_variables; then
+        echo "ml_onnx completed successfully with bkg_morphing_dnn_DeltaProb_input_variables"
+    else
+        echo "Error: both ml_onnx commands failed."
+        exit 1
+    fi
+fi
