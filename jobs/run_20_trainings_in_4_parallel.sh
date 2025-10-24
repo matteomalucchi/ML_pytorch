@@ -135,7 +135,12 @@ else
     if ml_onnx -i best_models -o best_models -ar -v bkg_morphing_dnn_DeltaProb_input_variables; then
         echo "ml_onnx completed successfully with bkg_morphing_dnn_DeltaProb_input_variables"
     else
-        echo "Error: both ml_onnx commands failed."
-        exit 1
+        echo "Primary ml_onnx command failed, retrying with bkg_morphing_dnn_SigBkgVariables_input_variables..."
+        if ml_onnx -i best_models -o best_models -ar -v bkg_morphing_dnn_SigBkgVariables_input_variables; then
+            echo "ml_onnx completed successfully with bkg_morphing_dnn_SigBkgVariables_input_variables"
+        else
+            echo "Error: both ml_onnx commands failed."
+            exit 1
+        fi
     fi
 fi
