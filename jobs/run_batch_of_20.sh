@@ -1,16 +1,25 @@
 #!/bin/bash
+#SBATCH --account=gpu_gres
+#SBATCH --job-name=bkg_reweight_20_trainings
+#SBATCH --cpus-per-task=2
+#SBATCH --mem-per-cpu=4000
+#SBATCH --time=2-00:00:00
+#SBATCH -p gpu
+#SBATCH --gres=gpu:1
 
-config_file=$1
-out_dir=$2
+
+CONFIG=${1%.yml}
+CONFIG_FILE="../configs/hh4b_bkg_reweighting/${CONFIG}.yml"
+OUT_DIR=$2
 #micromamba activate ML_pytorch
 
 # Find the next available batch folder
 batch_num=0
-while [ -d "$out_dir/batch$(printf "%02d" $batch_num)" ]; do
+while [ -d "$OUT_DIR/batch$(printf "%02d" $batch_num)" ]; do
     batch_num=$((batch_num + 1))
 done
 
-batch_dir="$out_dir/batch$(printf "%02d" $batch_num)"
+batch_dir="$OUT_DIR/batch$(printf "%02d" $batch_num)"
 mkdir -p "$batch_dir"
 echo "Created batch directory: $batch_dir"
 
@@ -18,7 +27,7 @@ echo "Created batch directory: $batch_dir"
 for i in {0..19}; do
     run_dir="$batch_dir/run$(printf "%02d" $i)"
     echo "Running script with output to: $run_dir"
-    ml_train -o "$run_dir" -c $config_file -s $i
+    ml_train -o "$run_dir" --eval --onnx --roc --histos --history --gpus 0 -n 2 -c $CONFIG_FILE -s $i
 done
 
 # Create best_models directory

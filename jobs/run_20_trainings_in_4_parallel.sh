@@ -1,8 +1,8 @@
 #!/bin/bash
 #SBATCH --account=gpu_gres
-#SBATCH --job-name=bg_reweight_20_trainings
+#SBATCH --job-name=bkg_reweight_20_trainings_parallel
 #SBATCH --cpus-per-task=10
-#SBATCH --mem-per-cpu=8000
+#SBATCH --mem-per-cpu=4000
 #SBATCH --time=8:30:00
 #SBATCH -p gpu
 #SBATCH --gres=gpu:1

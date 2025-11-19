@@ -5,10 +5,6 @@ out_dir=$2
 init_seed=$3
 #micromamba activate ML_pytorch
 
-# config_file=../configs/bkg_reweighting/DNN_AN_1e-3_e20drop75_minDelta1em5_SPANet_inclusive_b_region_btag_ratioAll_postEE.yml
-# out_dir=../out/bkg_reweighting/DNN_AN_1e-3_e20drop75_minDelta1em5_SPANet_inclusive_b_region_btag_ratioAll_postEE/
-# init_seed=15
-
 # Find the next available batch folder
 batch_num=0
 while [ -d "$out_dir/batch$(printf "%02d" $batch_num)" ]; do
