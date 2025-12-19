@@ -9,7 +9,6 @@ from coffea.util import load
 import awkward as ak
 import pyarrow.parquet as pq
 import pyarrow.dataset as ds
-import glob
 import json
 
 from urllib.parse import urlsplit
@@ -64,7 +63,7 @@ def oversample_dataset(X_dataset):
     oversampled_dataset = torch.utils.data.TensorDataset(
         X_fts_oversampled, X_lbl_oversampled, X_clsw_oversampled
     )
-    # breakpoint()
+    
     return oversampled_dataset
 
 
@@ -92,7 +91,7 @@ def get_variables(
     elif data_format == "parquet":
         # function to load input files from chunks of .parquet the structure here presupposes 
         # that each directory contains a single region of a single dataset
-
+        variables_array_list=[]
         # here we loop over the directories
         for i, file_name in enumerate(parquet_files):
             logger.info(f"Loading directory {file_name}")
@@ -163,11 +162,19 @@ def get_variables(
                                         )
 
             # concatenate in a single numpy matrix of shape (num_variables, num_events)
-            variables_array = [ak.to_numpy(variables_array[f]) for f in input_variables + ["weights"]]
-            variables_array = np.array(variables_array)
+            variables_array = np.array([ak.to_numpy(variables_array[f]) for f in input_variables + ["weights"]])
 
             logger.info(f"variables_array complete shape {variables_array.shape}")
-            
+            variables_array_list.append(variables_array)
+    
+        if len(variables_array_list) == 0:
+            raise ValueError("No parquet data loaded")
+
+        # concatenate along event axis
+        variables_array = np.concatenate(variables_array_list, axis=1)
+
+        logger.info(f"variables_array complete shape {variables_array.shape}")
+    
     elif data_format == "coffea":
         vars_array = []
         weights = []
@@ -451,7 +458,7 @@ def load_data(cfg, seed):
                         for region in cfg.signal_region:
                             sig_parquet_files.append(entry.path + "/" + region)
                     if entry.name in cfg.background_dataset:
-                        for region in cfg.signal_region:
+                        for region in cfg.background_region:
                             bkg_parquet_files.append(entry.path + "/" + region)
             logger.info(f"parquet sig files: {sig_parquet_files}")
             logger.info(f"parquet bkg files: {bkg_parquet_files}")
