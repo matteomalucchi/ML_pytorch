@@ -71,5 +71,5 @@ test_fraction: 0.05
 
 data_dirs:
   [
-    /pnfs/psi.ch/cms/trivcat/store/user/tharte/datasets/samples_models_with_bkg_reweight/1_14_2_spanet_ptflat_Update_newLeptonVeto_3L1Cut_UpdateJetVetoMap,
+    /pnfs/psi.ch/cms/trivcat/store/user/tharte/datasets/samples_models_with_bkg_reweight/1_14_5_spanet_ptflat_Update_newLeptonVeto_3L1Cut_UpdateJetVetoMap,
   ]
