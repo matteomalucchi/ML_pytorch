@@ -17,7 +17,7 @@ ML_model: DNN_model
 data_format: coffea
 verbosity: info
 
-seed: 1
+seed: 100
 
 batch_size: 512
 epochs: 50

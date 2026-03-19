@@ -20,9 +20,7 @@ OUT_DIR="${2:-../out/sig_bkg_classifier/${CONFIG}}"
 CONFIG_FILE="../configs/hh4b_sig_bkg_classifier/${CONFIG}.yml"
 
 LOAD_LAST=false
-i=100
-SEED=$((i))
-RUN_DIR="${OUT_DIR}/run$(printf "%02d" $SEED)"
+RUN_DIR="${OUT_DIR}"
 MODEL_DIR="$RUN_DIR/state_dict"
 
 echo "Using CONFIG: $CONFIG"
@@ -64,7 +62,7 @@ elif [[ -s "./comet_token.key" ]]; then
     if [[ $LOAD_LAST == true ]]; then
         ml_train -o "$RUN_DIR" \
                  --eval --onnx --roc --histos --history \
-                 --gpus 0 -n 2 -c "$CONFIG_FILE" -s "$SEED" \
+                 --gpus 0 -n 2 -c "$CONFIG_FILE" \
                  --load-model "$MODEL_PATH" \
                  --comet-token "$API_KEY" --comet-name "$API_UNAME" \
                  --comet-tags "${API_TAGS[@]}" --overwrite \
@@ -72,7 +70,7 @@ elif [[ -s "./comet_token.key" ]]; then
     else
         ml_train -o "$RUN_DIR" \
                  --eval --onnx --roc --histos --history \
-                 --gpus 0 -n 2 -c "$CONFIG_FILE" -s "$SEED" \
+                 --gpus 0 -n 2 -c "$CONFIG_FILE" \
                  --comet-token "$API_KEY" --comet-name "$API_UNAME" \
                  --comet-tags "${API_TAGS[@]}" --overwrite \
                  "${EXTRA_ARGS[@]}"
@@ -81,13 +79,13 @@ else
     if $LOAD_LAST; then
         ml_train -o "$RUN_DIR" \
                  --eval --onnx --roc --histos --history \
-                 --gpus 0 -n 2 -c "$CONFIG_FILE" -s "$SEED" \
+                 --gpus 0 -n 2 -c "$CONFIG_FILE" \
                  --load-model "$MODEL_PATH" --overwrite \
                  "${EXTRA_ARGS[@]}"
     else
         ml_train -o "$RUN_DIR" \
                  --eval --onnx --roc --histos --history \
-                 --gpus 0 -n 2 -c "$CONFIG_FILE" -s "$SEED" --overwrite \
+                 --gpus 0 -n 2 -c "$CONFIG_FILE" --overwrite \
                  "${EXTRA_ARGS[@]}"
     fi
 fi
