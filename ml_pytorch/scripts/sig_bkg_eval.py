@@ -167,393 +167,475 @@ def plot_sig_bkg_distributions(
     print("sig_weight_test",sig_weight_test, sig_weight_test.shape)
     print("bkg_weight_test",bkg_weight_test, bkg_weight_test.shape)
     
-    # fig, ax = plt.subplots()
-    fig, (ax, ax_ratio) = plt.subplots(
-        2,
-        1,
-        figsize=[13, 13],
-        sharex=True,
-        gridspec_kw={"height_ratios": [2.5, 1]},
-    )
-    sig_train = ax.hist(
-        sig_score_train,
-        weights=sig_weight_train,
-        bins=30,
-        range=(0, 1),
-        histtype="step",
-        label="Signal (training)",
-        density=True,
-        edgecolor="blue",
-        facecolor="dodgerblue",
-        fill=True,
-        alpha=0.5,
-    )
-    bkg_train = ax.hist(
-        bkg_score_train,
-        weights=bkg_weight_train,
-        bins=30,
-        range=(0, 1),
-        histtype="step",
-        label="Background (training)",
-        density=True,
-        color="r",
-        fill=False,
-        hatch="\\\\",
-    )
+    # get the kl values
+    try:
+        sig_kl_train, bkg_kl_train = handle_arrays(score_lbl_tensor_train, 3)
+        sig_kl_test, bkg_kl_test = handle_arrays(score_lbl_tensor_test, 3)
+    except IndexError:
+        print("WARNING: No kl values found in the input file. Using equal weights.")
+        sig_kl_train = np.ones_like(sig_score_train) * 9999.
+        bkg_kl_train = np.ones_like(bkg_score_train) * 9999.
+        sig_kl_test = np.ones_like(sig_score_test) * 9999.
+        bkg_kl_test = np.ones_like(bkg_score_test) * 9999.
+    
+    print("sig_kl_train",sig_kl_train, sig_kl_train.shape)
+    print("bkg_kl_train",bkg_kl_train, bkg_kl_train.shape)
+    print("sig_kl_test",sig_kl_test, sig_kl_test.shape)
+    print("bkg_kl_test",bkg_kl_test, bkg_kl_test.shape)
 
-    max_bin = max(max(sig_train[0]), max(bkg_train[0]))
-    # set limit on y-axis
-    ax.set_ylim(top=max_bin * 2)
-    i = 0
-    legend_test_list = []
-    for (
-        score_test,
-        weight_test,
-        score_train,
-        weight_train,
-        color,
-        label,
-        rescale_factor,
-    ) in zip(
-        [sig_score_test, bkg_score_test],
-        [sig_weight_test, bkg_weight_test],
-        [sig_score_train, bkg_score_train],
-        [sig_weight_train, bkg_weight_train],
-        ["blue", "r"],
-        ["Signal (test)", "Background (test)"],
-        rescale if rescale else [1, 1],
-    ):
-
-        bins = np.linspace(0, 1, 31)
-        bin_centers = (bins[1:] + bins[:-1]) / 2
-        bin_width = bins[1] - bins[0]
-        weight_test = weight_test / (np.sum(weight_test) * bin_width)
-        weight_train = weight_train / (np.sum(weight_train) * bin_width)
-
-        idx_train = np.digitize(score_train, bins)
-        idx_test = np.digitize(score_test, bins)
-        h_test = []
-        h_train = []
-        err_test = []
-        err_train = []
-
-        for j in range(1, len(bins)):
-            h_test.append(np.sum(weight_test[idx_test == j]))
-            h_train.append(np.sum(weight_train[idx_train == j]))
-            err_test.append(np.sqrt(np.sum(weight_test[idx_test == j] ** 2)))
-            err_train.append(np.sqrt(np.sum(weight_train[idx_train == j] ** 2)))
-
-        h_test = np.array(h_test)
-        h_train = np.array(h_train)
-        err_test = np.array(err_test)
-        err_train = np.array(err_train)
+    kl_unique_values = list(np.unique(sig_kl_train))
+    print("kl_unique_values",kl_unique_values)
+    
+    # loop over the differetn kl for signal and take inclusively for bkg
+    for kl in kl_unique_values + ["all"]:
+        if kl != "all":
+            sig_score_train_kl=sig_score_train[sig_kl_train==kl]
+            sig_weight_train_kl=sig_weight_train[sig_kl_train==kl]
+            sig_score_test_kl=sig_score_test[sig_kl_test==kl]
+            sig_weight_test_kl=sig_weight_test[sig_kl_test==kl]
+        else:
+            sig_score_train_kl=sig_score_train
+            sig_weight_train_kl=sig_weight_train
+            sig_score_test_kl=sig_score_test
+            sig_weight_test_kl=sig_weight_test
         
-        print("h_test",h_test)
-        print("h_train",h_train)
-        print("err_test",err_test)
-        print("err_train",err_train)
-            
-
-        ratio = h_test / h_train
-        ratio_err_test = np.sqrt(
-            (err_test / h_train) ** 2 + (h_test * err_train / h_train**2) ** 2
+        fig, (ax, ax_ratio) = plt.subplots(
+            2,
+            1,
+            figsize=[13, 13],
+            sharex=True,
+            gridspec_kw={"height_ratios": [2.5, 1]},
         )
-        ratio_band_train = err_train / h_train
+        sig_train = ax.hist(
+            sig_score_train_kl,
+            weights=sig_weight_train_kl,
+            bins=30,
+            range=(0, 1),
+            histtype="step",
+            label=f"Signal (training) - kl = {kl:.2f}",
+            density=True,
+            edgecolor="blue",
+            facecolor="dodgerblue",
+            fill=True,
+            alpha=0.5,
+        )
+        bkg_train = ax.hist(
+            bkg_score_train,
+            weights=bkg_weight_train,
+            bins=30,
+            range=(0, 1),
+            histtype="step",
+            label="Background (training)",
+            density=True,
+            color="r",
+            fill=False,
+            hatch="\\\\",
+        )
 
-        legend_test_list.append(
-            ax.errorbar(
+        max_bin = max(max(sig_train[0]), max(bkg_train[0]))
+        # set limit on y-axis
+        ax.set_ylim(top=max_bin * 2)
+        i = 0
+        legend_test_list = []
+        for (
+            score_test,
+            weight_test,
+            score_train,
+            weight_train,
+            color,
+            label,
+            rescale_factor,
+        ) in zip(
+            [sig_score_test_kl, bkg_score_test],
+            [sig_weight_test_kl, bkg_weight_test],
+            [sig_score_train_kl, bkg_score_train],
+            [sig_weight_train_kl, bkg_weight_train],
+            ["blue", "r"],
+            [f"Signal (test) - kl = {kl:.2f}", "Background (test)"],
+            rescale if rescale else [1, 1],
+        ):
+
+            bins = np.linspace(0, 1, 31)
+            bin_centers = (bins[1:] + bins[:-1]) / 2
+            bin_width = bins[1] - bins[0]
+            weight_test = weight_test / (np.sum(weight_test) * bin_width)
+            weight_train = weight_train / (np.sum(weight_train) * bin_width)
+
+            idx_train = np.digitize(score_train, bins)
+            idx_test = np.digitize(score_test, bins)
+            h_test = []
+            h_train = []
+            err_test = []
+            err_train = []
+
+            for j in range(1, len(bins)):
+                h_test.append(np.sum(weight_test[idx_test == j]))
+                h_train.append(np.sum(weight_train[idx_train == j]))
+                err_test.append(np.sqrt(np.sum(weight_test[idx_test == j] ** 2)))
+                err_train.append(np.sqrt(np.sum(weight_train[idx_train == j] ** 2)))
+
+            h_test = np.array(h_test)
+            h_train = np.array(h_train)
+            err_test = np.array(err_test)
+            err_train = np.array(err_train)
+            
+            print("h_test",h_test)
+            print("h_train",h_train)
+            print("err_test",err_test)
+            print("err_train",err_train)
+                
+
+            ratio = h_test / h_train
+            ratio_err_test = np.sqrt(
+                (err_test / h_train) ** 2 + (h_test * err_train / h_train**2) ** 2
+            )
+            ratio_band_train = err_train / h_train
+
+            legend_test_list.append(
+                ax.errorbar(
+                    bin_centers,
+                    h_test,
+                    yerr=err_test,
+                    marker="o",
+                    color=color,
+                    label=label,
+                    linestyle="None",
+                )
+            )
+
+            # ratio plot
+            ax_ratio.errorbar(
                 bin_centers,
-                h_test,
-                yerr=err_test,
+                ratio,
+                yerr=ratio_err_test,
                 marker="o",
                 color=color,
                 label=label,
                 linestyle="None",
             )
-        )
-
-        # ratio plot
-        ax_ratio.errorbar(
-            bin_centers,
-            ratio,
-            yerr=ratio_err_test,
-            marker="o",
-            color=color,
-            label=label,
-            linestyle="None",
-        )
-        ax_ratio.fill_between(
-            bin_centers,
-            1 - ratio_band_train,
-            1 + ratio_band_train,
-            color=color,
-            alpha=0.2,
-        )
-        ax_ratio.axhline(y=1, color="black", linestyle="--")
-
-        # remove empty bins
-        mask = (h_test != 0 ) & (h_train != 0)
-        h_test_nonzero = h_test[mask]
-        h_train_nonzero = h_train[mask]
-        err_test_nonzero = err_test[mask]
-        err_train_nonzero = err_train[mask]
-        
-        print("h_test_nonzero",h_test_nonzero)
-        print("h_train_nonzero",h_train_nonzero)
-        print("err_test_nonzero",err_test_nonzero)
-        print("err_train_nonzero",err_train_nonzero)
-        
-
-        # compute chi squared
-        chi_squared = np.sum(
-            (
-                (h_test_nonzero - h_train_nonzero)
-                / np.sqrt(err_test_nonzero**2 + err_train_nonzero**2)
+            ax_ratio.fill_between(
+                bin_centers,
+                1 - ratio_band_train,
+                1 + ratio_band_train,
+                color=color,
+                alpha=0.2,
             )
-            ** 2
-        )
-        ndof = len(bin_centers) - 1
-        chi2_norm = chi_squared / ndof
-        pvalue = 1 - stats.chi2.cdf(chi_squared, ndof)
+            ax_ratio.axhline(y=1, color="black", linestyle="--")
 
+            # remove empty bins
+            mask = (h_test != 0 ) & (h_train != 0)
+            h_test_nonzero = h_test[mask]
+            h_train_nonzero = h_train[mask]
+            err_test_nonzero = err_test[mask]
+            err_train_nonzero = err_train[mask]
+            
+            print("h_test_nonzero",h_test_nonzero)
+            print("h_train_nonzero",h_train_nonzero)
+            print("err_test_nonzero",err_test_nonzero)
+            print("err_train_nonzero",err_train_nonzero)
+            
+
+            # compute chi squared
+            chi_squared = np.sum(
+                (
+                    (h_test_nonzero - h_train_nonzero)
+                    / np.sqrt(err_test_nonzero**2 + err_train_nonzero**2)
+                )
+                ** 2
+            )
+            ndof = len(bin_centers) - 1
+            chi2_norm = chi_squared / ndof
+            pvalue = 1 - stats.chi2.cdf(chi_squared, ndof)
+
+            ax.text(
+                0.6,
+                0.75 - 0.05 * i,
+                r"$\chi^2$/ndof= {:.1f},".format(chi2_norm) + f"  p-value= {pvalue:.2f}",
+                horizontalalignment="left",
+                verticalalignment="center",
+                transform=ax.transAxes,
+                color=color,
+                fontsize=20,
+            )
+
+            i += 1
+
+        ks_statistic_sig, p_value_sig = stats.ks_2samp(sig_score_train_kl, sig_score_test_kl)
+        ks_statistic_bkg, p_value_bkg = stats.ks_2samp(bkg_score_train, bkg_score_test)
+        print(f"\nKS: statistic (sig) = {ks_statistic_sig:.30f}")
+        print(f"KS: p-value (sig) = {p_value_sig:.30f}")
+        print(f"KS: statistic (bkg) = {ks_statistic_bkg:.30f}")
+        print(f"KS: p-value (bkg) = {p_value_bkg:.30f}")
+
+        # print the KS test results on the plot
         ax.text(
             0.6,
-            0.75 - 0.05 * i,
-            r"$\chi^2$/ndof= {:.1f},".format(chi2_norm) + f"  p-value= {pvalue:.2f}",
-            horizontalalignment="left",
-            verticalalignment="center",
-            transform=ax.transAxes,
-            color=color,
+            0.925,
+            f"KS: p-value = {p_value_sig:.2f}",
             fontsize=20,
+            transform=ax.transAxes,
+            color="blue",
+        )
+        ax.text(
+            0.6,
+            0.85,
+            f"KS: p-value = {p_value_bkg:.2f}",
+            fontsize=20,
+            transform=ax.transAxes,
+            color="red",
         )
 
-        i += 1
+        # Compute significance
 
-    ks_statistic_sig, p_value_sig = stats.ks_2samp(sig_score_train, sig_score_test)
-    ks_statistic_bkg, p_value_bkg = stats.ks_2samp(bkg_score_train, bkg_score_test)
-    print(f"\nKS: statistic (sig) = {ks_statistic_sig:.30f}")
-    print(f"KS: p-value (sig) = {p_value_sig:.30f}")
-    print(f"KS: statistic (bkg) = {ks_statistic_bkg:.30f}")
-    print(f"KS: p-value (bkg) = {p_value_bkg:.30f}")
+        counts_test_list = []
+        for score, weight, rescale_factor in zip(
+            [sig_score_test_kl, bkg_score_test],
+            [sig_weight_test_kl, bkg_weight_test],
+            rescale if rescale else [1, 1],
+        ):
+            counts, bins = np.histogram(
+                score,
+                weights=weight * rescale_factor,
+                bins=1000,
+                density=True,
+                range=(0, 1),
+            )
+            counts_test_list.append(counts)
+            bin_width = bins[1:] - bins[:-1]
+            bin_centers = 0.5 * (bins[:-1] + bins[1:])
 
-    # print the KS test results on the plot
-    ax.text(
-        0.6,
-        0.925,
-        f"KS: p-value = {p_value_sig:.2f}",
-        fontsize=20,
-        transform=ax.transAxes,
-        color="blue",
-    )
-    ax.text(
-        0.6,
-        0.85,
-        f"KS: p-value = {p_value_bkg:.2f}",
-        fontsize=20,
-        transform=ax.transAxes,
-        color="red",
-    )
+        n_sig = np.sum(sig_weight_test_kl) / test_fraction * (rescale[0] if rescale else 1)
+        n_bkg = np.sum(bkg_weight_test) / test_fraction * (rescale[1] if rescale else 1)
+        significance = n_sig / np.sqrt(n_bkg)
+        print(f"\nNumber of signal events in the test dataset: {n_sig}")
+        print(f"Number of background events in the test dataset: {n_bkg}")
+        print(f"Significance: {significance:.2f}\n")
+        
+        handles_legend = [
+            sig_train[2][0],
+            legend_test_list[0],
+            bkg_train[2][0],
+            legend_test_list[1],
+        ]
 
-    # Compute significance
-
-    counts_test_list = []
-    for score, weight, rescale_factor in zip(
-        [sig_score_test, bkg_score_test],
-        [sig_weight_test, bkg_weight_test],
-        rescale if rescale else [1, 1],
-    ):
-        counts, bins = np.histogram(
-            score,
-            weights=weight * rescale_factor,
-            bins=1000,
-            density=True,
-            range=(0, 1),
-        )
-        counts_test_list.append(counts)
-        bin_width = bins[1:] - bins[:-1]
-        bin_centers = 0.5 * (bins[:-1] + bins[1:])
-
-    n_sig = np.sum(sig_weight_test) / test_fraction * (rescale[0] if rescale else 1)
-    n_bkg = np.sum(bkg_weight_test) / test_fraction * (rescale[1] if rescale else 1)
-    significance = n_sig / np.sqrt(n_bkg)
-    print(f"\nNumber of signal events in the test dataset: {n_sig}")
-    print(f"Number of background events in the test dataset: {n_bkg}")
-    print(f"Significance: {significance:.2f}\n")
-    
-    handles_legend = [
-        sig_train[2][0],
-        legend_test_list[0],
-        bkg_train[2][0],
-        legend_test_list[1],
-    ]
-
-    if signal_eff != -1:
-        if get_max_significance:
-            max_significance = -1
-            for sig_eff_target in np.linspace(0.0, 1.0, 30):
-                # compute the significance for each signal efficiency
-                # and find the DNN cut that maximizes the significance
-                (infos_significance) = compute_significance(
-                    sig_eff_target,
+        if signal_eff != -1:
+            if get_max_significance:
+                max_significance = -1
+                for sig_eff_target in np.linspace(0.0, 1.0, 30):
+                    # compute the significance for each signal efficiency
+                    # and find the DNN cut that maximizes the significance
+                    (infos_significance) = compute_significance(
+                        sig_eff_target,
+                        counts_test_list,
+                        bin_centers,
+                        bin_width,
+                        sig_score_test_kl,
+                        bkg_score_test,
+                        sig_weight_test_kl,
+                        bkg_weight_test,
+                        test_fraction,
+                        rescale,
+                    )
+                    if infos_significance[-1] > max_significance:
+                        max_significance = infos_significance[-1]
+                        print("max_significance", max_significance)
+                        (
+                            dnn_score_target,
+                            bkg_rejection,
+                            n_sig_above_target,
+                            n_bkg_above_target,
+                            significance_above_target,
+                        ) = infos_significance
+                        signal_eff = sig_eff_target
+            else:
+                (
+                    dnn_score_target,
+                    bkg_rejection,
+                    n_sig_above_target,
+                    n_bkg_above_target,
+                    significance_above_target,
+                ) = compute_significance(
+                    signal_eff,
                     counts_test_list,
                     bin_centers,
                     bin_width,
-                    sig_score_test,
+                    sig_score_test_kl,
                     bkg_score_test,
-                    sig_weight_test,
+                    sig_weight_test_kl,
                     bkg_weight_test,
                     test_fraction,
                     rescale,
                 )
-                if infos_significance[-1] > max_significance:
-                    max_significance = infos_significance[-1]
-                    print("max_significance", max_significance)
-                    (
-                        dnn_score_target,
-                        bkg_rejection,
-                        n_sig_above_target,
-                        n_bkg_above_target,
-                        significance_above_target,
-                    ) = infos_significance
-                    signal_eff = sig_eff_target
-        else:
-            (
-                dnn_score_target,
-                bkg_rejection,
-                n_sig_above_target,
-                n_bkg_above_target,
-                significance_above_target,
-            ) = compute_significance(
-                signal_eff,
-                counts_test_list,
-                bin_centers,
-                bin_width,
-                sig_score_test,
-                bkg_score_test,
-                sig_weight_test,
-                bkg_weight_test,
-                test_fraction,
-                rescale,
+
+            print(
+                f"\n###########\nNumber of signal events above {signal_eff:.3f} signal efficiency threshold: {n_sig_above_target:.3f}"
             )
-
-        print(
-            f"\n###########\nNumber of signal events above {signal_eff:.3f} signal efficiency threshold: {n_sig_above_target:.3f}"
-        )
-        print(
-            f"Number of background events above {signal_eff:.3f} signal efficiency threshold: {n_bkg_above_target:.3f}"
-        )
-        print(
-            f"Significance ({dnn_score_target:.3f} DNN cut): {significance_above_target:.3f}"
-        )
-        # plot the vertical line for the signal efficiency
-        line_target = plt.axvline(
-            dnn_score_target,
-            color="grey",
-            linestyle="--",
-            label="Sig efficiency {:.2f}\nBkg rejection {:.2f}\nDNN score {:.2f}".format(
-                signal_eff,
-                bkg_rejection,
+            print(
+                f"Number of background events above {signal_eff:.3f} signal efficiency threshold: {n_bkg_above_target:.3f}"
+            )
+            print(
+                f"Significance ({dnn_score_target:.3f} DNN cut): {significance_above_target:.3f}"
+            )
+            # plot the vertical line for the signal efficiency
+            line_target = plt.axvline(
                 dnn_score_target,
-            ),
+                color="grey",
+                linestyle="--",
+                label="Sig efficiency {:.2f}\nBkg rejection {:.2f}\nDNN score {:.2f}".format(
+                    signal_eff,
+                    bkg_rejection,
+                    dnn_score_target,
+                ),
+            )
+            handles_legend.append(line_target)
+
+        ax_ratio.set_xlabel("Output score")
+        ax.set_ylabel("Normalized counts")
+        ax_ratio.set_ylabel("Test/Train")
+        ax_ratio.set_ylim(0.75, 1.25)
+
+        ax.legend(
+            loc="upper left",
+            # loc="center",
+            # bbox_to_anchor=(0.3, 0.9),
+            fontsize=20,
+            handles=handles_legend,
+            frameon=False,
         )
-        handles_legend.append(line_target)
+        ax.grid()
+        ax_ratio.grid()
+        # plt.plot([0.09, 0.88], [8.35, 8.35], color="lightgray", linestyle="-", transform=plt.gca().transAxes)
 
-    ax_ratio.set_xlabel("Output score")
-    ax.set_ylabel("Normalized counts")
-    ax_ratio.set_ylabel("Test/Train")
-    ax_ratio.set_ylim(0.75, 1.25)
-
-    ax.legend(
-        loc="upper left",
-        # loc="center",
-        # bbox_to_anchor=(0.3, 0.9),
-        fontsize=20,
-        handles=handles_legend,
-        frameon=False,
-    )
-    ax.grid()
-    ax_ratio.grid()
-    # plt.plot([0.09, 0.88], [8.35, 8.35], color="lightgray", linestyle="-", transform=plt.gca().transAxes)
-
-    hep.cms.lumitext("2022 (13.6 TeV)", ax=ax)
-    hep.cms.text(
-        text="Preliminary",
-        ax=ax,
-        loc=0,
-    )
-    if comet_logger:
-        comet_logger.log_figure("sig_bkg_distributions", plt)
-    plt.savefig(f"{dir}/sig_bkg_distributions.png", bbox_inches="tight", dpi=300)
-    plt.savefig(f"{dir}/sig_bkg_distributions.pdf", bbox_inches="tight", dpi=300)
-    plt.savefig(f"{dir}/sig_bkg_distributions.svg", bbox_inches="tight", dpi=300)
-    ax.set_ylim(bottom=1e-2, top=max_bin**4)
-    ax.set_yscale("log")
-    if comet_logger:
-        comet_logger.log_figure("sig_bkg_distributions_log", plt)
-    plt.savefig(f"{dir}/sig_bkg_distributions_log.png", bbox_inches="tight", dpi=300)
-    plt.savefig(f"{dir}/sig_bkg_distributions_log.pdf", bbox_inches="tight", dpi=300)
-    plt.savefig(f"{dir}/sig_bkg_distributions_log.svg", bbox_inches="tight", dpi=300)
-    if show:
-        plt.show()
+        hep.cms.lumitext("2022 (13.6 TeV)", ax=ax)
+        hep.cms.text(
+            text="Preliminary",
+            ax=ax,
+            loc=0,
+        )
+        if comet_logger:
+            comet_logger.log_figure("sig_bkg_distributions", plt)
+        plt.savefig(f"{dir}/sig_bkg_distributions_kl_{kl:.2f}.png", bbox_inches="tight", dpi=300)
+        plt.savefig(f"{dir}/sig_bkg_distributions_kl_{kl:.2f}.pdf", bbox_inches="tight", dpi=300)
+        plt.savefig(f"{dir}/sig_bkg_distributions_kl_{kl:.2f}.svg", bbox_inches="tight", dpi=300)
+        ax.set_ylim(bottom=1e-2, top=max_bin**4)
+        ax.set_yscale("log")
+        if comet_logger:
+            comet_logger.log_figure("sig_bkg_distributions_log", plt)
+        plt.savefig(f"{dir}/sig_bkg_distributions_kl_{kl:.2f}_log.png", bbox_inches="tight", dpi=300)
+        plt.savefig(f"{dir}/sig_bkg_distributions_kl_{kl:.2f}_log.pdf", bbox_inches="tight", dpi=300)
+        plt.savefig(f"{dir}/sig_bkg_distributions_kl_{kl:.2f}_log.svg", bbox_inches="tight", dpi=300)
+        if show:
+            plt.show()
+        plt.close(fig)
 
 
 def plot_roc_curve(score_lbl_tensor_test, dir, show, comet_logger=None):
-    # plot the ROC curve
-    fig, ax = plt.subplots()
-    try:
-        sample_weights = score_lbl_tensor_test[:, 2]
-    except IndexError:
-        print("WARNING: No weights found in the input file. Using equal weights.")
-        sample_weights = np.ones_like(score_lbl_tensor_test[:, 0])
-
-    fpr, tpr, _ = roc_curve(
-        score_lbl_tensor_test[:, 1],
-        score_lbl_tensor_test[:, 0],
-        sample_weight=sample_weights,
-    )
-    roc_auc = my_roc_auc(
-        score_lbl_tensor_test[:, 1],
-        score_lbl_tensor_test[:, 0],
-        sample_weight=sample_weights,
-    )
-    plt.plot(tpr, fpr, label="ROC curve (pos+neg weights AUC = %0.3f)" % roc_auc)
-
-    abs_weights_fpr, abs_weights_tpr, _ = roc_curve(
-        score_lbl_tensor_test[:, 1],
-        score_lbl_tensor_test[:, 0],
-        sample_weight=abs(sample_weights),
-    )
-    abs_weights_roc_auc = roc_auc_score(
-        score_lbl_tensor_test[:, 1],
-        score_lbl_tensor_test[:, 0],
-        sample_weight=abs(sample_weights),
-    )
-    plt.plot(
-        abs_weights_tpr,
-        abs_weights_fpr,
-        label="ROC curve (abs weights AUC = %0.3f)" % abs_weights_roc_auc,
-    )
-
-    plt.plot([0, 1], [0, 1], color="gray", linestyle="--")
-    plt.xlabel("True positive rate")
-    plt.ylabel("False positive rate")
-    plt.legend(loc="upper left")
-    plt.yscale("log")
+    sig_score_test, bkg_score_test = handle_arrays(score_lbl_tensor_test, 0)
+    sig_lbl_test, bkg_lbl_test = handle_arrays(score_lbl_tensor_test, 1)
     
-    hep.cms.lumitext(
-        "2022 (13.6 TeV)",
-    )
-    hep.cms.text(
-        text="Preliminary",
-        loc=0,
-    )
-    if comet_logger:
-        comet_logger.log_figure("roc_curve", plt)
-    plt.savefig(f"{dir}/roc_curve.png", bbox_inches="tight", dpi=300)
-    plt.savefig(f"{dir}/roc_curve.pdf", bbox_inches="tight", dpi=300)
-    plt.savefig(f"{dir}/roc_curve.svg", bbox_inches="tight", dpi=300)
-    if show:
-        plt.show()
+    # get the weight
+    try:
+        sig_weight_test, bkg_weight_test = handle_arrays(score_lbl_tensor_test, 2)
+    except IndexError:
+        print("WARNING: No weight values found in the input file. Using equal weight.")
+        sig_weight_test = np.ones_like(sig_score_test)
+        bkg_weight_test = np.ones_like(bkg_score_test)
+    
+    print("sig_weight_test",sig_weight_test, sig_weight_test.shape)
+    print("bkg_weight_test",bkg_weight_test, bkg_weight_test.shape)
+    
+    # get the kl values
+    try:
+        sig_kl_test, bkg_kl_test = handle_arrays(score_lbl_tensor_test, 3)
+    except IndexError:
+        print("WARNING: No kl values found in the input file. Using equal weights.")
+        sig_kl_test = np.ones_like(sig_score_test) * 9999.
+        bkg_kl_test = np.ones_like(bkg_score_test) * 9999.
+    
+    print("sig_kl_test",sig_kl_test, sig_kl_test.shape)
+    print("bkg_kl_test",bkg_kl_test, bkg_kl_test.shape)
+    
+    kl_unique_values = list(np.unique(sig_kl_test))
+    print("kl_unique_values",kl_unique_values)
+
+    # loop over the differetn kl for signal and take inclusively for bkg
+    for kl in kl_unique_values + ["all"]:
+        if kl != "all":
+            sig_score_test_kl=sig_score_test[sig_kl_test==kl]
+            sig_weight_test_kl=sig_weight_test[sig_kl_test==kl]
+            sig_lbl_test_kl=sig_lbl_test[sig_kl_test==kl]
+        else:
+            sig_score_test_kl=sig_score_test
+            sig_weight_test_kl=sig_weight_test
+            sig_lbl_test_kl=sig_lbl_test
+            
+        score=np.concatenate((sig_score_test_kl, bkg_score_test))
+        weight=np.concatenate((sig_weight_test_kl, bkg_weight_test))
+        lbl=np.concatenate((sig_lbl_test_kl, bkg_lbl_test))
+                
+        # plot the ROC curve
+        fig, ax = plt.subplots()
+
+        fpr, tpr, _ = roc_curve(
+            lbl,
+            score,
+            sample_weight=weight,
+        )
+        roc_auc = my_roc_auc(
+            lbl,
+            score,
+            sample_weight=weight,
+        )
+        plt.plot(tpr, fpr, label=f"ROC curve - kl = {kl:.2f} (pos+neg weights AUC = {roc_auc:.3f})")
+        
+
+        abs_weights_fpr, abs_weights_tpr, _ = roc_curve(
+            lbl,
+            score,
+            sample_weight=abs(weight),
+        )
+        abs_weights_roc_auc = roc_auc_score(
+            lbl,
+            score,
+            sample_weight=abs(weight),
+        )
+        plt.plot(
+            abs_weights_tpr,
+            abs_weights_fpr,
+            label=f"ROC curve - kl = {kl:.2f} (abs weights AUC = {abs_weights_roc_auc:.3f})",
+        )
+        
+        # save tpr and fpr in a npz file
+        np.savez(
+            f"{dir}/tpr_fpr_kl_{kl:.2f}.npz",
+            tpr=tpr,
+            fpr=fpr,
+            abs_weights_tpr=abs_weights_tpr,
+            abs_weights_fpr=abs_weights_fpr,
+        )
+        
+
+        # plt.plot([0, 1], [0, 1], color="gray", linestyle="--")
+        plt.xlabel("True positive rate")
+        plt.ylabel("False positive rate")
+        plt.legend(loc="upper left", fontsize="small")
+        plt.yscale("log")
+        
+        hep.cms.lumitext(
+            "2022 (13.6 TeV)",
+        )
+        hep.cms.text(
+            text="Preliminary",
+            loc=0,
+        )
+        if comet_logger:
+            comet_logger.log_figure("roc_curve", plt)
+        plt.savefig(f"{dir}/roc_curve_kl_{kl:.2f}.png", bbox_inches="tight", dpi=300)
+        plt.savefig(f"{dir}/roc_curve_kl_{kl:.2f}.pdf", bbox_inches="tight", dpi=300)
+        plt.savefig(f"{dir}/roc_curve_kl_{kl:.2f}.svg", bbox_inches="tight", dpi=300)
+        if show:
+            plt.show()
+        plt.close(fig)
 
 
 def main():

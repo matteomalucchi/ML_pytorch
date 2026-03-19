@@ -35,12 +35,15 @@ def loop_one_batch(
     all_scores,
     all_labels,
     all_weights,
+    all_kl_values,
     type_eval,
 ):
-    inputs, labels, class_weights = data
+    inputs, labels, class_weights, kl_values = data
+    
     inputs = inputs.to(device, non_blocking=True)
     labels = labels.to(device, non_blocking=True)
     class_weights = class_weights.to(device, non_blocking=True)
+    kl_values = kl_values.to(device, non_blocking=True)
 
     event_weights = inputs[:, -1]
     inputs = inputs[:, :-1]
@@ -114,12 +117,12 @@ def loop_one_batch(
             print("i", i)
 
     if i + 1 >= step_prints * count:
-        if count == 2 and epoch_index == 0:
-            print("outputs", outputs, outputs.shape)
-            print("labels", labels, labels.shape)
-            print("loss", loss, loss.shape)
-            print("inputs", inputs, inputs.shape)
-            print("weights", weights, weights.shape)
+        if count == 2 and (epoch_index == 0 or eval_model):
+            logger.info(f"outputs {outputs}, {outputs.shape}")
+            logger.info(f"labels {labels}, {labels.shape}")
+            logger.info(f"loss {loss}, {loss.shape}")
+            logger.info(f"inputs {inputs}, {inputs.shape}")
+            logger.info(f"weights {weights}, {weights.shape}")
 
         count += 1
 
@@ -159,7 +162,6 @@ def loop_one_batch(
                 last_loss,
             )
         )
-        # if not train: breakpoint()
 
         # type = "train" if train else "val"
         # tb_writer.add_scalar(f"Accuracy/{type}", last_accuracy, tb_x)
@@ -175,10 +177,12 @@ def loop_one_batch(
             all_scores = outputs.cpu().detach()
             all_labels = labels.cpu().detach()
             all_weights = event_weights.cpu().detach()
+            all_kl_values = kl_values.cpu().detach()
         else:
             all_scores = torch.cat((all_scores, outputs.cpu().detach()))
             all_labels = torch.cat((all_labels, labels.cpu().detach()))
             all_weights = torch.cat((all_weights, event_weights.cpu().detach()))
+            all_kl_values = torch.cat((all_kl_values, kl_values.cpu().detach()))
 
     return (
         running_loss,
@@ -191,6 +195,7 @@ def loop_one_batch(
         all_scores,
         all_labels,
         all_weights,
+        all_kl_values,
     )
 
 
@@ -251,6 +256,7 @@ def train_val_one_epoch(
     all_scores = None
     all_labels = None
     all_weights = None
+    all_kl_values  = None
 
     # Loop over the training data
     for i, data in enumerate(loader):
@@ -285,6 +291,7 @@ def train_val_one_epoch(
             all_scores,
             all_labels,
             all_weights,
+            all_kl_values,
             None,
         )
 
@@ -342,6 +349,7 @@ def eval_model(model, loader, loss_fn, type_eval, device, best_epoch):
     all_scores = None
     all_labels = None
     all_weights = None
+    all_kl_values = None
 
     for i, data in enumerate(loader):
         (
@@ -355,6 +363,7 @@ def eval_model(model, loader, loss_fn, type_eval, device, best_epoch):
             all_scores,
             all_labels,
             all_weights,
+            all_kl_values,
         ) = loop_one_batch(
             running_loss,
             tot_loss,
@@ -377,6 +386,7 @@ def eval_model(model, loader, loss_fn, type_eval, device, best_epoch):
             all_scores,
             all_labels,
             all_weights,
+            all_kl_values,
             type_eval,
         )
 
@@ -397,8 +407,9 @@ def eval_model(model, loader, loss_fn, type_eval, device, best_epoch):
     all_scores = all_scores.view(-1, 1)
     all_labels = all_labels.view(-1, 1)
     all_weights = all_weights.view(-1, 1)
+    all_kl_values = all_kl_values.view(-1, 1)
 
-    score_lbl_tensor = torch.cat((all_scores, all_labels, all_weights), 1)
+    score_lbl_tensor = torch.cat((all_scores, all_labels, all_weights, all_kl_values), 1)
     logger.info(f"score_lbl_tensor shape: {score_lbl_tensor.shape}")
 
     # detach the tensor from the graph and convert to numpy array

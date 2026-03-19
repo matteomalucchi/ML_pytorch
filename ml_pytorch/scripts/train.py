@@ -84,7 +84,7 @@ def main():
         cfg.output_dir = f"{base_dir}/{os.path.basename(cfg_file_name).replace('.yml', '')}"
     main_dir = cfg.output_dir
 
-    name = main_dir.split("/")[-1]  # actually run number
+    name = main_dir.rstrip("/").split("/")[-1]  # actually run number
     name_configuration = os.path.basename(cfg_file_name).rsplit('.', 1)[0]  # split once from right side at . and take first part (should remove ending of file)
     type_configuration  = cfg_file_name.split("/")[-2]  # Should give name of type by choice of in which folder the config file is saved. Watch out, if we have subfolders.
 
@@ -202,13 +202,10 @@ def main():
         training_loader,
         val_loader,
         test_loader,
-        train_size,
-        val_size,
-        test_size,
-        X_fts,
-        X_lbl,
+        input_size,
         batch_size,
     ) = load_data(cfg, cfg.seed)
+    
     if cfg.gpus is not None:
         gpus = [int(i) for i in cfg.gpus.split(",")]
         device = torch.device(gpus[0])
@@ -216,8 +213,6 @@ def main():
         gpus = None
         device = torch.device("cpu")
     logger.info(f"Using {device} device")
-
-    input_size = X_fts.size(1) - 1
 
     # Get validation evaluator (if best model by loss or accuracy)
     eval_param = cfg.eval_param
@@ -505,9 +500,9 @@ def main():
             plot_roc_curve(score_lbl_array_test, main_dir, False, comet_logger=comet_logger)
 
     # remove ML_model_loaded.py
-    if cfg.load_model or cfg.eval_model:
-        os.system(f"rm {file_dir}/../models/ML_model_loaded.py")
-        logger.info("Removed ML_model_loaded.py")
+    # if cfg.load_model or cfg.eval_model:
+    #     os.system(f"rm {file_dir}/../models/ML_model_loaded.py")
+    #     logger.info("Removed ML_model_loaded.py")
 
     logger.info("Saved output in %s" % main_dir)
 

@@ -10,7 +10,7 @@ import awkward as ak
 import pyarrow.parquet as pq
 import pyarrow.dataset as ds
 import json
-
+import re
 from urllib.parse import urlsplit
 
 logger = logging.getLogger(__name__)
@@ -81,6 +81,7 @@ def get_variables(
     novars=False,
 ):
     if data_format == "root":
+        raise ValueError("Not updated for root format!")
         for i, file_name in enumerate(files):
             logger.info(f"Loading file {file_name}")
             # open each file and get the Events tree using uproot
@@ -104,6 +105,15 @@ def get_variables(
                 )
             matching_dataset = matching_dataset[0]
             logger.info(f"Matching dataset {matching_dataset}")
+            
+            if "kl" in matching_dataset:
+                kl_val=extract_param_value(matching_dataset, "kl")
+            elif "C2V" in matching_dataset:
+                kl_val=extract_param_value(matching_dataset, "C2V")
+            else:
+                kl_val=9999.
+                
+            logger.info(f"kl value found in dataset {matching_dataset} is {kl_val}")
 
             # here i select the corresponding .coffea file as well
             matching_coffea = [cf for cf in files if matching_dataset in cf]
@@ -160,9 +170,12 @@ def get_variables(
                                             if matching_dataset in file["sum_genweights"]
                                             else 1
                                         )
+            
+            # add the kl value
+            variables_array["kl"] = np.full(len(variables_array), kl_val)
 
             # concatenate in a single numpy matrix of shape (num_variables, num_events)
-            variables_array = np.array([ak.to_numpy(variables_array[f]) for f in input_variables + ["weights"]])
+            variables_array = np.array([ak.to_numpy(variables_array[f]) for f in input_variables + ["weights", "kl"]])
 
             logger.info(f"variables_array complete shape {variables_array.shape}")
             variables_array_list.append(variables_array)
@@ -178,6 +191,7 @@ def get_variables(
     elif data_format == "coffea":
         vars_array = []
         weights = []
+        kl_values = []
         variables_dict = {}
         for i, file_name in enumerate(files):
             logger.info(f"Loading file {file_name}")
@@ -218,6 +232,16 @@ def get_variables(
                                 logger.warning(
                                     f"region_list {region_list} not in available regions {list(file['columns'][sample][dataset].keys())}"
                                 )
+                            
+                            if "kl" in dataset:
+                                kl_val=extract_param_value(dataset, "kl")
+                            elif "C2V" in dataset:
+                                kl_val=extract_param_value(dataset, "C2V")
+                            else:
+                                kl_val=9999.
+                            
+                            logger.info(f"kl value found in dataset {dataset} is {kl_val}")
+                                
                             for region_file in list(
                                 file["columns"][sample][dataset].keys()
                             ):
@@ -238,6 +262,8 @@ def get_variables(
                                                 else 1
                                             )
                                         )
+                                        kl_values.append(np.full(len(file["columns"][sample][dataset][region_file]["weight"].value), kl_val))
+                                        
                                         if dataset in file["sum_genweights"]:
                                             logger.info(
                                                 f"original weight: {file['columns'][sample][dataset][region_file]['weight'].value[0]}"
@@ -259,6 +285,8 @@ def get_variables(
                                                 else 1
                                             )
                                         )
+                                        kl_values.append(np.full(len(file["columns"][sample][dataset][region_file]["nominal"]["weight"].value), kl_val))
+                                        
                                         if dataset in file["sum_genweights"]:
                                             logger.info(
                                                 f"original weight: {file['columns'][sample][dataset][region_file]['nominal']['weight'].value[0]}"
@@ -294,6 +322,9 @@ def get_variables(
         vars_array = concat
         # Concatenate multiple weights
         weights = np.concatenate(weights, axis=0)
+        
+        # Concatenate multiple kl values
+        kl_values = np.concatenate(kl_values, axis=0)
 
         for k in input_variables:
             logger.info(k)
@@ -347,6 +378,7 @@ def get_variables(
                 variables_dict[k] = ak.to_numpy(ak.unflatten(vars_array[k], 1))
 
         weights = np.expand_dims(weights, axis=0)
+        kl_values = np.expand_dims(kl_values, axis=0)
         
         #normalize the weights to have mean of 1
         weights = weights / np.mean(weights)
@@ -358,7 +390,7 @@ def get_variables(
 
         logger.info(f"variables_array {variables_array.shape}")
         logger.info(f"weights {weights.shape}")
-        variables_array = np.append(variables_array, weights, axis=0)
+        variables_array = np.concatenate([variables_array, weights, kl_values], axis=0)
         logger.info(f"variables_array complete {variables_array.shape}")
 
 
@@ -393,7 +425,11 @@ def get_variables(
     idx = np.random.permutation(tot_lenght)
     variables=variables[:,idx]
 
-    X = (variables, flag_tensor)
+    # get the kl and remove it from the variables    
+    kl_values =  variables[-1].unsqueeze(0)
+    variables = variables[:-1]
+    
+    X = (variables, flag_tensor, kl_values)
     return X, tot_lenght
 
 
@@ -515,7 +551,10 @@ def load_data(cfg, seed):
         X_bkg_l = X_bkg[1][
             :, :num_events_sig
         ]
-        X_bkg = (X_bkg_f, X_bkg_l)
+        X_bkg_k = X_bkg[2][
+            :, :num_events_sig
+        ]
+        X_bkg = (X_bkg_f, X_bkg_l, X_bkg_k)
         logger.info(f"Number of background events after undersampling {X_bkg[0].shape[1]}")
         
     
@@ -530,7 +569,10 @@ def load_data(cfg, seed):
         X_sig_l = X_sig[1].repeat((1, num_events_bkg // num_events_sig + 1))[
             :, :num_events_bkg
         ]
-        X_sig = (X_sig_f, X_sig_l)
+        X_sig_k = X_sig[2].repeat((1, num_events_bkg // num_events_sig + 1))[
+            :, :num_events_bkg
+        ]
+        X_sig = (X_sig_f, X_sig_l, X_sig_k)
         logger.info(f"Number of signal events after oversampling {X_sig[0].shape[1]}")
 
     num_events_bkg = X_bkg[0].shape[1]
@@ -593,10 +635,12 @@ def load_data(cfg, seed):
     X_clsw = torch.cat(
         (sig_class_weights_tensor, bkg_class_weights_tensor), dim=1
     ).transpose(1, 0)
+    X_k = torch.cat((X_sig[2], X_bkg[2]), dim=1).transpose(1, 0).flatten()
 
     logger.info(f"X_fts shape: {X_fts.shape}")
     logger.info(f"X_lbl shape: {X_lbl.shape}")
     logger.info(f"X_clsw shape: {X_clsw.shape}")
+    logger.info(f"X_k shape: {X_k.shape}")
 
     tot_num_events = num_events_sig + num_events_bkg
     if True:
@@ -605,6 +649,7 @@ def load_data(cfg, seed):
         X_fts = X_fts[idx]
         X_lbl = X_lbl[idx]
         X_clsw = X_clsw[idx]
+        X_k = X_k[idx]
 
     train_size = math.floor(tot_num_events * cfg.train_fraction)
     val_size = math.floor(tot_num_events * cfg.val_fraction)
@@ -616,8 +661,9 @@ def load_data(cfg, seed):
     X_fts = X_fts[:tot_events]
     X_lbl = X_lbl[:tot_events]
     X_clsw = X_clsw[:tot_events]
+    X_k = X_k[:tot_events]
 
-    X = torch.utils.data.TensorDataset(X_fts, X_lbl, X_clsw)
+    X = torch.utils.data.TensorDataset(X_fts, X_lbl, X_clsw, X_k)
 
     logger.info(f"Total size: {len(X)}")
     logger.info(f"Training size: {train_size}")
@@ -673,16 +719,16 @@ def load_data(cfg, seed):
             pin_memory=cfg.pin_memory,
         )
         logger.info("Test loader size: %d", len(test_loader))
+    
 
+    # remove 1 because of the weights
+    input_size = X_fts.size(1) - 1
+    
     return (
         training_loader,
         val_loader,
         test_loader,
-        train_size,
-        val_size,
-        test_size,
-        X_fts,
-        X_lbl,
+        input_size,
         batch_size,
     )
 
@@ -697,3 +743,34 @@ def root_to_local(path_or_url: str):
             p = "/" + p
         return p
     return path_or_url
+
+def extract_param_value(s, param):
+    """
+    Extract a parameter value from a string.
+
+    Parameters
+    ----------
+    s : str
+        Input string.
+    param : str
+        Parameter name to extract (e.g. 'kl', 'CV', 'C2V', 'C3', 'kt').
+
+    Returns
+    -------
+    float or None
+        Extracted value or None if not found.
+    """
+
+    # pattern allows "-" or "_" after param name
+    pattern = rf"{param}[-_]([mp0-9]+)"
+
+    match = re.search(pattern, s)
+    if not match:
+        return None
+
+    value_str = match.group(1)
+
+    # convert encoding: m -> -, p -> .
+    value_str = value_str.replace("m", "-").replace("p", ".")
+
+    return float(value_str)
