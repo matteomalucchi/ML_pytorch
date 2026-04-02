@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 from ml_pytorch.defaults.preprocess_variables_functions import functions_dict
 
+
 def oversample_dataset(X_dataset):
 
     X_fts, X_lbl, X_clsw = X_dataset[:][0], X_dataset[:][1], X_dataset[:][2]
@@ -32,10 +33,12 @@ def oversample_dataset(X_dataset):
 
     num_events_bkg = int(torch.sum(X_lbl == 0))
     num_events_sig = int(torch.sum(X_lbl == 1))
-    
+
     # TODO: FIX
-    if num_events_sig>num_events_bkg:
-        raise ValueError("Number of signal events is greater than number of background events. This will be fixed in the oversampling function")
+    if num_events_sig > num_events_bkg:
+        raise ValueError(
+            "Number of signal events is greater than number of background events. This will be fixed in the oversampling function"
+        )
 
     oversample_factor = num_events_bkg // num_events_sig + 1
 
@@ -63,7 +66,7 @@ def oversample_dataset(X_dataset):
     oversampled_dataset = torch.utils.data.TensorDataset(
         X_fts_oversampled, X_lbl_oversampled, X_clsw_oversampled
     )
-    
+
     return oversampled_dataset
 
 
@@ -90,14 +93,14 @@ def get_variables(
                 [file[input].array(library="np") for input in input_variables]
             )
     elif data_format == "parquet":
-        # function to load input files from chunks of .parquet the structure here presupposes 
+        # function to load input files from chunks of .parquet the structure here presupposes
         # that each directory contains a single region of a single dataset
-        variables_array_list=[]
+        variables_array_list = []
         # here we loop over the directories
         for i, file_name in enumerate(parquet_files):
             logger.info(f"Loading directory {file_name}")
 
-            # here i select the corresponding dataset to the parquet directory I'm looking at 
+            # here i select the corresponding dataset to the parquet directory I'm looking at
             matching_dataset = [ds for ds in dataset_list if ds in file_name]
             if len(matching_dataset) != 1:
                 logger.warning(
@@ -105,14 +108,14 @@ def get_variables(
                 )
             matching_dataset = matching_dataset[0]
             logger.info(f"Matching dataset {matching_dataset}")
-            
+
             if "kl" in matching_dataset:
-                kl_val=extract_param_value(matching_dataset, "kl")
+                kl_val = extract_param_value(matching_dataset, "kl")
             elif "C2V" in matching_dataset:
-                kl_val=extract_param_value(matching_dataset, "C2V")
+                kl_val = extract_param_value(matching_dataset, "C2V")
             else:
-                kl_val=9999.
-                
+                kl_val = 9999.0
+
             logger.info(f"kl value found in dataset {matching_dataset} is {kl_val}")
 
             # here i select the corresponding .coffea file as well
@@ -154,32 +157,43 @@ def get_variables(
             # add the wanted number of flattened features from the jagged variables to the feature array
             for k in jagged_variables:
                 for pos in range(max_pos + 1):
-                    variables_array[k + ":" + str(pos)] = jagged_variables_array[k][:, int(pos)]
+                    variables_array[k + ":" + str(pos)] = jagged_variables_array[k][
+                        :, int(pos)
+                    ]
 
             # apply any preprocessing function to the variables
             for k in input_variables:
                 if k in preprocess_variables_functions:
-                    logger.info(f"Applying preprocessing function {preprocess_variables_functions[k]} to variable {k}")
+                    logger.info(
+                        f"Applying preprocessing function {preprocess_variables_functions[k]} to variable {k}"
+                    )
                     logger.info(f"vars_array[k] before {variables_array[k]}")
-                    variables_array[k] = functions_dict[preprocess_variables_functions[k][0]](variables_array[k], *preprocess_variables_functions[k][1])
+                    variables_array[k] = functions_dict[
+                        preprocess_variables_functions[k][0]
+                    ](variables_array[k], *preprocess_variables_functions[k][1])
                     logger.info(f"vars_array[k] after {variables_array[k]}")
 
             # add the weights normalized to mean 1
             variables_array["weights"] = jagged_variables_array["weight"] / (
-                                            file["sum_genweights"][matching_dataset]
-                                            if matching_dataset in file["sum_genweights"]
-                                            else 1
-                                        )
-            
+                file["sum_genweights"][matching_dataset]
+                if matching_dataset in file["sum_genweights"]
+                else 1
+            )
+
             # add the kl value
             variables_array["kl"] = np.full(len(variables_array), kl_val)
 
             # concatenate in a single numpy matrix of shape (num_variables, num_events)
-            variables_array = np.array([ak.to_numpy(variables_array[f]) for f in input_variables + ["weights", "kl"]])
+            variables_array = np.array(
+                [
+                    ak.to_numpy(variables_array[f])
+                    for f in input_variables + ["weights", "kl"]
+                ]
+            )
 
             logger.info(f"variables_array complete shape {variables_array.shape}")
             variables_array_list.append(variables_array)
-    
+
         if len(variables_array_list) == 0:
             raise ValueError("No parquet data loaded")
 
@@ -187,7 +201,7 @@ def get_variables(
         variables_array = np.concatenate(variables_array_list, axis=1)
 
         logger.info(f"variables_array complete shape {variables_array.shape}")
-    
+
     elif data_format == "coffea":
         vars_array = []
         weights = []
@@ -201,7 +215,7 @@ def get_variables(
                 logger.warning(
                     f"sample_list {sample_list} not in available samples {list(file['columns'].keys())}"
                 )
-            
+
             for sample in list(file["columns"].keys()):
                 logger.info("sample %s", sample)
                 logger.debug(list(file["columns"].keys()))
@@ -232,38 +246,53 @@ def get_variables(
                                 logger.warning(
                                     f"region_list {region_list} not in available regions {list(file['columns'][sample][dataset].keys())}"
                                 )
-                            
+
                             if "kl" in dataset:
-                                kl_val=extract_param_value(dataset, "kl")
+                                kl_val = extract_param_value(dataset, "kl")
                             elif "C2V" in dataset:
-                                kl_val=extract_param_value(dataset, "C2V")
+                                kl_val = extract_param_value(dataset, "C2V")
                             else:
-                                kl_val=9999.
-                            
-                            logger.info(f"kl value found in dataset {dataset} is {kl_val}")
-                                
+                                kl_val = 9999.0
+
+                            logger.info(
+                                f"kl value found in dataset {dataset} is {kl_val}"
+                            )
+
                             for region_file in list(
                                 file["columns"][sample][dataset].keys()
                             ):
                                 if region_file in region_list:
                                     logger.info("region_file %s", region_file)
-                                    logger.info(f"FOUND DATA : {file_name} {sample} {dataset} {region_file}")
+                                    logger.info(
+                                        f"FOUND DATA : {file_name} {sample} {dataset} {region_file}"
+                                    )
                                     if novars:
                                         vars_array.append(
-                                            file["columns"][sample][dataset][region_file]
+                                            file["columns"][sample][dataset][
+                                                region_file
+                                            ]
                                         )
                                         weights.append(
-                                            file["columns"][sample][dataset][region_file][
-                                                "weight"
-                                            ].value
+                                            file["columns"][sample][dataset][
+                                                region_file
+                                            ]["weight"].value
                                             / (
                                                 file["sum_genweights"][dataset]
                                                 if dataset in file["sum_genweights"]
                                                 else 1
                                             )
                                         )
-                                        kl_values.append(np.full(len(file["columns"][sample][dataset][region_file]["weight"].value), kl_val))
-                                        
+                                        kl_values.append(
+                                            np.full(
+                                                len(
+                                                    file["columns"][sample][dataset][
+                                                        region_file
+                                                    ]["weight"].value
+                                                ),
+                                                kl_val,
+                                            )
+                                        )
+
                                         if dataset in file["sum_genweights"]:
                                             logger.info(
                                                 f"original weight: {file['columns'][sample][dataset][region_file]['weight'].value[0]}"
@@ -273,20 +302,31 @@ def get_variables(
                                             )
                                     else:
                                         vars_array.append(
-                                            file["columns"][sample][dataset][region_file]["nominal"]
+                                            file["columns"][sample][dataset][
+                                                region_file
+                                            ]["nominal"]
                                         )
                                         weights.append(
-                                            file["columns"][sample][dataset][region_file]["nominal"][
-                                                "weight"
-                                            ].value
+                                            file["columns"][sample][dataset][
+                                                region_file
+                                            ]["nominal"]["weight"].value
                                             / (
                                                 file["sum_genweights"][dataset]
                                                 if dataset in file["sum_genweights"]
                                                 else 1
                                             )
                                         )
-                                        kl_values.append(np.full(len(file["columns"][sample][dataset][region_file]["nominal"]["weight"].value), kl_val))
-                                        
+                                        kl_values.append(
+                                            np.full(
+                                                len(
+                                                    file["columns"][sample][dataset][
+                                                        region_file
+                                                    ]["nominal"]["weight"].value
+                                                ),
+                                                kl_val,
+                                            )
+                                        )
+
                                         if dataset in file["sum_genweights"]:
                                             logger.info(
                                                 f"original weight: {file['columns'][sample][dataset][region_file]['nominal']['weight'].value[0]}"
@@ -322,7 +362,7 @@ def get_variables(
         vars_array = concat
         # Concatenate multiple weights
         weights = np.concatenate(weights, axis=0)
-        
+
         # Concatenate multiple kl values
         kl_values = np.concatenate(kl_values, axis=0)
 
@@ -331,9 +371,13 @@ def get_variables(
             # unflatten all the jet variables
             collection = k.split("_")[0]
             if k in preprocess_variables_functions:
-                logger.info(f"Applying preprocessing function {preprocess_variables_functions[k]} to variable {k}")
+                logger.info(
+                    f"Applying preprocessing function {preprocess_variables_functions[k]} to variable {k}"
+                )
                 logger.info(f"vars_array[k] before {vars_array[k]}")
-                vars_array[k] = functions_dict[preprocess_variables_functions[k][0]](vars_array[k], *preprocess_variables_functions[k][1])
+                vars_array[k] = functions_dict[preprocess_variables_functions[k][0]](
+                    vars_array[k], *preprocess_variables_functions[k][1]
+                )
                 logger.info(f"vars_array[k] after {vars_array[k]}")
 
             # check if collection_N is present to unflatten the variables
@@ -379,8 +423,8 @@ def get_variables(
 
         weights = np.expand_dims(weights, axis=0)
         kl_values = np.expand_dims(kl_values, axis=0)
-        
-        #normalize the weights to have mean of 1
+
+        # normalize the weights to have mean of 1
         weights = weights / np.mean(weights)
 
         variables_array = np.concatenate(
@@ -392,7 +436,6 @@ def get_variables(
         logger.info(f"weights {weights.shape}")
         variables_array = np.concatenate([variables_array, weights, kl_values], axis=0)
         logger.info(f"variables_array complete {variables_array.shape}")
-
 
     # concatenate all the variables into a single torch tensor
     if "variables" not in locals():
@@ -408,10 +451,9 @@ def get_variables(
             ),
             dim=1,
         )[:, : math.ceil(total_fraction_of_events * variables_array.shape[1])]
-    
+
     tot_lenght = len(variables[0])
     logger.info(f"variables length {tot_lenght}")
-    
 
     logger.info(f"number of {sig_bkg} events: {variables.shape[1]}")
 
@@ -420,15 +462,15 @@ def get_variables(
         if sig_bkg == "signal"
         else torch.zeros_like(variables[0], dtype=torch.float32).unsqueeze(0)
     )
-    
-    #shuffle the variables
-    idx = np.random.permutation(tot_lenght)
-    variables=variables[:,idx]
 
-    # get the kl and remove it from the variables    
-    kl_values =  variables[-1].unsqueeze(0)
+    # shuffle the variables
+    idx = np.random.permutation(tot_lenght)
+    variables = variables[:, idx]
+
+    # get the kl and remove it from the variables
+    kl_values = variables[-1].unsqueeze(0)
     variables = variables[:-1]
-    
+
     X = (variables, flag_tensor, kl_values)
     return X, tot_lenght
 
@@ -436,8 +478,8 @@ def get_variables(
 def load_data(cfg, seed):
     batch_size = cfg.batch_size
     logger.debug(f"Batch size: {batch_size}")
-    
-    #initialize numpy seed
+
+    # initialize numpy seed
     np.random.seed(int(seed))
 
     dirs = cfg.data_dirs
@@ -482,10 +524,14 @@ def load_data(cfg, seed):
             for dir in dirs:
                 with open(f"{dir}/config.json", "r") as f:
                     config = json.load(f)
-                parquet_dirs_path = root_to_local(config["workflow"]["workflow_options"]["save_chunk"])
+                parquet_dirs_path = root_to_local(
+                    config["workflow"]["workflow_options"]["save_chunk"]
+                )
 
                 if not os.path.isdir(parquet_dirs_path):
-                    raise FileNotFoundError(f"Local path not found on this node: {parquet_dirs_path}")
+                    raise FileNotFoundError(
+                        f"Local path not found on this node: {parquet_dirs_path}"
+                    )
 
                 for entry in os.scandir(parquet_dirs_path):
                     logger.debug(f"Looking for files in {entry.path}")
@@ -516,7 +562,7 @@ def load_data(cfg, seed):
         "signal",
         cfg.data_format,
         cfg.preprocess_variables_functions,
-        cfg.novars
+        cfg.novars,
     )
     X_bkg, tot_lenght_bkg = get_variables(
         bkg_files,
@@ -529,35 +575,30 @@ def load_data(cfg, seed):
         "background",
         cfg.data_format,
         cfg.preprocess_variables_functions,
-        cfg.novars
+        cfg.novars,
     )
-
 
     # compute class weights such that sumw is the same for signal and background and each weight is order of 1
 
     logger.info(f"Number of background events  {X_bkg[0].shape[1]}")
     logger.info(f"Number of signal events {X_sig[0].shape[1]}")
-    
-    if cfg.oversample_split + cfg.split_oversample+ cfg.undersample >1: 
+
+    if cfg.oversample_split + cfg.split_oversample + cfg.undersample > 1:
         raise ValueError("Select only oversample or undersample")
-    
+
     if cfg.undersample:
         logger.info("Performing undersampling of background")
-        logger.info(f"Number of background events before undersampling {X_bkg[0].shape[1]}")
+        logger.info(
+            f"Number of background events before undersampling {X_bkg[0].shape[1]}"
+        )
         num_events_sig = X_sig[0].shape[1]
-        X_bkg_f = X_bkg[0][
-            :, :num_events_sig
-        ]
-        X_bkg_l = X_bkg[1][
-            :, :num_events_sig
-        ]
-        X_bkg_k = X_bkg[2][
-            :, :num_events_sig
-        ]
+        X_bkg_f = X_bkg[0][:, :num_events_sig]
+        X_bkg_l = X_bkg[1][:, :num_events_sig]
+        X_bkg_k = X_bkg[2][:, :num_events_sig]
         X_bkg = (X_bkg_f, X_bkg_l, X_bkg_k)
-        logger.info(f"Number of background events after undersampling {X_bkg[0].shape[1]}")
-        
-    
+        logger.info(
+            f"Number of background events after undersampling {X_bkg[0].shape[1]}"
+        )
 
     if cfg.oversample_split:
         logger.info("Performing oversampling of signal before splitting")
@@ -573,6 +614,12 @@ def load_data(cfg, seed):
             :, :num_events_bkg
         ]
         X_sig = (X_sig_f, X_sig_l, X_sig_k)
+
+        if num_events_sig > num_events_bkg:
+            raise ValueError(
+                "Number of signal events is greater than number of background events. This will be fixed in the oversampling function"
+            )
+
         logger.info(f"Number of signal events after oversampling {X_sig[0].shape[1]}")
 
     num_events_bkg = X_bkg[0].shape[1]
@@ -670,7 +717,7 @@ def load_data(cfg, seed):
     logger.info(f"Validation size: {val_size}")
     logger.info(f"Test size: {test_size}")
 
-    #shuffle and split
+    # shuffle and split
     gen = torch.Generator()
     gen.manual_seed(int(seed))
     train_dataset, val_dataset, test_dataset = torch.utils.data.random_split(
@@ -678,11 +725,11 @@ def load_data(cfg, seed):
     )
 
     if cfg.split_oversample:
-        #perform the oversampling of the signal separately for training, validation and testing datasets
+        # perform the oversampling of the signal separately for training, validation and testing datasets
         logger.info("Performing oversampling of signal after splitting")
-        train_dataset=oversample_dataset(train_dataset)
-        val_dataset=oversample_dataset(val_dataset)
-        test_dataset=oversample_dataset(test_dataset)
+        train_dataset = oversample_dataset(train_dataset)
+        val_dataset = oversample_dataset(val_dataset)
+        test_dataset = oversample_dataset(test_dataset)
 
     training_loader = None
     val_loader = None
@@ -719,11 +766,10 @@ def load_data(cfg, seed):
             pin_memory=cfg.pin_memory,
         )
         logger.info("Test loader size: %d", len(test_loader))
-    
 
     # remove 1 because of the weights
     input_size = X_fts.size(1) - 1
-    
+
     return (
         training_loader,
         val_loader,
@@ -732,17 +778,21 @@ def load_data(cfg, seed):
         batch_size,
     )
 
+
 def root_to_local(path_or_url: str):
     """Turn 'root://host:port//abs/path' into '/abs/path'. Leave local paths unchanged."""
     if path_or_url.startswith("root://"):
-        u = urlsplit(path_or_url)        # scheme='root', netloc='host:port', path='//abs/path'
+        u = urlsplit(
+            path_or_url
+        )  # scheme='root', netloc='host:port', path='//abs/path'
         p = u.path
-        while p.startswith("//"):        # normalize to single leading slash
+        while p.startswith("//"):  # normalize to single leading slash
             p = p[1:]
         if not p.startswith("/"):
             p = "/" + p
         return p
     return path_or_url
+
 
 def extract_param_value(s, param):
     """
