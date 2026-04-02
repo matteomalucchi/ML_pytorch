@@ -193,11 +193,13 @@ def plot_sig_bkg_distributions(
             sig_weight_train_kl=sig_weight_train[sig_kl_train==kl]
             sig_score_test_kl=sig_score_test[sig_kl_test==kl]
             sig_weight_test_kl=sig_weight_test[sig_kl_test==kl]
+            kl_str = f"{kl:.2f}"
         else:
             sig_score_train_kl=sig_score_train
             sig_weight_train_kl=sig_weight_train
             sig_score_test_kl=sig_score_test
             sig_weight_test_kl=sig_weight_test
+            kl_str = "all"
         
         fig, (ax, ax_ratio) = plt.subplots(
             2,
@@ -212,7 +214,7 @@ def plot_sig_bkg_distributions(
             bins=30,
             range=(0, 1),
             histtype="step",
-            label=f"Signal (training) - kl = {kl:.2f}",
+            label=f"Signal (training) - kl = {kl_str}",
             density=True,
             edgecolor="blue",
             facecolor="dodgerblue",
@@ -251,7 +253,7 @@ def plot_sig_bkg_distributions(
             [sig_score_train_kl, bkg_score_train],
             [sig_weight_train_kl, bkg_weight_train],
             ["blue", "r"],
-            [f"Signal (test) - kl = {kl:.2f}", "Background (test)"],
+            [f"Signal (test) - kl = {kl_str}", "Background (test)"],
             rescale if rescale else [1, 1],
         ):
 
@@ -514,16 +516,16 @@ def plot_sig_bkg_distributions(
         )
         if comet_logger:
             comet_logger.log_figure("sig_bkg_distributions", plt)
-        plt.savefig(f"{dir}/sig_bkg_distributions_kl_{kl:.2f}.png", bbox_inches="tight", dpi=300)
-        plt.savefig(f"{dir}/sig_bkg_distributions_kl_{kl:.2f}.pdf", bbox_inches="tight", dpi=300)
-        plt.savefig(f"{dir}/sig_bkg_distributions_kl_{kl:.2f}.svg", bbox_inches="tight", dpi=300)
+        plt.savefig(f"{dir}/sig_bkg_distributions_kl_{kl_str}.png", bbox_inches="tight", dpi=300)
+        plt.savefig(f"{dir}/sig_bkg_distributions_kl_{kl_str}.pdf", bbox_inches="tight", dpi=300)
+        plt.savefig(f"{dir}/sig_bkg_distributions_kl_{kl_str}.svg", bbox_inches="tight", dpi=300)
         ax.set_ylim(bottom=1e-2, top=max_bin**4)
         ax.set_yscale("log")
         if comet_logger:
             comet_logger.log_figure("sig_bkg_distributions_log", plt)
-        plt.savefig(f"{dir}/sig_bkg_distributions_kl_{kl:.2f}_log.png", bbox_inches="tight", dpi=300)
-        plt.savefig(f"{dir}/sig_bkg_distributions_kl_{kl:.2f}_log.pdf", bbox_inches="tight", dpi=300)
-        plt.savefig(f"{dir}/sig_bkg_distributions_kl_{kl:.2f}_log.svg", bbox_inches="tight", dpi=300)
+        plt.savefig(f"{dir}/sig_bkg_distributions_kl_{kl_str}_log.png", bbox_inches="tight", dpi=300)
+        plt.savefig(f"{dir}/sig_bkg_distributions_kl_{kl_str}_log.pdf", bbox_inches="tight", dpi=300)
+        plt.savefig(f"{dir}/sig_bkg_distributions_kl_{kl_str}_log.svg", bbox_inches="tight", dpi=300)
         if show:
             plt.show()
         plt.close(fig)
@@ -557,6 +559,7 @@ def plot_roc_curve(score_lbl_tensor_test, dir, show, comet_logger=None):
     
     kl_unique_values = list(np.unique(sig_kl_test))
     print("kl_unique_values",kl_unique_values)
+    roc_info_dict={}
 
     # loop over the differetn kl for signal and take inclusively for bkg
     for kl in kl_unique_values + ["all"]:
@@ -564,10 +567,12 @@ def plot_roc_curve(score_lbl_tensor_test, dir, show, comet_logger=None):
             sig_score_test_kl=sig_score_test[sig_kl_test==kl]
             sig_weight_test_kl=sig_weight_test[sig_kl_test==kl]
             sig_lbl_test_kl=sig_lbl_test[sig_kl_test==kl]
+            kl_str = f"{kl:.2f}"
         else:
             sig_score_test_kl=sig_score_test
             sig_weight_test_kl=sig_weight_test
             sig_lbl_test_kl=sig_lbl_test
+            kl_str = "all"
             
         score=np.concatenate((sig_score_test_kl, bkg_score_test))
         weight=np.concatenate((sig_weight_test_kl, bkg_weight_test))
@@ -586,7 +591,7 @@ def plot_roc_curve(score_lbl_tensor_test, dir, show, comet_logger=None):
             score,
             sample_weight=weight,
         )
-        plt.plot(tpr, fpr, label=f"ROC curve - kl = {kl:.2f} (pos+neg weights AUC = {roc_auc:.3f})")
+        plt.plot(tpr, fpr, label=f"ROC curve - kl = {kl_str} (pos+neg weights AUC = {roc_auc:.3f})")
         
 
         abs_weights_fpr, abs_weights_tpr, _ = roc_curve(
@@ -602,17 +607,16 @@ def plot_roc_curve(score_lbl_tensor_test, dir, show, comet_logger=None):
         plt.plot(
             abs_weights_tpr,
             abs_weights_fpr,
-            label=f"ROC curve - kl = {kl:.2f} (abs weights AUC = {abs_weights_roc_auc:.3f})",
+            label=f"ROC curve - kl = {kl_str} (abs weights AUC = {abs_weights_roc_auc:.3f})",
         )
         
         # save tpr and fpr in a npz file
-        np.savez(
-            f"{dir}/tpr_fpr_kl_{kl:.2f}.npz",
-            tpr=tpr,
-            fpr=fpr,
-            abs_weights_tpr=abs_weights_tpr,
-            abs_weights_fpr=abs_weights_fpr,
-        )
+        
+        roc_info_dict[f"tpr_kl_{kl_str}"] = tpr
+        roc_info_dict[f"fpr_kl_{kl_str}"] = fpr
+        roc_info_dict[f"abs_weights_tpr_kl_{kl_str}"] = abs_weights_tpr
+        roc_info_dict[f"abs_weights_fpr_kl_{kl_str}"] = abs_weights_fpr
+        
         
 
         # plt.plot([0, 1], [0, 1], color="gray", linestyle="--")
@@ -630,12 +634,18 @@ def plot_roc_curve(score_lbl_tensor_test, dir, show, comet_logger=None):
         )
         if comet_logger:
             comet_logger.log_figure("roc_curve", plt)
-        plt.savefig(f"{dir}/roc_curve_kl_{kl:.2f}.png", bbox_inches="tight", dpi=300)
-        plt.savefig(f"{dir}/roc_curve_kl_{kl:.2f}.pdf", bbox_inches="tight", dpi=300)
-        plt.savefig(f"{dir}/roc_curve_kl_{kl:.2f}.svg", bbox_inches="tight", dpi=300)
+        plt.savefig(f"{dir}/roc_curve_kl_{kl_str}.png", bbox_inches="tight", dpi=300)
+        plt.savefig(f"{dir}/roc_curve_kl_{kl_str}.pdf", bbox_inches="tight", dpi=300)
+        plt.savefig(f"{dir}/roc_curve_kl_{kl_str}.svg", bbox_inches="tight", dpi=300)
         if show:
             plt.show()
         plt.close(fig)
+    
+    # save tpr and fpr in a npz file
+    np.savez(
+        f"{dir}/tpr_fpr.npz",
+        **roc_info_dict
+    )
 
 
 def main():
