@@ -393,23 +393,29 @@ def eval_model(model, loader, loss_fn, type_eval, device, best_epoch):
     avg_loss = tot_loss / len(loader)
     avg_accuracy = tot_correct / tot_num
 
+    # Normalize raw logits into probabilities so that the saved scores live
+    # in [0, 1] regardless of the model architecture.
     if torch.any(all_scores < 0) or torch.any(all_scores > 1):
-        if all_scores.shape[1] == 2:
-            all_scores = torch.nn.functional.softmax(all_scores, dim=1)
-        elif all_scores.shape[1] == 1:
+        if all_scores.shape[1] == 1:
             all_scores = torch.nn.functional.sigmoid(all_scores)
-    if all_scores.shape[1] == 2:
-        all_scores = all_scores[:, -1]
-    elif all_scores.shape[1] > 2:
-        raise ValueError("The number of output nodes is not 1 or 2")
+        else:
+            all_scores = torch.nn.functional.softmax(all_scores, dim=1)
 
-    # concatenate all scores and labels
-    all_scores = all_scores.view(-1, 1)
+    # For backward compatibility with the binary sig/bkg case (1 or 2 output
+    # nodes) we collapse to a single column containing the signal probability.
+    # For genuine multi-class outputs (>=3) we keep all class probabilities.
+    if all_scores.shape[1] == 2:
+        all_scores = all_scores[:, -1].view(-1, 1)
+    elif all_scores.shape[1] == 1:
+        all_scores = all_scores.view(-1, 1)
+
     all_labels = all_labels.view(-1, 1)
     all_weights = all_weights.view(-1, 1)
     all_kl_values = all_kl_values.view(-1, 1)
 
-    score_lbl_tensor = torch.cat((all_scores, all_labels, all_weights, all_kl_values), 1)
+    score_lbl_tensor = torch.cat(
+        (all_scores, all_labels, all_weights, all_kl_values), 1
+    )
     logger.info(f"score_lbl_tensor shape: {score_lbl_tensor.shape}")
 
     # detach the tensor from the graph and convert to numpy array

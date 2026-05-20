@@ -18,6 +18,62 @@ logger = logging.getLogger(__name__)
 from ml_pytorch.defaults.preprocess_variables_functions import functions_dict
 
 
+def parse_classes(cfg):
+    """Normalize the two supported config layouts into a list of class
+    definitions.
+
+    Supported formats:
+      * New multiclass layout: ``cfg.classes`` is a mapping
+        ``{class_name: {sample, region, dataset, lbl}}``.
+      * Legacy binary layout: ``cfg.signal_*`` / ``cfg.background_*``.
+
+    Returns a list of dicts ordered by ``class_idx`` (0..C-1). Each dict has:
+      ``name``, ``samples``, ``datasets``, ``regions``, ``lbl`` (user label),
+      and ``class_idx`` (contiguous internal index used for training targets).
+    """
+    classes = []
+    if "classes" in cfg and cfg.classes is not None:
+        items = list(cfg.classes.items())
+        # sort by user-provided ``lbl`` so that the internal class_idx is
+        # deterministic regardless of dict iteration order
+        items.sort(key=lambda kv: kv[1].lbl)
+        for idx, (name, c) in enumerate(items):
+            classes.append(
+                {
+                    "name": name,
+                    "samples": list(c.sample),
+                    "datasets": list(c.dataset),
+                    "regions": list(c.region),
+                    "lbl": int(c.lbl),
+                    "class_idx": idx,
+                }
+            )
+    else:
+        # Legacy binary layout. Background first so it gets idx=0 and signal
+        # idx=1, matching the previous behaviour (sig label == 1, bkg == 0).
+        classes.append(
+            {
+                "name": "background",
+                "samples": list(cfg.background_sample),
+                "datasets": list(cfg.background_dataset),
+                "regions": list(cfg.background_region),
+                "lbl": 0,
+                "class_idx": 0,
+            }
+        )
+        classes.append(
+            {
+                "name": "signal",
+                "samples": list(cfg.signal_sample),
+                "datasets": list(cfg.signal_dataset),
+                "regions": list(cfg.signal_region),
+                "lbl": 1,
+                "class_idx": 1,
+            }
+        )
+    return classes
+
+
 def oversample_dataset(X_dataset):
 
     X_fts, X_lbl, X_clsw = X_dataset[:][0], X_dataset[:][1], X_dataset[:][2]
@@ -78,11 +134,16 @@ def get_variables(
     sample_list,
     dataset_list,
     region_list,
-    sig_bkg,
+    class_label,
     data_format,
     preprocess_variables_functions,
     novars=False,
 ):
+    """Load the input features and weights for a single class.
+
+    ``class_label`` is the integer used as the per-event target (typically the
+    internal class index 0..C-1).
+    """
     if data_format == "root":
         raise ValueError("Not updated for root format!")
         for i, file_name in enumerate(files):
@@ -455,12 +516,10 @@ def get_variables(
     tot_lenght = len(variables[0])
     logger.info(f"variables length {tot_lenght}")
 
-    logger.info(f"number of {sig_bkg} events: {variables.shape[1]}")
+    logger.info(f"number of events (class label {class_label}): {variables.shape[1]}")
 
-    flag_tensor = (
-        torch.ones_like(variables[0], dtype=torch.float32).unsqueeze(0)
-        if sig_bkg == "signal"
-        else torch.zeros_like(variables[0], dtype=torch.float32).unsqueeze(0)
+    flag_tensor = torch.full(
+        (1, variables.shape[1]), float(class_label), dtype=torch.float32
     )
 
     # shuffle the variables
@@ -475,6 +534,49 @@ def get_variables(
     return X, tot_lenght
 
 
+def _find_class_files(cfg, class_def):
+    """Return (coffea_files, parquet_dirs) for a given class definition."""
+    coffea_files = []
+    parquet_files = []
+
+    if cfg.data_format == "root":
+        for x in cfg.data_dirs:
+            files = os.listdir(x)
+            for file in files:
+                for sample in class_def["samples"]:
+                    if sample in file and "SR" in file:
+                        coffea_files.append(x + file)
+    elif cfg.data_format in ("coffea", "parquet"):
+        for direct in cfg.data_dirs:
+            if not os.path.isdir(direct):
+                raise FileNotFoundError(f"Data directory not found: {direct}")
+            for file in os.listdir(direct):
+                if file.endswith(".coffea"):
+                    if any(d in file for d in class_def["datasets"]):
+                        coffea_files.append(os.path.join(direct, file))
+
+        if cfg.data_format == "parquet":
+            for direct in cfg.data_dirs:
+                with open(f"{direct}/config.json", "r") as f:
+                    config = json.load(f)
+                parquet_dirs_path = root_to_local(
+                    config["workflow"]["workflow_options"]["save_chunk"]
+                )
+                if not os.path.isdir(parquet_dirs_path):
+                    raise FileNotFoundError(
+                        f"Local path not found on this node: {parquet_dirs_path}"
+                    )
+                for entry in os.scandir(parquet_dirs_path):
+                    logger.debug(f"Looking for files in {entry.path}")
+                    if entry.name in class_def["datasets"]:
+                        for region in class_def["regions"]:
+                            parquet_files.append(entry.path + "/" + region)
+    else:
+        raise ValueError(f"Data format {cfg.data_format} not supported")
+
+    return coffea_files, parquet_files
+
+
 def load_data(cfg, seed):
     batch_size = cfg.batch_size
     logger.debug(f"Batch size: {batch_size}")
@@ -482,111 +584,66 @@ def load_data(cfg, seed):
     # initialize numpy seed
     np.random.seed(int(seed))
 
-    dirs = cfg.data_dirs
-
     total_fraction_of_events = cfg.train_fraction + cfg.val_fraction + cfg.test_fraction
 
     assert total_fraction_of_events <= 1.0, "Fractions must sum to less than 1.0"
 
     logger.debug("Variables: %s", cfg.input_variables)
 
-    # list of signal and background files
-    sig_files = []
-    bkg_files = []
+    class_defs = parse_classes(cfg)
+    num_classes = len(class_defs)
+    logger.info(f"Number of classes: {num_classes}")
+    for c in class_defs:
+        logger.info(
+            f"  class idx={c['class_idx']} name={c['name']} lbl={c['lbl']} "
+            f"samples={c['samples']} datasets={c['datasets']} regions={c['regions']}"
+        )
 
-    sig_parquet_files = []
-    bkg_parquet_files = []
-
-    if cfg.data_format == "root":
-        for x in dirs:
-            files = os.listdir(x)
-            for file in files:
-                for signal in cfg.signal_sample:
-                    if signal in file and "SR" in file:
-                        sig_files.append(x + file)
-                for background in cfg.background_sample:
-                    if background in file and "SR" in file:
-                        bkg_files.append(x + file)
-    elif (cfg.data_format == "coffea") or (cfg.data_format == "parquet"):
-        for direct in dirs:
-            if not os.path.isdir(direct):
-                raise FileNotFoundError(f"Data directory not found: {direct}")
-            for file in os.listdir(direct):
-                if file.endswith(".coffea"):
-                    if any(signal in file for signal in cfg.signal_dataset):
-                        sig_files.append(os.path.join(direct, file))
-                    if any(background in file for background in cfg.background_dataset):
-                        bkg_files.append(os.path.join(direct, file))
-        logger.info(f"coffea sig files: {sig_files}")
-        logger.info(f"coffea bkg files: {bkg_files}")
-
+    # Load each class separately.
+    X_per_class = []
+    n_per_class = []
+    for c in class_defs:
+        coffea_files, parquet_files = _find_class_files(cfg, c)
+        logger.info(
+            f"Class {c['name']} (idx={c['class_idx']}): coffea files {coffea_files}"
+        )
         if cfg.data_format == "parquet":
-            for dir in dirs:
-                with open(f"{dir}/config.json", "r") as f:
-                    config = json.load(f)
-                parquet_dirs_path = root_to_local(
-                    config["workflow"]["workflow_options"]["save_chunk"]
-                )
-
-                if not os.path.isdir(parquet_dirs_path):
-                    raise FileNotFoundError(
-                        f"Local path not found on this node: {parquet_dirs_path}"
-                    )
-
-                for entry in os.scandir(parquet_dirs_path):
-                    logger.debug(f"Looking for files in {entry.path}")
-                    print(entry.name)
-                    if entry.name in cfg.signal_dataset:
-                        for region in cfg.signal_region:
-                            sig_parquet_files.append(entry.path + "/" + region)
-                    if entry.name in cfg.background_dataset:
-                        for region in cfg.background_region:
-                            bkg_parquet_files.append(entry.path + "/" + region)
-            logger.info(f"parquet sig files: {sig_parquet_files}")
-            logger.info(f"parquet bkg files: {bkg_parquet_files}")
-    else:
-        logger.error(f"Data format {cfg.data_format} not supported")
-        raise ValueError
-
-    logger.info(f"Signal files: {sig_files}")
-    logger.info(f"Background files: {bkg_files}")
-
-    X_sig, tot_lenght_sig = get_variables(
-        sig_files,
-        sig_parquet_files,
-        total_fraction_of_events,
-        cfg.input_variables,
-        cfg.signal_sample,
-        cfg.signal_dataset,
-        cfg.signal_region,
-        "signal",
-        cfg.data_format,
-        cfg.preprocess_variables_functions,
-        cfg.novars,
-    )
-    X_bkg, tot_lenght_bkg = get_variables(
-        bkg_files,
-        bkg_parquet_files,
-        total_fraction_of_events,
-        cfg.input_variables,
-        cfg.background_sample,
-        cfg.background_dataset,
-        cfg.background_region,
-        "background",
-        cfg.data_format,
-        cfg.preprocess_variables_functions,
-        cfg.novars,
-    )
-
-    # compute class weights such that sumw is the same for signal and background and each weight is order of 1
-
-    logger.info(f"Number of background events  {X_bkg[0].shape[1]}")
-    logger.info(f"Number of signal events {X_sig[0].shape[1]}")
+            logger.info(
+                f"Class {c['name']} (idx={c['class_idx']}): parquet files {parquet_files}"
+            )
+        X_class, n_class = get_variables(
+            coffea_files,
+            parquet_files,
+            total_fraction_of_events,
+            cfg.input_variables,
+            c["samples"],
+            c["datasets"],
+            c["regions"],
+            c["class_idx"],
+            cfg.data_format,
+            cfg.preprocess_variables_functions,
+            cfg.novars,
+        )
+        X_per_class.append(X_class)
+        n_per_class.append(n_class)
+        logger.info(f"Number of events for class {c['name']}: {n_class}")
 
     if cfg.oversample_split + cfg.split_oversample + cfg.undersample > 1:
         raise ValueError("Select only oversample or undersample")
 
-    if cfg.undersample:
+    # For binary backward compatibility, keep the legacy under/oversampling
+    # behaviour (signal/background). For multiclass we do not yet support these
+    # operations.
+    is_binary = num_classes == 2
+    if (cfg.undersample or cfg.oversample_split) and not is_binary:
+        raise ValueError(
+            "undersample and oversample_split are only supported for binary classification"
+        )
+
+    if cfg.undersample and is_binary:
+        # class_idx convention: 0=bkg, 1=signal
+        X_bkg = X_per_class[0]
+        X_sig = X_per_class[1]
         logger.info("Performing undersampling of background")
         logger.info(
             f"Number of background events before undersampling {X_bkg[0].shape[1]}"
@@ -595,108 +652,79 @@ def load_data(cfg, seed):
         X_bkg_f = X_bkg[0][:, :num_events_sig]
         X_bkg_l = X_bkg[1][:, :num_events_sig]
         X_bkg_k = X_bkg[2][:, :num_events_sig]
-        X_bkg = (X_bkg_f, X_bkg_l, X_bkg_k)
+        X_per_class[0] = (X_bkg_f, X_bkg_l, X_bkg_k)
         logger.info(
-            f"Number of background events after undersampling {X_bkg[0].shape[1]}"
+            f"Number of background events after undersampling {X_per_class[0][0].shape[1]}"
         )
 
-    if cfg.oversample_split:
+    if cfg.oversample_split and is_binary:
+        X_bkg = X_per_class[0]
+        X_sig = X_per_class[1]
         logger.info("Performing oversampling of signal before splitting")
         num_events_sig = X_sig[0].shape[1]
         num_events_bkg = X_bkg[0].shape[1]
-        X_sig_f = X_sig[0].repeat((1, num_events_bkg // num_events_sig + 1))[
-            :, :num_events_bkg
-        ]
-        X_sig_l = X_sig[1].repeat((1, num_events_bkg // num_events_sig + 1))[
-            :, :num_events_bkg
-        ]
-        X_sig_k = X_sig[2].repeat((1, num_events_bkg // num_events_sig + 1))[
-            :, :num_events_bkg
-        ]
-        X_sig = (X_sig_f, X_sig_l, X_sig_k)
-
+        repeat = num_events_bkg // num_events_sig + 1
+        X_sig_f = X_sig[0].repeat((1, repeat))[:, :num_events_bkg]
+        X_sig_l = X_sig[1].repeat((1, repeat))[:, :num_events_bkg]
+        X_sig_k = X_sig[2].repeat((1, repeat))[:, :num_events_bkg]
+        X_per_class[1] = (X_sig_f, X_sig_l, X_sig_k)
         if num_events_sig > num_events_bkg:
             raise ValueError(
-                "Number of signal events is greater than number of background events. This will be fixed in the oversampling function"
+                "Number of signal events is greater than number of background events."
             )
+        logger.info(
+            f"Number of signal events after oversampling {X_per_class[1][0].shape[1]}"
+        )
 
-        logger.info(f"Number of signal events after oversampling {X_sig[0].shape[1]}")
-
-    num_events_bkg = X_bkg[0].shape[1]
-    num_events_sig = X_sig[0].shape[1]
-
-    # sum of weights
-    sumw_sig = X_sig[0][-1].sum()
-    sumw_bkg = X_bkg[0][-1].sum()
-    logger.info(f"sum of weights before rescaling signal: {sumw_sig}")
-    logger.info(f"sum of weights before rescaling backgound: {sumw_bkg}")
+    # Compute per-class weights so that the sum of weights is the same across
+    # all classes (and per-class sum equals N / num_classes). This generalises
+    # the previous binary balancing formula
+    # ``(n_sig + n_bkg) / (2 * sumw_class)`` to arbitrary number of classes.
+    n_per_class = [X[0].shape[1] for X in X_per_class]
+    n_total = sum(n_per_class)
+    sumw_per_class = [float(X[0][-1].sum()) for X in X_per_class]
+    for c, n, sumw in zip(class_defs, n_per_class, sumw_per_class):
+        logger.info(
+            f"Class {c['name']} (idx={c['class_idx']}): n_events={n}, sum_weights={sumw}"
+        )
 
     if not cfg.oversample_split and not cfg.split_oversample and not cfg.undersample:
-        if True:
-            sig_class_weights = (num_events_sig + num_events_bkg) / (2 * sumw_sig)
-            bkg_class_weights = (num_events_sig + num_events_bkg) / (2 * sumw_bkg)
-        else:
-            # Compute the effective class count
-            # https://arxiv.org/pdf/1901.05555.pdf
-
-            sig_event_weights = X_sig[0][-1]
-            beta_sig = 1 - (1 / sig_event_weights.sum())
-            sig_class_weights = (1 - beta_sig) / (1 - beta_sig**num_events_sig)
-
-            logger.info(
-                f"num event sig {num_events_sig}, sig_event_weights {sig_event_weights.sum()}, beta_sig {beta_sig}, sig_class_weights {sig_class_weights}"
-            )
-
-            bkg_event_weights = X_bkg[0][-1]
-            beta_bkg = 1 - (1 / bkg_event_weights.sum())
-            bkg_class_weights = (1 - beta_bkg) / (1 - beta_bkg**num_events_bkg)
-
-            logger.info(
-                f"num event bkg {num_events_bkg}, bkg_event_weights {bkg_event_weights.sum()}, beta_bkg {beta_bkg}, bkg_class_weights {bkg_class_weights}"
-            )
+        class_weights = [n_total / (num_classes * sw) for sw in sumw_per_class]
     else:
-        sig_class_weights = 1.0
-        bkg_class_weights = 1.0
+        class_weights = [1.0 for _ in range(num_classes)]
 
-    rescaled_sig_weights = X_sig[0][-1] * sig_class_weights
-    rescaled_bkg_weights = X_bkg[0][-1] * bkg_class_weights
+    for c, cw in zip(class_defs, class_weights):
+        logger.info(f"Class {c['name']} class_weight: {cw}")
 
-    logger.info(f"sig_class_weights: {sig_class_weights}")
-    logger.info(f"bkg_class_weights: {bkg_class_weights}")
+    # Per-event class-weight tensors, ready for concatenation.
+    clsw_tensors = [
+        (torch.ones_like(X[0][-1], dtype=torch.float32) * w).unsqueeze(0)
+        for X, w in zip(X_per_class, class_weights)
+    ]
+    for c, X, w in zip(class_defs, X_per_class, class_weights):
+        rescaled = X[0][-1] * w
+        logger.info(
+            f"Class {c['name']} sum of weights after rescaling: {float(rescaled.sum())}"
+        )
 
-    # sum of weights
-    sumw_sig = rescaled_sig_weights.sum()
-    sumw_bkg = rescaled_bkg_weights.sum()
-    logger.info(f"sum of weights after rescaling signal: {sumw_sig}")
-    logger.info(f"sum of weights after rescaling backgound: {sumw_bkg}")
-
-    sig_class_weights_tensor = (
-        torch.ones_like(X_sig[0][-1], dtype=torch.float32) * sig_class_weights
-    ).unsqueeze(0)
-    bkg_class_weights_tensor = (
-        torch.ones_like(X_bkg[0][-1], dtype=torch.float32) * bkg_class_weights
-    ).unsqueeze(0)
-
-    X_fts = torch.cat((X_sig[0], X_bkg[0]), dim=1).transpose(1, 0)
-    X_lbl = torch.cat((X_sig[1], X_bkg[1]), dim=1).transpose(1, 0).flatten()
-    X_clsw = torch.cat(
-        (sig_class_weights_tensor, bkg_class_weights_tensor), dim=1
-    ).transpose(1, 0)
-    X_k = torch.cat((X_sig[2], X_bkg[2]), dim=1).transpose(1, 0).flatten()
+    X_fts = torch.cat([X[0] for X in X_per_class], dim=1).transpose(1, 0)
+    X_lbl = torch.cat([X[1] for X in X_per_class], dim=1).transpose(1, 0).flatten()
+    X_clsw = torch.cat(clsw_tensors, dim=1).transpose(1, 0)
+    X_k = torch.cat([X[2] for X in X_per_class], dim=1).transpose(1, 0).flatten()
 
     logger.info(f"X_fts shape: {X_fts.shape}")
     logger.info(f"X_lbl shape: {X_lbl.shape}")
     logger.info(f"X_clsw shape: {X_clsw.shape}")
     logger.info(f"X_k shape: {X_k.shape}")
 
-    tot_num_events = num_events_sig + num_events_bkg
-    if True:
-        # shuffle the tensor with numpy random
-        idx = np.random.permutation(tot_num_events)
-        X_fts = X_fts[idx]
-        X_lbl = X_lbl[idx]
-        X_clsw = X_clsw[idx]
-        X_k = X_k[idx]
+    tot_num_events = X_fts.shape[0]
+
+    # shuffle the tensor with numpy random
+    idx = np.random.permutation(tot_num_events)
+    X_fts = X_fts[idx]
+    X_lbl = X_lbl[idx]
+    X_clsw = X_clsw[idx]
+    X_k = X_k[idx]
 
     train_size = math.floor(tot_num_events * cfg.train_fraction)
     val_size = math.floor(tot_num_events * cfg.val_fraction)
@@ -725,7 +753,10 @@ def load_data(cfg, seed):
     )
 
     if cfg.split_oversample:
-        # perform the oversampling of the signal separately for training, validation and testing datasets
+        if not is_binary:
+            raise ValueError(
+                "split_oversample is only supported for binary classification"
+            )
         logger.info("Performing oversampling of signal after splitting")
         train_dataset = oversample_dataset(train_dataset)
         val_dataset = oversample_dataset(val_dataset)
@@ -770,12 +801,19 @@ def load_data(cfg, seed):
     # remove 1 because of the weights
     input_size = X_fts.size(1) - 1
 
+    class_info = [
+        {"name": c["name"], "lbl": c["lbl"], "class_idx": c["class_idx"]}
+        for c in class_defs
+    ]
+
     return (
         training_loader,
         val_loader,
         test_loader,
         input_size,
         batch_size,
+        num_classes,
+        class_info,
     )
 
 

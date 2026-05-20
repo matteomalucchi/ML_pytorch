@@ -204,6 +204,8 @@ def main():
         test_loader,
         input_size,
         batch_size,
+        num_classes,
+        class_info,
     ) = load_data(cfg, cfg.seed)
     
     if cfg.gpus is not None:
@@ -224,10 +226,32 @@ def main():
         logger=logger, patience=patience, min_delta=min_delta, eval_param=eval_param
     )
 
-    # Get model
-    model, loss_fn, optimizer, scheduler = ML_model.get_model(
-        input_size, device, cfg.learning_rate, cfg.learning_rate_schedule, n_epochs
-    )
+    # Get model. Multi-class capable models accept ``num_classes`` as an
+    # extra parameter; legacy binary models keep the original signature so
+    # we dispatch based on the function signature.
+    import inspect as _inspect
+
+    get_model_sig = _inspect.signature(ML_model.get_model)
+    if "num_classes" in get_model_sig.parameters:
+        model, loss_fn, optimizer, scheduler = ML_model.get_model(
+            input_size,
+            num_classes,
+            device,
+            cfg.learning_rate,
+            cfg.learning_rate_schedule,
+            n_epochs,
+        )
+    else:
+        if num_classes > 2:
+            raise ValueError(
+                f"Model {cfg.ML_model} does not support multi-class "
+                f"classification (num_classes={num_classes}). "
+                "Use a model whose get_model accepts a num_classes argument "
+                "(e.g. DNN_multiclass_model)."
+            )
+        model, loss_fn, optimizer, scheduler = ML_model.get_model(
+            input_size, device, cfg.learning_rate, cfg.learning_rate_schedule, n_epochs
+        )
     num_parameters = get_model_parameters_number(model)
 
     logger.info(f"Number of parameters: {num_parameters}")
@@ -478,6 +502,8 @@ def main():
                 score_lbl_array_train=score_lbl_array_train,
                 score_lbl_array_test=score_lbl_array_test,
                 train_test_fractions=train_test_fractions,
+                num_classes=np.array(num_classes),
+                class_info=np.array(class_info, dtype=object),
             )
             
         # plot the signal and background distributions
@@ -493,11 +519,18 @@ def main():
                 # [0.3363, 0.3937],
                 train_test_fractions[1],
                 comet_logger=comet_logger,
+                class_info=class_info,
             )
         if cfg.roc:
             logger.info("\n\n\n")
             logger.info("Plotting ROC curve")
-            plot_roc_curve(score_lbl_array_test, main_dir, False, comet_logger=comet_logger)
+            plot_roc_curve(
+                score_lbl_array_test,
+                main_dir,
+                False,
+                comet_logger=comet_logger,
+                class_info=class_info,
+            )
 
     # remove ML_model_loaded.py
     # if cfg.load_model or cfg.eval_model:

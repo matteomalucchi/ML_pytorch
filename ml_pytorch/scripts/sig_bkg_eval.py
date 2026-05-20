@@ -1,5 +1,6 @@
 import matplotlib.pyplot as plt
 import argparse
+import itertools
 import numpy as np
 import mplhep as hep
 from scipy import stats
@@ -9,14 +10,42 @@ hep.style.use("CMS")
 hep.cms.label(loc=0)
 
 
-def handle_arrays(score_lbl_tensor, column=0):
-    sig = score_lbl_tensor[score_lbl_tensor[:, 1] == 1]
-    bkg = score_lbl_tensor[score_lbl_tensor[:, 1] == 0]
+def get_layout(score_lbl_tensor):
+    """Return ``(num_score_cols, label_col, weight_col, kl_col)``.
+
+    The score_lbl_array always stores ``[<scores...>, label, weight, kl]`` so
+    the trailing 3 columns are fixed and the number of leading score columns
+    depends on whether the model is binary (1 column) or multi-class
+    (``num_classes`` columns).
+    """
+    n_score = score_lbl_tensor.shape[1] - 3
+    return n_score, n_score, n_score + 1, n_score + 2
+
+
+def handle_arrays(score_lbl_tensor, column=0, sig_label=1, bkg_label=0):
+    """Backward-compatible binary helper: split into the (signal, background)
+    events using the label column derived from the array's layout."""
+    _, label_col, _, _ = get_layout(score_lbl_tensor)
+    sig = score_lbl_tensor[score_lbl_tensor[:, label_col] == sig_label]
+    bkg = score_lbl_tensor[score_lbl_tensor[:, label_col] == bkg_label]
 
     sig_value = sig[:, column]
     bkg_value = bkg[:, column]
 
     return sig_value, bkg_value
+
+
+def _class_label(class_info, class_idx, fallback=None):
+    """Lookup a human-readable name for ``class_idx`` from the class metadata
+    saved at training time. Falls back to a generic name when missing."""
+    if class_info is not None:
+        for c in class_info:
+            ci = c["class_idx"] if isinstance(c, dict) else c.class_idx
+            if int(ci) == int(class_idx):
+                name = c["name"] if isinstance(c, dict) else c.name
+                lbl = c["lbl"] if isinstance(c, dict) else c.lbl
+                return f"{name} (lbl={lbl})"
+    return fallback if fallback is not None else f"class {class_idx}"
 
 
 def my_roc_auc(
@@ -141,7 +170,22 @@ def plot_sig_bkg_distributions(
     signal_eff=0.2,
     get_max_significance=False,
     comet_logger=None,
+    class_info=None,
 ):
+    # Dispatch to the multi-class variant when the output has more than one
+    # score column (i.e. C >= 3 class probabilities are stored).
+    n_score, _, _, _ = get_layout(score_lbl_tensor_test)
+    if n_score > 1:
+        plot_multiclass_distributions(
+            score_lbl_tensor_train,
+            score_lbl_tensor_test,
+            dir,
+            show,
+            class_info,
+            comet_logger=comet_logger,
+        )
+        return
+
     # plot the signal and background distributions
     sig_score_train, bkg_score_train = handle_arrays(score_lbl_tensor_train, 0)
     sig_score_test, bkg_score_test = handle_arrays(score_lbl_tensor_test, 0)
@@ -152,9 +196,14 @@ def plot_sig_bkg_distributions(
     print("bkg_score_test",bkg_score_test, bkg_score_test.shape)
     
     # get weights
+    _, _, weight_col, kl_col = get_layout(score_lbl_tensor_test)
     try:
-        sig_weight_train, bkg_weight_train = handle_arrays(score_lbl_tensor_train, 2)
-        sig_weight_test, bkg_weight_test = handle_arrays(score_lbl_tensor_test, 2)
+        sig_weight_train, bkg_weight_train = handle_arrays(
+            score_lbl_tensor_train, weight_col
+        )
+        sig_weight_test, bkg_weight_test = handle_arrays(
+            score_lbl_tensor_test, weight_col
+        )
     except IndexError:
         print("WARNING: No weights found in the input file. Using equal weights.")
         sig_weight_train = np.ones_like(sig_score_train)
@@ -169,8 +218,8 @@ def plot_sig_bkg_distributions(
     
     # get the kl values
     try:
-        sig_kl_train, bkg_kl_train = handle_arrays(score_lbl_tensor_train, 3)
-        sig_kl_test, bkg_kl_test = handle_arrays(score_lbl_tensor_test, 3)
+        sig_kl_train, bkg_kl_train = handle_arrays(score_lbl_tensor_train, kl_col)
+        sig_kl_test, bkg_kl_test = handle_arrays(score_lbl_tensor_test, kl_col)
     except IndexError:
         print("WARNING: No kl values found in the input file. Using equal weights.")
         sig_kl_train = np.ones_like(sig_score_train) * 9999.
@@ -531,24 +580,34 @@ def plot_sig_bkg_distributions(
         plt.close(fig)
 
 
-def plot_roc_curve(score_lbl_tensor_test, dir, show, comet_logger=None):
+def plot_roc_curve(score_lbl_tensor_test, dir, show, comet_logger=None, class_info=None):
+    # Dispatch to multi-class ROCs when more than one score column is stored.
+    n_score, label_col, weight_col, kl_col = get_layout(score_lbl_tensor_test)
+    if n_score > 1:
+        plot_multiclass_roc_curves(
+            score_lbl_tensor_test, dir, show, class_info, comet_logger=comet_logger
+        )
+        return
+
     sig_score_test, bkg_score_test = handle_arrays(score_lbl_tensor_test, 0)
-    sig_lbl_test, bkg_lbl_test = handle_arrays(score_lbl_tensor_test, 1)
-    
+    sig_lbl_test, bkg_lbl_test = handle_arrays(score_lbl_tensor_test, label_col)
+
     # get the weight
     try:
-        sig_weight_test, bkg_weight_test = handle_arrays(score_lbl_tensor_test, 2)
+        sig_weight_test, bkg_weight_test = handle_arrays(
+            score_lbl_tensor_test, weight_col
+        )
     except IndexError:
         print("WARNING: No weight values found in the input file. Using equal weight.")
         sig_weight_test = np.ones_like(sig_score_test)
         bkg_weight_test = np.ones_like(bkg_score_test)
-    
+
     print("sig_weight_test",sig_weight_test, sig_weight_test.shape)
     print("bkg_weight_test",bkg_weight_test, bkg_weight_test.shape)
-    
+
     # get the kl values
     try:
-        sig_kl_test, bkg_kl_test = handle_arrays(score_lbl_tensor_test, 3)
+        sig_kl_test, bkg_kl_test = handle_arrays(score_lbl_tensor_test, kl_col)
     except IndexError:
         print("WARNING: No kl values found in the input file. Using equal weights.")
         sig_kl_test = np.ones_like(sig_score_test) * 9999.
@@ -648,6 +707,200 @@ def plot_roc_curve(score_lbl_tensor_test, dir, show, comet_logger=None):
     )
 
 
+def plot_multiclass_distributions(
+    score_lbl_tensor_train,
+    score_lbl_tensor_test,
+    dir,
+    show,
+    class_info=None,
+    comet_logger=None,
+):
+    """Plot, for each output node, the distribution of its score split by
+    true class. Produces ``score_distribution_class_<i>.png`` per output."""
+    n_score, label_col, weight_col, _ = get_layout(score_lbl_tensor_test)
+    train_labels = score_lbl_tensor_train[:, label_col].astype(int)
+    test_labels = score_lbl_tensor_test[:, label_col].astype(int)
+    train_weights = score_lbl_tensor_train[:, weight_col]
+    test_weights = score_lbl_tensor_test[:, weight_col]
+
+    true_classes = sorted(set(np.unique(train_labels)).union(np.unique(test_labels)))
+    print(f"Multi-class evaluation: output nodes = {n_score}, true classes = {true_classes}")
+
+    colors = plt.get_cmap("tab10").colors
+
+    for out_idx in range(n_score):
+        fig, ax = plt.subplots(figsize=[13, 9])
+        node_name = _class_label(class_info, out_idx, fallback=f"class {out_idx}")
+
+        train_scores = score_lbl_tensor_train[:, out_idx]
+        test_scores = score_lbl_tensor_test[:, out_idx]
+
+        for j, true_c in enumerate(true_classes):
+            color = colors[j % len(colors)]
+            tr_mask = train_labels == true_c
+            te_mask = test_labels == true_c
+            if tr_mask.sum() == 0 and te_mask.sum() == 0:
+                continue
+
+            label = _class_label(class_info, true_c, fallback=f"true class {true_c}")
+            ax.hist(
+                train_scores[tr_mask],
+                weights=train_weights[tr_mask],
+                bins=30,
+                range=(0, 1),
+                histtype="step",
+                density=True,
+                color=color,
+                linestyle="--",
+                label=f"{label} (train)",
+            )
+            ax.hist(
+                test_scores[te_mask],
+                weights=test_weights[te_mask],
+                bins=30,
+                range=(0, 1),
+                histtype="step",
+                density=True,
+                color=color,
+                linestyle="-",
+                label=f"{label} (test)",
+            )
+
+        ax.set_xlabel(f"Score of output node: {node_name}")
+        ax.set_ylabel("Normalized counts")
+        ax.legend(loc="upper center", fontsize=14, frameon=False)
+        ax.grid()
+        hep.cms.lumitext("2022 (13.6 TeV)", ax=ax)
+        hep.cms.text(text="Preliminary", ax=ax, loc=0)
+        if comet_logger:
+            comet_logger.log_figure(f"score_distribution_class_{out_idx}", plt)
+        plt.savefig(
+            f"{dir}/score_distribution_class_{out_idx}.png",
+            bbox_inches="tight",
+            dpi=300,
+        )
+        plt.savefig(
+            f"{dir}/score_distribution_class_{out_idx}.pdf",
+            bbox_inches="tight",
+            dpi=300,
+        )
+        ax.set_yscale("log")
+        plt.savefig(
+            f"{dir}/score_distribution_class_{out_idx}_log.png",
+            bbox_inches="tight",
+            dpi=300,
+        )
+        if show:
+            plt.show()
+        plt.close(fig)
+
+
+def plot_multiclass_roc_curves(
+    score_lbl_tensor_test, dir, show, class_info=None, comet_logger=None
+):
+    """Plot ROC curves for the multi-class output:
+
+    * One-vs-rest ROC for every output node (signal=node i, background=all
+      events whose true class != i, using score of node i).
+    * One-vs-one ROC for every ordered pair of classes (positive class A vs
+      negative class B, considering only events whose true class is A or B
+      and using score of node A).
+    """
+    n_score, label_col, weight_col, _ = get_layout(score_lbl_tensor_test)
+    labels = score_lbl_tensor_test[:, label_col].astype(int)
+    weights = score_lbl_tensor_test[:, weight_col]
+
+    true_classes = sorted(np.unique(labels).tolist())
+    print(f"Multi-class ROC: output nodes = {n_score}, true classes = {true_classes}")
+
+    roc_info_dict = {}
+
+    # --- One-vs-rest ROCs (overlaid on a single figure) ---
+    fig, ax = plt.subplots(figsize=[10, 8])
+    for out_idx in range(n_score):
+        scores = score_lbl_tensor_test[:, out_idx]
+        ovr_labels = (labels == out_idx).astype(int)
+        if ovr_labels.sum() == 0 or (1 - ovr_labels).sum() == 0:
+            continue
+
+        try:
+            fpr, tpr, _ = roc_curve(ovr_labels, scores, sample_weight=abs(weights))
+            roc_auc = roc_auc_score(ovr_labels, scores, sample_weight=abs(weights))
+        except ValueError as e:
+            print(f"Skipping one-vs-rest ROC for class {out_idx}: {e}")
+            continue
+
+        name = _class_label(class_info, out_idx, fallback=f"class {out_idx}")
+        ax.plot(tpr, fpr, label=f"{name} vs rest (AUC = {roc_auc:.3f})")
+        roc_info_dict[f"ovr_tpr_class_{out_idx}"] = tpr
+        roc_info_dict[f"ovr_fpr_class_{out_idx}"] = fpr
+        roc_info_dict[f"ovr_auc_class_{out_idx}"] = roc_auc
+
+    ax.set_xlabel("True positive rate")
+    ax.set_ylabel("False positive rate")
+    ax.set_yscale("log")
+    ax.legend(loc="upper left", fontsize="small")
+    ax.grid()
+    hep.cms.lumitext("2022 (13.6 TeV)", ax=ax)
+    hep.cms.text(text="Preliminary", ax=ax, loc=0)
+    if comet_logger:
+        comet_logger.log_figure("roc_curve_one_vs_rest", plt)
+    plt.savefig(f"{dir}/roc_curve_one_vs_rest.png", bbox_inches="tight", dpi=300)
+    plt.savefig(f"{dir}/roc_curve_one_vs_rest.pdf", bbox_inches="tight", dpi=300)
+    if show:
+        plt.show()
+    plt.close(fig)
+
+    # --- One-vs-one pairwise ROCs (overlaid) ---
+    fig, ax = plt.subplots(figsize=[10, 8])
+    for a, b in itertools.combinations(range(n_score), 2):
+        mask = (labels == a) | (labels == b)
+        if mask.sum() == 0:
+            continue
+        scores_a = score_lbl_tensor_test[mask, a]
+        sub_labels = (labels[mask] == a).astype(int)
+        sub_weights = weights[mask]
+        if sub_labels.sum() == 0 or (1 - sub_labels).sum() == 0:
+            continue
+
+        try:
+            fpr, tpr, _ = roc_curve(
+                sub_labels, scores_a, sample_weight=abs(sub_weights)
+            )
+            roc_auc = roc_auc_score(
+                sub_labels, scores_a, sample_weight=abs(sub_weights)
+            )
+        except ValueError as e:
+            print(f"Skipping pair {a} vs {b} ROC: {e}")
+            continue
+
+        a_name = _class_label(class_info, a, fallback=f"class {a}")
+        b_name = _class_label(class_info, b, fallback=f"class {b}")
+        ax.plot(
+            tpr, fpr, label=f"{a_name} vs {b_name} (AUC = {roc_auc:.3f})"
+        )
+        roc_info_dict[f"ovo_tpr_{a}_vs_{b}"] = tpr
+        roc_info_dict[f"ovo_fpr_{a}_vs_{b}"] = fpr
+        roc_info_dict[f"ovo_auc_{a}_vs_{b}"] = roc_auc
+
+    ax.set_xlabel("True positive rate")
+    ax.set_ylabel("False positive rate")
+    ax.set_yscale("log")
+    ax.legend(loc="upper left", fontsize="small")
+    ax.grid()
+    hep.cms.lumitext("2022 (13.6 TeV)", ax=ax)
+    hep.cms.text(text="Preliminary", ax=ax, loc=0)
+    if comet_logger:
+        comet_logger.log_figure("roc_curve_one_vs_one", plt)
+    plt.savefig(f"{dir}/roc_curve_one_vs_one.png", bbox_inches="tight", dpi=300)
+    plt.savefig(f"{dir}/roc_curve_one_vs_one.pdf", bbox_inches="tight", dpi=300)
+    if show:
+        plt.show()
+    plt.close(fig)
+
+    np.savez(f"{dir}/tpr_fpr_multiclass.npz", **roc_info_dict)
+
+
 def main():
     # parse the arguments
     parser = argparse.ArgumentParser()
@@ -694,6 +947,11 @@ def main():
     except KeyError:
         train_test_fractions = [0.8, 0.1]
 
+    try:
+        class_info = list(np.load(input_file, allow_pickle=True)["class_info"])
+    except KeyError:
+        class_info = None
+
     # plot the signal and background distributions
     plot_sig_bkg_distributions(
         score_lbl_tensor_train,
@@ -704,9 +962,12 @@ def main():
         train_test_fractions[1],
         signal_eff=args.signal_eff,
         get_max_significance=False,
+        class_info=class_info,
     )
 
-    plot_roc_curve(score_lbl_tensor_test, args.input_dir, args.show)
+    plot_roc_curve(
+        score_lbl_tensor_test, args.input_dir, args.show, class_info=class_info
+    )
 
 
 if __name__ == "__main__":
