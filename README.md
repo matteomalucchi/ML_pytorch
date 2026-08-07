@@ -39,7 +39,59 @@ To execute an example training, evaluate the model on the test set, plot the his
 ml_train  -c configs/example_DNN_config_ggF_VBF.yml
 ```
 
-## Training on a cluster with slurm
+## Training on a cluster with Slurm
+
+### Generic training script (recommended)
+
+`jobs/run_training.sh` is a self-submitting script that handles any config, any number of trainings, and any number of parallel Slurm nodes. It self-submits to Slurm when called directly (no `sbatch` needed).
+
+```bash
+./jobs/run_training.sh --config /full/path/config.yml --outdir /full/path/outdir [OPTIONS]
+
+Required:
+  -c, --config FILE       Full path to YAML config file
+  -o, --outdir DIR        Full path to output directory
+
+Optional:
+  -n, --n-trainings INT   Total number of trainings (default: 1)
+  -p, --nodes INT         Number of parallel Slurm nodes/array jobs (default: 1)
+  -s, --init-seed INT     Starting random seed (default: 0)
+  --ratio                 Average-ratio ONNX aggregation (ml_onnx -ar), e.g. for bkg reweighting
+  --onnx-var NAME         ONNX input variable name to probe (repeatable; auto-probed if omitted)
+  --load-last             Resume from latest checkpoint
+  --no-slurm              Run directly without Slurm (for local testing)
+  -- EXTRA                Extra arguments forwarded to ml_train
+```
+
+**Examples:**
+
+```bash
+cd jobs/
+
+# Single training (any config)
+./run_training.sh -c /full/path/DNN_config_ggF_VBF.yml -o /full/path/out/ggF_VBF
+
+# 20 trainings across 4 GPU nodes (5 per node in parallel), with ratio ONNX aggregation
+./run_training.sh -c /full/path/DNN_config_bkg_reweighting.yml -o /full/path/out/bkg_rew \
+  -n 20 -p 4 --ratio
+
+# 5 trainings on 1 node, plain ONNX averaging (no ratio)
+./run_training.sh -c /full/path/DNN_config_sig_bkg.yml -o /full/path/out/sig_bkg -n 5
+
+# Local test (no Slurm submission)
+./run_training.sh -c /full/path/DNN_config.yml -o /full/path/out --no-slurm
+```
+
+**How it works:**
+
+- **`NODES=1`**: submits a single Slurm job; trainings run in parallel on one GPU node, then ONNX post-processing runs inline.
+- **`NODES>1`**: submits a Slurm array job (one element per node) plus a dependent post-processing job that runs after all array tasks succeed.
+- Each node runs its share of trainings (`N_TRAININGS / NODES`) in parallel using background processes.
+- After all trainings finish, the best ONNX model from each run is copied to `best_models/` and `ml_onnx` is called to aggregate them. With `--ratio` the `-ar` flag is passed (average ratio, used for background reweighting); without it, a plain aggregation is performed.
+- The ONNX input variable name is probed automatically from a list of known names; use `--onnx-var` to override.
+- If `jobs/comet_token.key` exists, Comet ML logging is enabled automatically (see [COMET integration](#comet-integration)).
+
+### Legacy per-use-case scripts
 
 To execute either a 20x training for background reweighting or to run a `sig_bkg_classifier` model, there are two scripts that can be run with slurm:
 
