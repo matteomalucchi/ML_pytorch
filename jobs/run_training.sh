@@ -133,6 +133,9 @@ if [[ ${#ONNX_VARS[@]} -eq 0 ]]; then
     )
 fi
 
+# ─── Helper: canonical run directory for a given seed ────────────────────────
+run_path() { printf "%s/run%02d" "$OUT_DIR" "$1"; }
+
 # ─── Build NUL-delimited arg list for self-submission ─────────────────────────
 # Uses NUL delimiter so paths with spaces are handled correctly.
 build_submit_args() {
@@ -166,13 +169,22 @@ if [[ -z "${SLURM_JOB_ID:-}" && "$NO_SLURM" != true ]]; then
     )
 
     mkdir -p "$OUT_DIR"
+    mkdir -p "$(run_path "$INIT_SEED")"
+
+    # Save slurm logs in the single run directory when only one seed is launched,
+    # otherwise in the top-level output directory.
+    if [[ "$N_TRAININGS" -eq 1 ]]; then
+        SLURM_LOG_DIR="$(run_path "$INIT_SEED")"
+    else
+        SLURM_LOG_DIR="$OUT_DIR"
+    fi
 
     if [[ "$NODES" -eq 1 ]]; then
         # Single job: all trainings on one node, postproc runs inline
         mapfile -d '' TRAIN_ARGS < <(build_submit_args train)
         echo "Submitting single job (${N_TRAININGS} training(s))..."
         sbatch --job-name="ml_train" \
-            --output="${OUT_DIR}/slurm-%j.out" \
+            --output="${SLURM_LOG_DIR}/slurm-%j.out" \
             "${SBATCH_RESOURCES[@]}" "$SCRIPT_PATH" "${TRAIN_ARGS[@]}"
     else
         # Array job per node + dependent postproc job
@@ -182,7 +194,7 @@ if [[ -z "${SLURM_JOB_ID:-}" && "$NO_SLURM" != true ]]; then
         TRAIN_JOB_ID=$(sbatch --parsable \
             --job-name="ml_train_array" \
             --array="0-${ARRAY_MAX}" \
-            --output="${OUT_DIR}/slurm-%A_%a.out" \
+            --output="${SLURM_LOG_DIR}/slurm-%A_%a.out" \
             "${SBATCH_RESOURCES[@]}" \
             "$SCRIPT_PATH" "${TRAIN_ARGS[@]}")
         echo "  Training array job submitted: ${TRAIN_JOB_ID}"
@@ -192,7 +204,7 @@ if [[ -z "${SLURM_JOB_ID:-}" && "$NO_SLURM" != true ]]; then
         POSTPROC_JOB_ID=$(sbatch --parsable \
             --job-name="ml_postproc" \
             --dependency="afterok:${TRAIN_JOB_ID}" \
-            --output="${OUT_DIR}/slurm-%j.out" \
+            --output="${SLURM_LOG_DIR}/slurm-%j.out" \
             "${SBATCH_RESOURCES[@]}" \
             "$SCRIPT_PATH" "${POSTPROC_ARGS[@]}")
         echo "  Post-processing job submitted: ${POSTPROC_JOB_ID}"
@@ -279,7 +291,8 @@ run_postproc() {
         local seed=$(( INIT_SEED + i ))
         local tag
         tag=$(printf "%02d" "$seed")
-        local model_dir="${OUT_DIR}/run${tag}/state_dict"
+        local model_dir
+        model_dir="$(run_path "$seed")/state_dict"
         local best_model
         best_model=$(ls "$model_dir"/*best_epoch*.onnx 2>/dev/null | head -n 1)
         if [[ -n "$best_model" ]]; then
@@ -343,8 +356,7 @@ case "$MODE" in
         echo "Node ${TASK_ID}: launching seeds ${NODE_START}–${NODE_END} in parallel"
 
         for ((seed=NODE_START; seed<=NODE_END; seed++)); do
-            run_dir="${OUT_DIR}/run$(printf "%02d" "$seed")"
-            run_one_training "$seed" "$run_dir" &
+            run_one_training "$seed" "$(run_path "$seed")" &
         done
         wait
         echo "Node ${TASK_ID}: all trainings complete."
