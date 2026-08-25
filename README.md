@@ -130,6 +130,41 @@ ml_history -i <training_log_file>
 
 # Plot the ROC curve and overtraining check
 ml_sb -i <training_directory>
+
+# Plot the input variable distributions of signal and background
+ml_input_vars -c <config_file> -o <output_directory>
+```
+
+## Input variable distributions
+
+Before the training starts, the normalized distributions of the input variables
+for signal and background are plotted in the CMS style, together with a
+signal/background ratio panel. The plots are saved in the `input_variables`
+subdirectory of the output directory of the training.
+
+This step is enabled by default and can be steered either from the config file
+or from the command line:
+
+```yaml
+# config file
+input_plots: True             # produce the input variable plots
+input_plots_dir: input_variables  # subdirectory of the output directory
+input_plots_bins: 30          # number of bins of the histograms
+input_plots_log: False        # save also the histograms with a log y axis
+```
+
+```bash
+# disable the input variable plots for a training
+ml_train -c configs/example_DNN_config_ggF_VBF.yml --no-input-plots
+
+# change the binning and save also the log-scale version
+ml_train -c configs/example_DNN_config_ggF_VBF.yml --input-plots-bins 50 --input-plots-log
+```
+
+The same plots can be produced standalone (without running a training) with:
+
+```bash
+ml_input_vars -c configs/example_DNN_config_ggF_VBF.yml -o <output_directory>
 ```
 
 ## COMET integration

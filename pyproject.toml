@@ -49,4 +49,5 @@ include-package-data = true
 ml_train = "ml_pytorch.scripts.train:main"
 ml_sb= "ml_pytorch.scripts.sig_bkg_eval:main"
 ml_history= "ml_pytorch.scripts.plot_history:main"
+ml_input_vars= "ml_pytorch.scripts.plot_input_variables:main"
 ml_onnx= "ml_pytorch.scripts.convert_to_onnx:main"
