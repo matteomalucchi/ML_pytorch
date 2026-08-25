@@ -70,6 +70,10 @@ def main():
         )
     if cfg.history:
         from ml_pytorch.scripts.plot_history import plot_history, plot_lr, read_from_txt
+    if cfg.input_plots:
+        from ml_pytorch.scripts.plot_input_variables import (
+            plot_input_variables_from_loaders,
+        )
 
     # base dir is /work/<username>/
     base_dir = f"/work/{os.environ['USER']}"
@@ -205,7 +209,22 @@ def main():
         input_size,
         batch_size,
     ) = load_data(cfg, cfg.seed)
-    
+
+    # plot the input variable distributions of signal and background before training
+    if cfg.input_plots:
+        logger.info("\n\n\n")
+        logger.info("Plotting the input variable distributions")
+        input_plots_dir = plot_input_variables_from_loaders(
+            [training_loader, val_loader, test_loader],
+            input_variables,
+            main_dir,
+            subdir=cfg.input_plots_dir,
+            bins=cfg.input_plots_bins,
+            log_scale=cfg.input_plots_log,
+            comet_logger=comet_logger,
+        )
+        logger.info(f"Input variable distributions saved in {input_plots_dir}")
+
     if cfg.gpus is not None:
         gpus = [int(i) for i in cfg.gpus.split(",")]
         device = torch.device(gpus[0])
