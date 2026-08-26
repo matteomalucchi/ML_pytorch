@@ -65,6 +65,7 @@ def main():
 
     if cfg.histos:
         from ml_pytorch.scripts.sig_bkg_eval import (
+            plot_kl_distributions,
             plot_roc_curve,
             plot_sig_bkg_distributions,
         )
@@ -500,23 +501,17 @@ def main():
             )
             
         # plot the signal and background distributions
-        if cfg.histos:
-            logger.info("\n\n\n")
-            logger.info("Plotting signal and background distributions")
-            plot_sig_bkg_distributions(
+        if cfg.histos or cfg.roc:
+            plot_kl_distributions(
                 score_lbl_array_train,
                 score_lbl_array_test,
                 main_dir,
-                False,
-                [],
-                # [0.3363, 0.3937],
+                ["all", 1.0],
                 train_test_fractions[1],
+                do_histos=cfg.histos,
+                do_roc=cfg.roc,
                 comet_logger=comet_logger,
             )
-        if cfg.roc:
-            logger.info("\n\n\n")
-            logger.info("Plotting ROC curve")
-            plot_roc_curve(score_lbl_array_test, main_dir, False, comet_logger=comet_logger)
 
     # remove ML_model_loaded.py
     # if cfg.load_model or cfg.eval_model:

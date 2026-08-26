@@ -1,3 +1,6 @@
+import os
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import argparse
 import numpy as np
@@ -141,6 +144,7 @@ def plot_sig_bkg_distributions(
     signal_eff=0.2,
     get_max_significance=False,
     comet_logger=None,
+    kl_bkg_str=None,
 ):
     # plot the signal and background distributions
     sig_score_train, bkg_score_train = handle_arrays(score_lbl_tensor_train, 0)
@@ -514,6 +518,15 @@ def plot_sig_bkg_distributions(
             ax=ax,
             loc=0,
         )
+        ax.text(
+            0.98,
+            0.05,
+            rf"sig $\kappa_\lambda$ = {kl_str}" + "\n" + rf"bkg $\kappa_\lambda$ = {kl_bkg_str if kl_bkg_str else 'all'}",
+            transform=ax.transAxes,
+            fontsize=18,
+            verticalalignment="bottom",
+            horizontalalignment="right",
+        )
         if comet_logger:
             comet_logger.log_figure("sig_bkg_distributions", plt)
         plt.savefig(f"{dir}/sig_bkg_distributions_kl_{kl_str}.png", bbox_inches="tight", dpi=300)
@@ -531,7 +544,7 @@ def plot_sig_bkg_distributions(
         plt.close(fig)
 
 
-def plot_roc_curve(score_lbl_tensor_test, dir, show, comet_logger=None):
+def plot_roc_curve(score_lbl_tensor_test, dir, show, comet_logger=None, kl_bkg_str=None):
     sig_score_test, bkg_score_test = handle_arrays(score_lbl_tensor_test, 0)
     sig_lbl_test, bkg_lbl_test = handle_arrays(score_lbl_tensor_test, 1)
     
@@ -632,6 +645,15 @@ def plot_roc_curve(score_lbl_tensor_test, dir, show, comet_logger=None):
             text="Preliminary",
             loc=0,
         )
+        ax.text(
+            0.98,
+            0.05,
+            rf"sig $\kappa_\lambda$ = {kl_str}" + "\n" + rf"bkg $\kappa_\lambda$ = {kl_bkg_str if kl_bkg_str else 'all'}",
+            transform=ax.transAxes,
+            fontsize=16,
+            verticalalignment="bottom",
+            horizontalalignment="right",
+        )
         if comet_logger:
             comet_logger.log_figure("roc_curve", plt)
         plt.savefig(f"{dir}/roc_curve_kl_{kl_str}.png", bbox_inches="tight", dpi=300)
@@ -646,6 +668,63 @@ def plot_roc_curve(score_lbl_tensor_test, dir, show, comet_logger=None):
         f"{dir}/tpr_fpr.npz",
         **roc_info_dict
     )
+
+
+def plot_kl_distributions(
+    score_lbl_train,
+    score_lbl_test,
+    out_dir,
+    kls_background_to_plot,
+    train_test_fraction,
+    show=False,
+    rescale=None,
+    signal_eff=0.2,
+    get_max_significance=False,
+    do_histos=True,
+    do_roc=True,
+    comet_logger=None,
+):
+    if rescale is None:
+        rescale = []
+    for kl_bkg in kls_background_to_plot:
+        kl_bkg_str = "all" if kl_bkg == "all" else f"{kl_bkg:.2f}"
+
+        if kl_bkg == "all":
+            train_data = score_lbl_train
+            test_data = score_lbl_test
+        else:
+            try:
+                sig_train = score_lbl_train[:, 1] == 1
+                bkg_train_kl = (score_lbl_train[:, 1] == 0) & (score_lbl_train[:, 3] == float(kl_bkg))
+                train_data = score_lbl_train[sig_train | bkg_train_kl]
+
+                sig_test = score_lbl_test[:, 1] == 1
+                bkg_test_kl = (score_lbl_test[:, 1] == 0) & (score_lbl_test[:, 3] == float(kl_bkg))
+                test_data = score_lbl_test[sig_test | bkg_test_kl]
+            except IndexError:
+                train_data = score_lbl_train
+                test_data = score_lbl_test
+
+        if do_histos:
+            sig_bkg_out_dir = f"{out_dir}/sig_bkg_bkgkl_{kl_bkg_str}"
+            os.makedirs(sig_bkg_out_dir, exist_ok=True)
+            plot_sig_bkg_distributions(
+                train_data,
+                test_data,
+                sig_bkg_out_dir,
+                show,
+                rescale,
+                train_test_fraction,
+                signal_eff=signal_eff,
+                get_max_significance=get_max_significance,
+                comet_logger=comet_logger,
+                kl_bkg_str=kl_bkg_str,
+            )
+
+        if do_roc:
+            roc_out_dir = f"{out_dir}/roc_bkgkl_{kl_bkg_str}"
+            os.makedirs(roc_out_dir, exist_ok=True)
+            plot_roc_curve(test_data, roc_out_dir, show, comet_logger=comet_logger, kl_bkg_str=kl_bkg_str)
 
 
 def main():
@@ -672,8 +751,14 @@ def main():
     parser.add_argument(
         "-e", "--signal-eff", default=-1, help="Signal efficiency to cut", type=float
     )
-    
-    
+    parser.add_argument(
+        "-klb",
+        "--kl-background",
+        nargs="+",
+        default=["all", "1"],
+        help="Background kl values to plot. Use 'all' for the inclusive plot, numbers for specific kl values, or 'full' to plot every available kl (default: all 1).",
+    )
+
     parser.print_help()
     args = parser.parse_args()
 
@@ -694,19 +779,36 @@ def main():
     except KeyError:
         train_test_fractions = [0.8, 0.1]
 
-    # plot the signal and background distributions
-    plot_sig_bkg_distributions(
+    # resolve background kl values to plot
+    try:
+        bkg_mask = score_lbl_tensor_train[:, 1] == 0
+        kl_bkg_unique_values = list(np.unique(score_lbl_tensor_train[bkg_mask, 3]))
+    except IndexError:
+        kl_bkg_unique_values = [9999.0]
+
+    if "full" in args.kl_background:
+        kls_background_to_plot = ["all"] + kl_bkg_unique_values
+    else:
+        kl_bkg_requested = set()
+        for v in args.kl_background:
+            kl_bkg_requested.add(v if v == "all" else float(v))
+        kls_background_to_plot = [
+            kl for kl in ["all"] + kl_bkg_unique_values
+            if (kl if kl == "all" else float(kl)) in kl_bkg_requested
+        ]
+    print(f"Background kl values to plot: {kls_background_to_plot}")
+
+    plot_kl_distributions(
         score_lbl_tensor_train,
         score_lbl_tensor_test,
         args.input_dir,
-        args.show,
-        args.rescale,
+        kls_background_to_plot,
         train_test_fractions[1],
+        show=args.show,
+        rescale=args.rescale,
         signal_eff=args.signal_eff,
         get_max_significance=False,
     )
-
-    plot_roc_curve(score_lbl_tensor_test, args.input_dir, args.show)
 
 
 if __name__ == "__main__":
