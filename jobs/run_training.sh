@@ -195,7 +195,7 @@ fi
 
 # ─── Comet ML credentials (looked up relative to script) ──────────────────────
 SCRIPT_DIR="$(dirname "$(realpath "$0")")"
-COMET_KEY_FILE="${SCRIPT_DIR}/comet_token.key"
+COMET_KEY_FILE="./comet_token.key"
 USE_COMET=false
 API_UNAME=""
 API_KEY=""
