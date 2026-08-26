@@ -36,7 +36,13 @@ parser.add_argument(
     "-v",
     "--input-variables",
     default="bkg_morphing_dnn_input_variables",
-    help="Input variables",
+    help="Input variables module name (e.g. bkg_morphing_dnn_input_variables). Ignored if --config is provided and contains input_variables.",
+)
+parser.add_argument(
+    "-c",
+    "--config",
+    default=None,
+    help="Training config YAML file. If provided, reads input_variables from it (takes precedence over --input-variables).",
 )
 args = parser.parse_args()
 
@@ -46,8 +52,15 @@ if args.model_type == "keras":
     import tensorflow as tf
     import tf2onnx
 
+input_variables_name = args.input_variables
+if args.config is not None:
+    from omegaconf import OmegaConf
+    _cfg = OmegaConf.load(args.config)
+    if _cfg.get("input_variables") is not None:
+        input_variables_name = _cfg.input_variables
+
 dnn_input_variables_module = importlib.import_module(
-    f"ml_pytorch.defaults.{args.input_variables}"
+    f"ml_pytorch.defaults.{input_variables_name}"
 )
 dnn_input_variables = dnn_input_variables_module.dnn_input_variables
 print(f"Input variables: {dnn_input_variables}")
