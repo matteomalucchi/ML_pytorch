@@ -1,8 +1,12 @@
 omegaconf==2.3.0
 coffea==0.7.22
 matplotlib==3.7.1
-mplhep==0.3.55
+mplhep==0.4.1
+hist
 ordered_set
 spox
 onnxruntime
 comet_ml==3.53.2
+# HEPPlotter (utils_configs.plot.HEPPlotter): used by every plotting script.
+# See the "Plotting with HEPPlotter" section of the README to update it.
+configs @ git+https://github.com/matteomalucchi/AnalysisConfigs.git

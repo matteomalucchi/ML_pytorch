@@ -147,7 +147,7 @@ dependencies:
     - mdurl==0.1.2
     - ml_dtypes==0.5.3
     - ml_pytorch==0.0.0
-    - mplhep==0.3.55
+    - mplhep==0.4.1
     - mplhep_data==0.0.4
     - numba==0.59.1
     - numpy==1.23.5
@@ -187,5 +187,7 @@ dependencies:
     - xgboost==1.4.2
     - zict==2.2.0
     - zipp==3.23.0
+    # HEPPlotter, see the README
+    - configs @ git+https://github.com/matteomalucchi/AnalysisConfigs.git
 
 prefix: "/work/bevila_t/PostDoc/micromamba/envs/ML_pytorch"
