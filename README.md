@@ -188,3 +188,28 @@ vim jobs/comet_token.key
 ```
 
 The scripts will read this file if it exists and automatically sends the information to `ml_pytorch`
+
+### Comet workspace
+
+The **Comet workspace** is derived automatically from the name of the directory containing the config file, with underscores replaced by hyphens. For example, a config saved under `configs/hh4b_ggF_VBF/` maps to the workspace `hh4b-ggF-VBF`, accessible at:
+
+```
+https://www.comet.com/hh4b-ggf-vbf#projects
+```
+
+Within that workspace, each experiment is grouped into a **project** named after the config file (without extension), e.g. `DNN_config_ggF_VBF`.
+
+**Existing workspaces:**
+
+| Config directory | Comet workspace |
+|---|---|
+| `configs/hh4b_bkg_reweighting/` | [hh4b-bkg-reweighting](https://www.comet.com/hh4b-bkg-reweighting#projects) |
+| `configs/hh4b_ggF_VBF/` | [hh4b-ggf-vbf](https://www.comet.com/hh4b-ggf-vbf#projects) |
+| `configs/hh4b_sig_bkg_classifier/` | [hh4b-sig-bkg-classifier](https://www.comet.com/hh4b-sig-bkg-classifier#projects) |
+
+To add a new workspace:
+1. Go to [comet.com](https://www.comet.com) and create the workspace manually from the website.
+2. Name it to match the parent directory of your config file (underscores → hyphens), e.g. `configs/hh4b_sig_bkg_classifier/` → workspace `hh4b-sig-bkg-classifier` → `https://www.comet.com/hh4b-sig-bkg-classifier#projects`.
+3. Add it to the table above.
+
+The workspace can also be overridden explicitly with `--comet-workspace <name>` when calling `ml_train`.
