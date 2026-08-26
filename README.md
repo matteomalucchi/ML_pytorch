@@ -57,7 +57,6 @@ Optional:
   -p, --nodes INT         Number of parallel Slurm nodes/array jobs (default: 1)
   -s, --init-seed INT     Starting random seed (default: 0)
   --ratio                 Average-ratio ONNX aggregation (ml_onnx -ar), e.g. for bkg reweighting
-  --onnx-var NAME         ONNX input variable name to probe (repeatable; auto-probed if omitted)
   --load-last             Resume from latest checkpoint
   --no-slurm              Run directly without Slurm (for local testing)
   -- EXTRA                Extra arguments forwarded to ml_train
@@ -88,7 +87,7 @@ cd jobs/
 - **`NODES>1`**: submits a Slurm array job (one element per node) plus a dependent post-processing job that runs after all array tasks succeed.
 - Each node runs its share of trainings (`N_TRAININGS / NODES`) in parallel using background processes.
 - After all trainings finish, the best ONNX model from each run is copied to `best_models/` and `ml_onnx` is called to aggregate them. With `--ratio` the `-ar` flag is passed (average ratio, used for background reweighting); without it, a plain aggregation is performed.
-- The ONNX input variable name is probed automatically from a list of known names; use `--onnx-var` to override.
+- The input variable name is read automatically from the training config YAML (`input_variables` field).
 - If `jobs/comet_token.key` exists, Comet ML logging is enabled automatically (see [COMET integration](#comet-integration)).
 
 ### Legacy per-use-case scripts
@@ -103,6 +102,8 @@ cd jobs/
 sbatch run_20_trainings_in_4_parallel.sh <config_file> <output_folder>
 # when this has finished, you can merge the results with:
 cd <output_folder>
+ml_onnx -i best_models -o best_models -ar --config <config_file>
+# or with explicit variable name (backward compatible):
 ml_onnx -i best_models -o best_models -ar -v bkg_morphing_dnn_DeltaProb_input_variables
 
 # For sig_bkg_reweighting
@@ -128,8 +129,14 @@ These plots can be produced using the following command:
 # Plot the history of a training 
 ml_history -i <training_log_file>
 
-# Plot the ROC curve and overtraining check
+# Plot the ROC curve and overtraining check (all background kl inclusive)
 ml_sb -i <training_directory>
+
+# Plot only for a specific background kl value (creates bkgkl_<value>/ subdirectory)
+ml_sb -i <training_directory> -klb 1.0
+
+# Plot for every available background kl value
+ml_sb -i <training_directory> -klb full
 
 # Plot the input variable distributions of signal and background
 ml_input_vars -c <config_file> -o <output_directory>

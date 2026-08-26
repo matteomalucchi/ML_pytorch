@@ -22,7 +22,6 @@
 #   -p, --nodes INT         Number of parallel Slurm nodes/array jobs (default: 1)
 #   -s, --init-seed INT     Starting random seed (default: 0)
 #   --ratio                 Use average-ratio ONNX aggregation (ml_onnx -ar)
-#   --onnx-var NAME         ONNX input variable name to probe (repeatable; auto-probed if omitted)
 #   --load-last             Resume from latest checkpoint instead of restarting
 #   --time HH:MM:SS         Slurm wall-clock time limit (default: 8:30:00)
 #   --mem-per-cpu MB        Slurm memory per CPU in MB (default: 4000)
@@ -35,7 +34,6 @@ N_TRAININGS=1
 NODES=1
 INIT_SEED=0
 RATIO=false
-ONNX_VARS=()
 LOAD_LAST=false
 MODE="train"
 NO_SLURM=false
@@ -60,7 +58,6 @@ Optional:
   -p, --nodes INT         Number of parallel Slurm nodes/array jobs (default: 1)
   -s, --init-seed INT     Starting random seed (default: 0)
   --ratio                 Average-ratio ONNX aggregation (ml_onnx -ar)
-  --onnx-var NAME         ONNX input variable name to probe (repeatable)
   --load-last             Resume from latest checkpoint
   --time HH:MM:SS         Slurm wall-clock time limit (default: 8:30:00)
   --mem-per-cpu MB        Slurm memory per CPU in MB (default: 4000)
@@ -93,7 +90,6 @@ while [[ $# -gt 0 ]]; do
         -p|--nodes)        NODES="$2"; shift 2 ;;
         -s|--init-seed)    INIT_SEED="$2"; shift 2 ;;
         --ratio)           RATIO=true; shift ;;
-        --onnx-var)        ONNX_VARS+=("$2"); shift 2 ;;
         --load-last)       LOAD_LAST=true; shift ;;
         --time)            SLURM_TIME="$2"; shift 2 ;;
         --mem-per-cpu)     SLURM_MEM="$2"; shift 2 ;;
@@ -122,16 +118,6 @@ fi
 
 TRAININGS_PER_NODE=$(( (N_TRAININGS + NODES - 1) / NODES ))
 
-# Default ONNX variable names to probe (tried in order until one succeeds)
-if [[ ${#ONNX_VARS[@]} -eq 0 ]]; then
-    ONNX_VARS=(
-        "bkg_morphing_dnn_input_variables"
-        "bkg_morphing_dnn_DeltaProb_input_variables"
-        "bkg_morphing_dnn_SigBkgVariables_input_variables"
-        "sig_bkg_dnn_input_variables"
-        "ggf_vbf_dnn_input_variables"
-    )
-fi
 
 # ─── Helper: canonical run directory for a given seed ────────────────────────
 run_path() { printf "%s/run%02d" "$OUT_DIR" "$1"; }
@@ -153,7 +139,6 @@ build_submit_args() {
     )
     [[ "$RATIO"     == true ]] && args+=(--ratio)
     [[ "$LOAD_LAST" == true ]] && args+=(--load-last)
-    for v in "${ONNX_VARS[@]}"; do args+=(--onnx-var "$v"); done
     [[ ${#EXTRA_ARGS[@]} -gt 0 ]] && args+=(-- "${EXTRA_ARGS[@]}")
     printf '%s\0' "${args[@]}"
 }
@@ -171,13 +156,9 @@ if [[ -z "${SLURM_JOB_ID:-}" && "$NO_SLURM" != true ]]; then
     mkdir -p "$OUT_DIR"
     mkdir -p "$(run_path "$INIT_SEED")"
 
-    # Save slurm logs in the single run directory when only one seed is launched,
-    # otherwise in the top-level output directory.
-    if [[ "$N_TRAININGS" -eq 1 ]]; then
-        SLURM_LOG_DIR="$(run_path "$INIT_SEED")"
-    else
-        SLURM_LOG_DIR="$OUT_DIR"
-    fi
+    # Slurm logs always go to OUT_DIR: ml_train --overwrite does rm -rf run_dir,
+    # which would delete a log written inside the run directory.
+    SLURM_LOG_DIR="$OUT_DIR"
 
     if [[ "$NODES" -eq 1 ]]; then
         # Single job: all trainings on one node, postproc runs inline
@@ -309,23 +290,7 @@ run_postproc() {
     local onnx_args=(-i best_models -o best_models)
     [[ "$RATIO" == true ]] && onnx_args+=(-ar)
 
-    local succeeded=false
-    for var in "${ONNX_VARS[@]}"; do
-        echo "  Trying ml_onnx -v ${var}..."
-        if ml_onnx "${onnx_args[@]}" -v "$var" 2>/dev/null; then
-            echo "  Success with variable: ${var}"
-            succeeded=true
-            break
-        fi
-    done
-
-    if [[ "$succeeded" != true ]]; then
-        # Retry with stderr visible to help diagnose
-        echo "All probed variable names failed. Retrying last with stderr:"
-        ml_onnx "${onnx_args[@]}" -v "${ONNX_VARS[-1]}" || true
-        echo "Hint: specify the correct variable name with --onnx-var <name>"
-        exit 1
-    fi
+    ml_onnx "${onnx_args[@]}" --config "$CONFIG_FILE"
 }
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
