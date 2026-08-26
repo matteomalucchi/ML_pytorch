@@ -2,8 +2,8 @@ input_variables: ggf_vbf_dnn_input_variables_fw_mom_0_11
 
 run2: False
 
-signal_region: [hh4b_vbf_best_candidates_6_jets_nokincut_region]
-background_region: [hh4b_vbf_best_candidates_6_jets_nokincut_region]
+signal_region: [hh4b_vbf_best_candidates_6_jets_region]
+background_region: [hh4b_vbf_best_candidates_6_jets_region]
 
 signal_sample:
   [
