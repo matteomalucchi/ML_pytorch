@@ -84,39 +84,59 @@ def my_roc_auc(
     )
 
 
-def compute_significance(
+def weighted_quantile(values, quantile, weights):
+    """Weighted quantile: returns the value below which `quantile` fraction of total weight lies."""
+    sorted_idx = np.argsort(values)
+    sorted_values = values[sorted_idx]
+    cumulative_weights = np.cumsum(weights[sorted_idx])
+    total_weight = cumulative_weights[-1]
+    return float(np.interp(quantile * total_weight, cumulative_weights, sorted_values))
+
+
+def find_threshold_and_bkg_rejection(
     signal_eff,
+    sig_score_test,
+    bkg_score_test,
+    sig_weight_test,
+    bkg_weight_test,
+):
+    """Find DNN score threshold for target signal efficiency using weighted quantile
+    and compute background rejection as weighted fraction below threshold."""
+    # (1 - signal_eff) quantile → signal_eff fraction of signal is above threshold
+    threshold = weighted_quantile(sig_score_test, 1.0 - signal_eff, sig_weight_test)
+    total_bkg_weight = np.sum(bkg_weight_test)
+    bkg_rejection = (
+        np.sum(bkg_weight_test[bkg_score_test < threshold]) / total_bkg_weight
+        if total_bkg_weight > 0
+        else 0.0
+    )
+    return threshold, bkg_rejection
+
+
+def compute_significance(
+    dnn_score_target,
     counts_test_list,
     bin_centers,
     bin_width,
-    sig_score_test,
-    bkg_score_test,
     sig_weight_test,
     bkg_weight_test,
     test_fraction,
     rescale,
 ):
-
-    signal_cumulative_integral = np.cumsum(counts_test_list[0][::-1] * bin_width)
-    # find the bin with the signal efficiency closest to target
-    bin_index = np.argmin(np.abs(signal_cumulative_integral[::-1] - signal_eff))
-    # get the DNN score for the target signal efficiency
-    dnn_score_target = bin_centers[bin_index]
-    # compute the background rejection at target signal efficiency
-    bkg_rejection = np.sum(counts_test_list[1][:bin_index] * bin_width[bin_index])
-
-    # compute number of signal and background events in the test dataset above the target signal efficiency threshold
+    """Compute significance from binned density histograms above the DNN score threshold.
+    Integrates the normalized histograms above the threshold to obtain event fractions,
+    then converts to absolute event counts using total weights and rescale factors."""
+    bin_index = np.searchsorted(bin_centers, dnn_score_target)
+    sig_fraction_above = np.sum(counts_test_list[0][bin_index:] * bin_width[bin_index:])
+    bkg_fraction_above = np.sum(counts_test_list[1][bin_index:] * bin_width[bin_index:])
+    sig_rescale = rescale[0] if rescale else 1
+    bkg_rescale = rescale[1] if rescale else 1
     n_sig_above_target = (
-        np.sum(sig_weight_test[sig_score_test > dnn_score_target])
-        / test_fraction
-        * (rescale[0] if rescale else 1)
+        sig_fraction_above * np.sum(sig_weight_test) / test_fraction * sig_rescale
     )
     n_bkg_above_target = (
-        np.sum(bkg_weight_test[bkg_score_test > dnn_score_target])
-        / test_fraction
-        * (rescale[1] if rescale else 1)
+        bkg_fraction_above * np.sum(bkg_weight_test) / test_fraction * bkg_rescale
     )
-    # significance_above_target = n_sig_above_target / np.sqrt(n_bkg_above_target)
     significance_above_target = np.sqrt(
         2
         * (
@@ -125,14 +145,7 @@ def compute_significance(
             - n_sig_above_target
         )
     )
-
-    return (
-        dnn_score_target,
-        bkg_rejection,
-        n_sig_above_target,
-        n_bkg_above_target,
-        significance_above_target,
-    )
+    return n_sig_above_target, n_bkg_above_target, significance_above_target
 
 
 def plot_sig_bkg_distributions(
@@ -142,7 +155,7 @@ def plot_sig_bkg_distributions(
     show,
     rescale,
     test_fraction,
-    signal_eff=0.2,
+    signal_eff=0.8,
     get_max_significance=False,
     comet_logger=None,
     kl_bkg_str=None,
@@ -253,49 +266,51 @@ def plot_sig_bkg_distributions(
             if get_max_significance:
                 max_significance = -1
                 for sig_eff_target in np.linspace(0.0, 1.0, 30):
-                    # compute the significance for each signal efficiency
-                    # and find the DNN cut that maximizes the significance
-                    infos_significance = compute_significance(
+                    threshold, bkg_rej = find_threshold_and_bkg_rejection(
                         sig_eff_target,
+                        sig_score_test_kl,
+                        bkg_score_test,
+                        sig_weight_test_kl,
+                        bkg_weight_test,
+                    )
+                    n_sig, n_bkg, significance = compute_significance(
+                        threshold,
                         counts_test_list,
                         bin_centers,
                         bin_width,
-                        sig_score_test_kl,
-                        bkg_score_test,
                         sig_weight_test_kl,
                         bkg_weight_test,
                         test_fraction,
                         rescale,
                     )
-                    if infos_significance[-1] > max_significance:
-                        max_significance = infos_significance[-1]
+                    if significance > max_significance:
+                        max_significance = significance
                         print("max_significance", max_significance)
-                        (
-                            dnn_score_target,
-                            bkg_rejection,
-                            n_sig_above_target,
-                            n_bkg_above_target,
-                            significance_above_target,
-                        ) = infos_significance
+                        dnn_score_target = threshold
+                        bkg_rejection = bkg_rej
+                        n_sig_above_target = n_sig
+                        n_bkg_above_target = n_bkg
+                        significance_above_target = significance
                         signal_eff = sig_eff_target
             else:
-                (
-                    dnn_score_target,
-                    bkg_rejection,
-                    n_sig_above_target,
-                    n_bkg_above_target,
-                    significance_above_target,
-                ) = compute_significance(
+                dnn_score_target, bkg_rejection = find_threshold_and_bkg_rejection(
                     signal_eff,
-                    counts_test_list,
-                    bin_centers,
-                    bin_width,
                     sig_score_test_kl,
                     bkg_score_test,
                     sig_weight_test_kl,
                     bkg_weight_test,
-                    test_fraction,
-                    rescale,
+                )
+                n_sig_above_target, n_bkg_above_target, significance_above_target = (
+                    compute_significance(
+                        dnn_score_target,
+                        counts_test_list,
+                        bin_centers,
+                        bin_width,
+                        sig_weight_test_kl,
+                        bkg_weight_test,
+                        test_fraction,
+                        rescale,
+                    )
                 )
 
             print(
@@ -321,117 +336,102 @@ def plot_sig_bkg_distributions(
                 }
             )
 
-        # One overtraining plot per class: the training distribution is the
-        # reference of the test one, so that HEPPlotter normalizes them, draws
-        # the error bars, the test/train ratio with the training uncertainty
-        # band and the chi square between the two
-        for (
-            score_train,
-            weight_train,
-            score_test,
-            weight_test,
-            color,
-            train_style,
-            label_train,
-            label_test,
-            ks_pvalue,
-            class_name,
-        ) in zip(
-            [sig_score_train_kl, bkg_score_train],
-            [sig_weight_train_kl, bkg_weight_train],
-            [sig_score_test_kl, bkg_score_test],
-            [sig_weight_test_kl, bkg_weight_test],
-            ["blue", "r"],
-            [
-                {
+        # Single overtraining plot with signal and background overlaid
+        hist_sig_train = Hist.new.Reg(50, 0, 1, name="score").Weight()
+        hist_sig_train.fill(sig_score_train_kl, weight=sig_weight_train_kl)
+        hist_sig_test = Hist.new.Reg(50, 0, 1, name="score").Weight()
+        hist_sig_test.fill(sig_score_test_kl, weight=sig_weight_test_kl)
+        hist_bkg_train = Hist.new.Reg(50, 0, 1, name="score").Weight()
+        hist_bkg_train.fill(bkg_score_train, weight=bkg_weight_train)
+        hist_bkg_test = Hist.new.Reg(50, 0, 1, name="score").Weight()
+        hist_bkg_test.fill(bkg_score_test, weight=bkg_weight_test)
+
+        series_dict = {
+            "Signal (training)": {
+                "data": hist_sig_train,
+                "style": {
+                    "color": "blue",
                     "histtype": "fill",
                     "edgecolor": "blue",
                     "facecolor": "dodgerblue",
                     "alpha": 0.5,
                 },
-                {"histtype": "step"},
-            ],
-            [f"Signal (training) - kl = {kl_str}", "Background (training)"],
-            [f"Signal (test) - kl = {kl_str}", "Background (test)"],
-            [p_value_sig, p_value_bkg],
-            ["signal", "background"],
-        ):
-            hist_train = Hist.new.Reg(30, 0, 1, name="score").Weight()
-            hist_train.fill(score_train, weight=weight_train)
-            hist_test = Hist.new.Reg(30, 0, 1, name="score").Weight()
-            hist_test.fill(score_test, weight=weight_test)
+            },
+            "Signal (test)": {
+                "data": hist_sig_test,
+                "style": {"histtype": "errorbar", "color": "blue"},
+            },
+            "Background (training)": {
+                "data": hist_bkg_train,
+                "style": {"color": "r", "histtype": "step"},
+            },
+            "Background (test)": {
+                "data": hist_bkg_test,
+                "style": {"histtype": "errorbar", "color": "r"},
+            },
+        }
 
-            series_dict = {
-                label_train: {
-                    "data": hist_train,
-                    "style": {"color": color, "is_reference": True, **train_style},
-                },
-                label_test: {
-                    "data": hist_test,
-                    "style": {"histtype": "errorbar", "color": color},
-                },
-            }
+        base = f"{dir}/sig_bkg_distributions_kl_{kl_tag}"
 
-            base = f"{dir}/sig_bkg_distributions_kl_{kl_tag}_{class_name}"
-
-            # the histograms are normalized to unit integral by HEPPlotter, so
-            # the same log range can be used for every training
-            for log in [False, True]:
-                plotter = (
-                    HEPPlotter("CMS")
-                    .set_plot_config(figsize=[13, 13], lumitext=LUMITEXT)
-                    .set_output(f"{base}{'_log' if log else ''}")
-                    .set_labels(
-                        xlabel="Output score",
-                        ylabel="Normalized counts",
-                        ratio_label="Test/Train",
-                    )
-                    .set_data(series_dict, plot_type="1d")
-                    .set_options(
-                        normalize_1d_histo=True,
-                        legend_loc="upper left",
-                        legend_font_size=20,
-                        split_legend=False,
-                        grid=True,
-                        ylim_ratio_bottom_value=0.75,
-                        ylim_ratio_top_value=1.25,
-                        y_log=log,
-                        ylim_bottom_value=1e-4 if log else 0.0,
-                        ylim_top_value=1 if log else None,
-                        ylim_top_factor=2,
-                    )
-                    # chi2/ndof and p-value of the test distribution w.r.t. the
-                    # training one, including the uncertainty of both
-                    .add_chi_square(pred_unc=True, x=0.6, y=0.8, fontsize=20)
-                    .add_annotation(
-                        x=0.6,
-                        y=0.9,
-                        s=f"KS: p-value = {ks_pvalue:.2f}",
-                        fontsize=20,
-                        color=color,
-                    )
-                    .add_annotation(
-                        x=0.98,
-                        y=0.05,
-                        s=rf"sig $\kappa_\lambda$ = {kl_str}"
-                        + "\n"
-                        + rf"bkg $\kappa_\lambda$ = {kl_bkg_str if kl_bkg_str else 'all'}",
-                        fontsize=18,
-                        ha="right",
-                        va="bottom",
-                    )
+        # the histograms are normalized to unit integral by HEPPlotter, so
+        # the same log range can be used for every training
+        for log in [False, True]:
+            plotter = (
+                HEPPlotter("CMS")
+                .set_plot_config(figsize=[13, 13], lumitext=LUMITEXT)
+                .set_output(f"{base}{'_log' if log else ''}")
+                .set_labels(
+                    xlabel="Output score",
+                    ylabel="Normalized counts",
                 )
-                for line in lines:
-                    plotter.add_line("v", **line)
-                if show:
-                    plotter.show()
-                plotter.run()
+                .set_data(series_dict, plot_type="1d")
+                .set_options(
+                    normalize_1d_histo=True,
+                    legend_loc="upper left",
+                    legend_font_size=20,
+                    split_legend=False,
+                    grid=True,
+                    y_log=log,
+                    ylim_bottom_value=1e-4 if log else 0.0,
+                    ylim_top_value=1 if log else None,
+                    ylim_top_factor=2,
+                )
+                .add_annotation(
+                    x=0.6,
+                    y=0.9,
+                    s=f"KS sig: p-value = {p_value_sig:.2f}",
+                    fontsize=20,
+                    color="blue",
+                )
+                .add_annotation(
+                    x=0.6,
+                    y=0.85,
+                    s=f"KS bkg: p-value = {p_value_bkg:.2f}",
+                    fontsize=20,
+                    color="r",
+                )
+                .add_annotation(
+                    x=0.98,
+                    y=0.05,
+                    s=rf"sig $\kappa_\lambda$ = {kl_str}"
+                    + "\n"
+                    + rf"bkg $\kappa_\lambda$ = {kl_bkg_str if kl_bkg_str else 'all'}",
+                    fontsize=18,
+                    ha="right",
+                    va="bottom",
+                )
+            )
+            for line in lines:
+                plotter.add_line("v", **line)
+            if show:
+                plotter.show()
+            plotter.run()
 
-                if comet_logger:
-                    comet_logger.log_image(
-                        f"{base}{'_log' if log else ''}.png",
-                        name=f"sig_bkg_distributions_{class_name}{'_log' if log else ''}",
-                    )
+            if comet_logger:
+                comet_logger.log_image(
+                    f"{base}{'_log' if log else ''}.png",
+                    name=f"sig_bkg_distributions{'_log' if log else ''}",
+                )
 
 
 def plot_roc_curve(
@@ -519,11 +519,11 @@ def plot_roc_curve(
         series_dict = {
             f"ROC curve - kl = {kl_str} (pos+neg weights AUC = {roc_auc:.3f})": {
                 "data": {"x": [tpr, None], "y": [fpr, None]},
-                "style": {"color": "tab:blue", "linestyle": "-", "markersize": 0},
+                "style": {"linestyle": "-", "markersize": 0},
             },
             f"ROC curve - kl = {kl_str} (abs weights AUC = {abs_weights_roc_auc:.3f})": {
                 "data": {"x": [abs_weights_tpr, None], "y": [abs_weights_fpr, None]},
-                "style": {"color": "tab:orange", "linestyle": "-", "markersize": 0},
+                "style": {"linestyle": "-", "markersize": 0},
             },
         }
 
@@ -571,7 +571,7 @@ def plot_kl_distributions(
     train_test_fraction,
     show=False,
     rescale=None,
-    signal_eff=0.2,
+    signal_eff=0.8,
     get_max_significance=False,
     do_histos=True,
     do_roc=True,
