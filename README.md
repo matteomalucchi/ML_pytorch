@@ -13,7 +13,7 @@ To create the micromamba environment, you can use the following command:
 salloc --account gpu_gres --job-name "InteractiveJob" --cpus-per-task 4 --mem-per-cpu 3000 --time 01:00:00  -p gpu --gres=gpu:1
 micromamba env create -f ML_pytorch_env.yml
 micromamba activate ML_pytorch
-pip install -r requirements.txt
+
 # install the package in editable mode
 pip install -e .
 ```
@@ -22,6 +22,18 @@ pip install -e .
 [AnalysisConfigs](https://github.com/matteomalucchi/AnalysisConfigs) repository,
 which is used by all the plotting scripts (see
 [Plotting with HEPPlotter](#plotting-with-hepplotter)).
+
+### Update HEPPlotter
+
+> [!IMPORTANT]
+> To Install the `HEPPlotter` class you can use
+>
+> ```bash
+> pip install --upgrade  --no-cache-dir git+https://github.com/matteomalucchi/AnalysisConfigs.git
+> ```
+>
+> This command should be executed every time you want to pull from the AnalysisConfigs repository and update the `HEPPlotter`.
+> If it doesn't update, you should first uninstall it with `pip uninstall configs` and then install it again with the command above.
 
 ## Connect to node with a gpu
 
@@ -43,6 +55,67 @@ To execute an example training, evaluate the model on the test set, plot the his
 ```bash
 ml_train  -c configs/example_DNN_config_ggF_VBF.yml
 ```
+
+## `ml_train` options
+
+`ml_train` is the main entry point for training and evaluation. All options below override the corresponding config-file values when provided.
+
+```
+ml_train [OPTIONS]
+
+  -c, --config FILE            Path to the YAML configuration file
+  -o, --output-dir DIR         Output directory (overrides config)
+  -d, --data-dirs DIR [DIR…]   Data directories (overrides config)
+  -b, --batch-size INT         Batch size
+  -e, --epochs INT             Number of epochs
+  -n, --num-workers INT        Number of DataLoader workers
+  -s, --seed STR               Seed for shuffling and weight initialisation
+  -g, --gpus STR               GPU indices, comma-separated (e.g. "0,1")
+
+Evaluation / output
+  -ev, --eval                  Evaluate the model on the test set (no training)
+  -em, --eval-model PATH       Path to an existing model to evaluate instead of training
+  -l,  --load-model PATH       Load a checkpoint and continue training from it
+  --onnx                       Export the best model to ONNX format after training
+  -sm, --save-model            Save the full model object next to the state dict
+  -s-n, --save-numpy           Save numpy arrays of the output scores
+  --overwrite                  Overwrite an existing output directory
+
+Plots
+  --histos                     Plot signal/background output distributions
+  --roc                        Plot the ROC curve
+  --history                    Plot the training-loss history
+  --input-plots                Plot input-variable distributions before training (default: on)
+  --no-input-plots             Skip the input-variable plots
+  --input-plots-dir DIR        Subdirectory for input-variable plots (default: input_variables)
+  --input-plots-bins INT       Number of histogram bins for input-variable plots
+  --input-plots-log            Also save input-variable plots with a log y axis
+
+Comet ML logging
+  -ct,  --comet-token STR      Comet API token
+  -cn,  --comet-name STR       Comet username
+  -cw,  --comet-workspace STR  Comet workspace (overrides auto-derived name)
+  -ctg, --comet-tags TAG […]   Comet experiment tags
+  --pin-memory                 Pin memory for faster GPU data transfer
+```
+
+### Run only evaluation (no training)
+
+To evaluate an already-trained model without running a new training, use `-ev` together with `-em`:
+
+```bash
+# Evaluate an existing model on the test set and produce all plots
+ml_train -c configs/example_DNN_config_ggF_VBF.yml \
+  -ev -em <output_dir>/best_model_state_dict.pt \
+  --histos --roc --history
+
+# Evaluate and export to ONNX
+ml_train -c configs/example_DNN_config_ggF_VBF.yml \
+  -ev -em <output_dir>/best_model_state_dict.pt \
+  --onnx -o <output_dir>
+```
+
+`-ev` skips all training epochs; `-em` points to the saved state-dict (`.pt` file). The config file is still required to reconstruct the model architecture and locate the test data.
 
 ## Training on a cluster with Slurm
 
@@ -123,46 +196,6 @@ To execute 5 runs in a node without the interactive access to the GPU node (the 
 # Then run this command:
 sbatch --account gpu_gres --job-name "InteractiveJob" --cpus-per-task 4 --mem-per-cpu 5000 --time 12:00:00  -p gpu --gres=gpu:1 --wrap=". ./run_batch_of_5.sh /work/tharte/datasets/ML_pytorch/configs/bkg_reweighting/DNN_AN_1e-3_e20drop75_minDelta1em5_SPANet_postEE.yml out/bkg_reweighting/SPANET_ptFlat_20_runs_postEE 0"
 ```
-
-## Plotting with HEPPlotter
-
-All the plots of this repository (training history, learning rate, input
-variable distributions, signal/background distributions and ROC curves) are
-produced with the `HEPPlotter` class defined in the
-[AnalysisConfigs](https://github.com/matteomalucchi/AnalysisConfigs) repository
-(`utils_configs/plot/HEPPlotter.py`), instead of calling `matplotlib` directly.
-The class takes care of the CMS style, of the ratio panels and of saving the
-plots in all the output formats, so that the plots are consistent across the
-repositories using it (e.g.
-[PtRegressionJERC](https://github.com/matteomalucchi/PtRegressionJERC)).
-
-The scripts only fill the `hist.Hist` objects and describe how each series
-should be drawn: the normalization, the error bars, the ratio panels, the
-uncertainty bands and the chi square are all computed by `HEPPlotter` from the
-sums of the squared weights stored in the histograms. `HEPPlotter` is used as
-it is, without any modification, and is configured inline in each script with
-the same chained style used in
-[HH4b_SPANet](https://github.com/matteomalucchi/HH4b_SPANet).
-
-`HEPPlotter` compares every series to a single reference histogram, so the
-overtraining check is drawn as one plot per class
-(`sig_bkg_distributions_kl_<kl>_signal` and
-`sig_bkg_distributions_kl_<kl>_background`): in each of them the training
-distribution is the reference of the test one, and the ratio panel shows
-Test/Train with the training uncertainty band and the chi square between the
-two.
-
-> [!IMPORTANT]
-> `HEPPlotter` is installed together with the other requirements, but it is
-> pulled directly from the git repository, so it is not updated by a plain
-> `pip install -r requirements.txt` once it is in the pip cache. To update it:
->
-> ```bash
-> pip install --upgrade --no-cache-dir git+https://github.com/matteomalucchi/AnalysisConfigs.git
-> ```
->
-> If it still does not update, uninstall it first with `pip uninstall configs`
-> and then run the command above.
 
 ## Additional scripts
 
