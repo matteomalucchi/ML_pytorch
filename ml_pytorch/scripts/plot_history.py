@@ -17,7 +17,7 @@ def read_from_txt(file):
         train_loss = []
         val_accuracy = []
         val_loss = []
-        lr=[]
+        lr = []
         i = 0
         j = 0
         for line in lines:
@@ -43,7 +43,7 @@ def read_from_txt(file):
     print(train_loss)
     print("Validation loss:")
     print(val_loss)
-    return train_accuracy, train_loss, val_accuracy, val_loss,lr
+    return train_accuracy, train_loss, val_accuracy, val_loss, lr
 
 
 def plot_history(
@@ -77,7 +77,10 @@ def plot_history(
 
         series_dict[f"Training {type}"] = {
             "data": {
-                "x": [np.linspace(0, len(info["train"]) / 10, len(info["train"])), None],
+                "x": [
+                    np.linspace(0, len(info["train"]) / 10, len(info["train"])),
+                    None,
+                ],
                 "y": [uniform_filter1d(info["train"], size=uniform_filter), None],
             },
             "style": {
@@ -95,9 +98,11 @@ def plot_history(
                 "x": [
                     np.linspace(
                         0,
-                        len(info["val"]) / 10
-                        if len(info["val"]) / 10 == len(info["train"]) / 10
-                        else len(info["train"]) / 10,
+                        (
+                            len(info["val"]) / 10
+                            if len(info["val"]) / 10 == len(info["train"]) / 10
+                            else len(info["train"]) / 10
+                        ),
                         len(info["val"]),
                     ),
                     None,
@@ -190,12 +195,12 @@ def main():
     )
     args = parser.parse_args()
 
-    #find the file starting with logger in args.input_path using os.listdir
-    log_file=args.input_path
+    # find the file starting with logger in args.input_path using os.listdir
+    log_file = args.input_path
 
     print(log_file)
 
-    train_accuracy, train_loss, val_accuracy, val_loss,lr = read_from_txt(log_file)
+    train_accuracy, train_loss, val_accuracy, val_loss, lr = read_from_txt(log_file)
 
     plot_history(
         train_accuracy,
@@ -207,8 +212,9 @@ def main():
         args.uniform_filter,
         args.lenght,
     )
-    
-    plot_lr(lr,os.path.dirname(args.input_path), args.show)
+
+    plot_lr(lr, os.path.dirname(args.input_path), args.show)
+
 
 if __name__ == "__main__":
     main()

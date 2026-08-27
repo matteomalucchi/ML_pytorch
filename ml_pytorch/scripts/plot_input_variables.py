@@ -185,9 +185,7 @@ def plot_single_variable(
         mask = np.isfinite(values) & np.isfinite(weights)
 
         h = Hist.new.Var(bin_edges, name="x", flow=False).Weight()
-        h.fill(
-            np.clip(values[mask], bin_edges[0], bin_edges[-1]), weight=weights[mask]
-        )
+        h.fill(np.clip(values[mask], bin_edges[0], bin_edges[-1]), weight=weights[mask])
         return h
 
     # the background is the reference: HEPPlotter normalizes the histograms,
@@ -432,7 +430,7 @@ def main():
             cfg.run2, dnn_input_variables_file.dnn_input_variables
         )
 
-    (training_loader, val_loader, test_loader, _, _) = load_data(cfg, cfg.seed)
+    training_loader, val_loader, test_loader, _, _ = load_data(cfg, cfg.seed)
 
     plot_input_variables_from_loaders(
         [training_loader, val_loader, test_loader],

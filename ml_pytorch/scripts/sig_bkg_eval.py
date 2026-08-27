@@ -151,11 +151,11 @@ def plot_sig_bkg_distributions(
     sig_score_train, bkg_score_train = handle_arrays(score_lbl_tensor_train, 0)
     sig_score_test, bkg_score_test = handle_arrays(score_lbl_tensor_test, 0)
 
-    print("sig_score_train",sig_score_train, sig_score_train.shape)
-    print("bkg_score_train",bkg_score_train, bkg_score_train.shape)
-    print("sig_score_test",sig_score_test, sig_score_test.shape)
-    print("bkg_score_test",bkg_score_test, bkg_score_test.shape)
-    
+    print("sig_score_train", sig_score_train, sig_score_train.shape)
+    print("bkg_score_train", bkg_score_train, bkg_score_train.shape)
+    print("sig_score_test", sig_score_test, sig_score_test.shape)
+    print("bkg_score_test", bkg_score_test, bkg_score_test.shape)
+
     # get weights
     try:
         sig_weight_train, bkg_weight_train = handle_arrays(score_lbl_tensor_train, 2)
@@ -167,50 +167,52 @@ def plot_sig_bkg_distributions(
         sig_weight_test = np.ones_like(sig_score_test)
         bkg_weight_test = np.ones_like(bkg_score_test)
 
-    print("sig_weight_train",sig_weight_train, sig_weight_train.shape)
-    print("bkg_weight_train",bkg_weight_train, bkg_weight_train.shape)
-    print("sig_weight_test",sig_weight_test, sig_weight_test.shape)
-    print("bkg_weight_test",bkg_weight_test, bkg_weight_test.shape)
-    
+    print("sig_weight_train", sig_weight_train, sig_weight_train.shape)
+    print("bkg_weight_train", bkg_weight_train, bkg_weight_train.shape)
+    print("sig_weight_test", sig_weight_test, sig_weight_test.shape)
+    print("bkg_weight_test", bkg_weight_test, bkg_weight_test.shape)
+
     # get the kl values
     try:
         sig_kl_train, bkg_kl_train = handle_arrays(score_lbl_tensor_train, 3)
         sig_kl_test, bkg_kl_test = handle_arrays(score_lbl_tensor_test, 3)
     except IndexError:
         print("WARNING: No kl values found in the input file. Using equal weights.")
-        sig_kl_train = np.ones_like(sig_score_train) * 9999.
-        bkg_kl_train = np.ones_like(bkg_score_train) * 9999.
-        sig_kl_test = np.ones_like(sig_score_test) * 9999.
-        bkg_kl_test = np.ones_like(bkg_score_test) * 9999.
-    
-    print("sig_kl_train",sig_kl_train, sig_kl_train.shape)
-    print("bkg_kl_train",bkg_kl_train, bkg_kl_train.shape)
-    print("sig_kl_test",sig_kl_test, sig_kl_test.shape)
-    print("bkg_kl_test",bkg_kl_test, bkg_kl_test.shape)
+        sig_kl_train = np.ones_like(sig_score_train) * 9999.0
+        bkg_kl_train = np.ones_like(bkg_score_train) * 9999.0
+        sig_kl_test = np.ones_like(sig_score_test) * 9999.0
+        bkg_kl_test = np.ones_like(bkg_score_test) * 9999.0
+
+    print("sig_kl_train", sig_kl_train, sig_kl_train.shape)
+    print("bkg_kl_train", bkg_kl_train, bkg_kl_train.shape)
+    print("sig_kl_test", sig_kl_test, sig_kl_test.shape)
+    print("bkg_kl_test", bkg_kl_test, bkg_kl_test.shape)
 
     kl_unique_values = list(np.unique(sig_kl_train))
-    print("kl_unique_values",kl_unique_values)
-    
+    print("kl_unique_values", kl_unique_values)
+
     # loop over the differetn kl for signal and take inclusively for bkg
     for kl in kl_unique_values + ["all"]:
         if kl != "all":
-            sig_score_train_kl=sig_score_train[sig_kl_train==kl]
-            sig_weight_train_kl=sig_weight_train[sig_kl_train==kl]
-            sig_score_test_kl=sig_score_test[sig_kl_test==kl]
-            sig_weight_test_kl=sig_weight_test[sig_kl_test==kl]
+            sig_score_train_kl = sig_score_train[sig_kl_train == kl]
+            sig_weight_train_kl = sig_weight_train[sig_kl_train == kl]
+            sig_score_test_kl = sig_score_test[sig_kl_test == kl]
+            sig_weight_test_kl = sig_weight_test[sig_kl_test == kl]
             kl_str = f"{kl:.2f}"
         else:
-            sig_score_train_kl=sig_score_train
-            sig_weight_train_kl=sig_weight_train
-            sig_score_test_kl=sig_score_test
-            sig_weight_test_kl=sig_weight_test
+            sig_score_train_kl = sig_score_train
+            sig_weight_train_kl = sig_weight_train
+            sig_score_test_kl = sig_score_test
+            sig_weight_test_kl = sig_weight_test
             kl_str = "all"
 
         # HEPPlotter.set_output strips whatever follows the last dot of the
         # output path, so the dots of the kl value are replaced with a "p"
         kl_tag = kl_str.replace("-", "m").replace(".", "p")
-        
-        ks_statistic_sig, p_value_sig = stats.ks_2samp(sig_score_train_kl, sig_score_test_kl)
+
+        ks_statistic_sig, p_value_sig = stats.ks_2samp(
+            sig_score_train_kl, sig_score_test_kl
+        )
         ks_statistic_bkg, p_value_bkg = stats.ks_2samp(bkg_score_train, bkg_score_test)
         print(f"\nKS: statistic (sig) = {ks_statistic_sig:.30f}")
         print(f"KS: p-value (sig) = {p_value_sig:.30f}")
@@ -236,7 +238,9 @@ def plot_sig_bkg_distributions(
             bin_width = bins[1:] - bins[:-1]
             bin_centers = 0.5 * (bins[:-1] + bins[1:])
 
-        n_sig = np.sum(sig_weight_test_kl) / test_fraction * (rescale[0] if rescale else 1)
+        n_sig = (
+            np.sum(sig_weight_test_kl) / test_fraction * (rescale[0] if rescale else 1)
+        )
         n_bkg = np.sum(bkg_weight_test) / test_fraction * (rescale[1] if rescale else 1)
         significance = n_sig / np.sqrt(n_bkg)
         print(f"\nNumber of signal events in the test dataset: {n_sig}")
@@ -251,7 +255,7 @@ def plot_sig_bkg_distributions(
                 for sig_eff_target in np.linspace(0.0, 1.0, 30):
                     # compute the significance for each signal efficiency
                     # and find the DNN cut that maximizes the significance
-                    (infos_significance) = compute_significance(
+                    infos_significance = compute_significance(
                         sig_eff_target,
                         counts_test_list,
                         bin_centers,
@@ -339,7 +343,12 @@ def plot_sig_bkg_distributions(
             [sig_weight_test_kl, bkg_weight_test],
             ["blue", "r"],
             [
-                {"histtype": "fill", "edgecolor": "blue", "facecolor": "dodgerblue", "alpha": 0.5},
+                {
+                    "histtype": "fill",
+                    "edgecolor": "blue",
+                    "facecolor": "dodgerblue",
+                    "alpha": 0.5,
+                },
                 {"histtype": "step"},
             ],
             [f"Signal (training) - kl = {kl_str}", "Background (training)"],
@@ -425,10 +434,12 @@ def plot_sig_bkg_distributions(
                     )
 
 
-def plot_roc_curve(score_lbl_tensor_test, dir, show, comet_logger=None, kl_bkg_str=None):
+def plot_roc_curve(
+    score_lbl_tensor_test, dir, show, comet_logger=None, kl_bkg_str=None
+):
     sig_score_test, bkg_score_test = handle_arrays(score_lbl_tensor_test, 0)
     sig_lbl_test, bkg_lbl_test = handle_arrays(score_lbl_tensor_test, 1)
-    
+
     # get the weight
     try:
         sig_weight_test, bkg_weight_test = handle_arrays(score_lbl_tensor_test, 2)
@@ -436,44 +447,44 @@ def plot_roc_curve(score_lbl_tensor_test, dir, show, comet_logger=None, kl_bkg_s
         print("WARNING: No weight values found in the input file. Using equal weight.")
         sig_weight_test = np.ones_like(sig_score_test)
         bkg_weight_test = np.ones_like(bkg_score_test)
-    
-    print("sig_weight_test",sig_weight_test, sig_weight_test.shape)
-    print("bkg_weight_test",bkg_weight_test, bkg_weight_test.shape)
-    
+
+    print("sig_weight_test", sig_weight_test, sig_weight_test.shape)
+    print("bkg_weight_test", bkg_weight_test, bkg_weight_test.shape)
+
     # get the kl values
     try:
         sig_kl_test, bkg_kl_test = handle_arrays(score_lbl_tensor_test, 3)
     except IndexError:
         print("WARNING: No kl values found in the input file. Using equal weights.")
-        sig_kl_test = np.ones_like(sig_score_test) * 9999.
-        bkg_kl_test = np.ones_like(bkg_score_test) * 9999.
-    
-    print("sig_kl_test",sig_kl_test, sig_kl_test.shape)
-    print("bkg_kl_test",bkg_kl_test, bkg_kl_test.shape)
-    
+        sig_kl_test = np.ones_like(sig_score_test) * 9999.0
+        bkg_kl_test = np.ones_like(bkg_score_test) * 9999.0
+
+    print("sig_kl_test", sig_kl_test, sig_kl_test.shape)
+    print("bkg_kl_test", bkg_kl_test, bkg_kl_test.shape)
+
     kl_unique_values = list(np.unique(sig_kl_test))
-    print("kl_unique_values",kl_unique_values)
-    roc_info_dict={}
+    print("kl_unique_values", kl_unique_values)
+    roc_info_dict = {}
 
     # loop over the differetn kl for signal and take inclusively for bkg
     for kl in kl_unique_values + ["all"]:
         if kl != "all":
-            sig_score_test_kl=sig_score_test[sig_kl_test==kl]
-            sig_weight_test_kl=sig_weight_test[sig_kl_test==kl]
-            sig_lbl_test_kl=sig_lbl_test[sig_kl_test==kl]
+            sig_score_test_kl = sig_score_test[sig_kl_test == kl]
+            sig_weight_test_kl = sig_weight_test[sig_kl_test == kl]
+            sig_lbl_test_kl = sig_lbl_test[sig_kl_test == kl]
             kl_str = f"{kl:.2f}"
         else:
-            sig_score_test_kl=sig_score_test
-            sig_weight_test_kl=sig_weight_test
-            sig_lbl_test_kl=sig_lbl_test
+            sig_score_test_kl = sig_score_test
+            sig_weight_test_kl = sig_weight_test
+            sig_lbl_test_kl = sig_lbl_test
             kl_str = "all"
 
         kl_tag = kl_str.replace("-", "m").replace(".", "p")
-            
-        score=np.concatenate((sig_score_test_kl, bkg_score_test))
-        weight=np.concatenate((sig_weight_test_kl, bkg_weight_test))
-        lbl=np.concatenate((sig_lbl_test_kl, bkg_lbl_test))
-                
+
+        score = np.concatenate((sig_score_test_kl, bkg_score_test))
+        weight = np.concatenate((sig_weight_test_kl, bkg_weight_test))
+        lbl = np.concatenate((sig_lbl_test_kl, bkg_lbl_test))
+
         # plot the ROC curve
         fpr, tpr, _ = roc_curve(
             lbl,
@@ -498,7 +509,7 @@ def plot_roc_curve(score_lbl_tensor_test, dir, show, comet_logger=None, kl_bkg_s
         )
 
         # save tpr and fpr in a npz file
-        
+
         roc_info_dict[f"tpr_kl_{kl_str}"] = tpr
         roc_info_dict[f"fpr_kl_{kl_str}"] = fpr
         roc_info_dict[f"abs_weights_tpr_kl_{kl_str}"] = abs_weights_tpr
@@ -546,15 +557,10 @@ def plot_roc_curve(score_lbl_tensor_test, dir, show, comet_logger=None, kl_bkg_s
         plotter.run()
 
         if comet_logger:
-            comet_logger.log_image(
-                f"{dir}/roc_curve_kl_{kl_tag}.png", name="roc_curve"
-            )
-    
+            comet_logger.log_image(f"{dir}/roc_curve_kl_{kl_tag}.png", name="roc_curve")
+
     # save tpr and fpr in a npz file
-    np.savez(
-        f"{dir}/tpr_fpr.npz",
-        **roc_info_dict
-    )
+    np.savez(f"{dir}/tpr_fpr.npz", **roc_info_dict)
 
 
 def plot_kl_distributions(
@@ -582,11 +588,15 @@ def plot_kl_distributions(
         else:
             try:
                 sig_train = score_lbl_train[:, 1] == 1
-                bkg_train_kl = (score_lbl_train[:, 1] == 0) & (score_lbl_train[:, 3] == float(kl_bkg))
+                bkg_train_kl = (score_lbl_train[:, 1] == 0) & (
+                    score_lbl_train[:, 3] == float(kl_bkg)
+                )
                 train_data = score_lbl_train[sig_train | bkg_train_kl]
 
                 sig_test = score_lbl_test[:, 1] == 1
-                bkg_test_kl = (score_lbl_test[:, 1] == 0) & (score_lbl_test[:, 3] == float(kl_bkg))
+                bkg_test_kl = (score_lbl_test[:, 1] == 0) & (
+                    score_lbl_test[:, 3] == float(kl_bkg)
+                )
                 test_data = score_lbl_test[sig_test | bkg_test_kl]
             except IndexError:
                 train_data = score_lbl_train
@@ -611,7 +621,13 @@ def plot_kl_distributions(
         if do_roc:
             roc_out_dir = f"{out_dir}/roc_bkgkl_{kl_bkg_str}"
             os.makedirs(roc_out_dir, exist_ok=True)
-            plot_roc_curve(test_data, roc_out_dir, show, comet_logger=comet_logger, kl_bkg_str=kl_bkg_str)
+            plot_roc_curve(
+                test_data,
+                roc_out_dir,
+                show,
+                comet_logger=comet_logger,
+                kl_bkg_str=kl_bkg_str,
+            )
 
 
 def main():
@@ -680,7 +696,8 @@ def main():
         for v in args.kl_background:
             kl_bkg_requested.add(v if v == "all" else float(v))
         kls_background_to_plot = [
-            kl for kl in ["all"] + kl_bkg_unique_values
+            kl
+            for kl in ["all"] + kl_bkg_unique_values
             if (kl if kl == "all" else float(kl)) in kl_bkg_requested
         ]
     print(f"Background kl values to plot: {kls_background_to_plot}")
