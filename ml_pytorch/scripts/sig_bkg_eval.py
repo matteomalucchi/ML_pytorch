@@ -11,7 +11,7 @@ from sklearn.metrics import roc_curve, roc_auc_score, auc
 from hist import Hist
 from utils_configs.plot.HEPPlotter import HEPPlotter
 
-LUMITEXT = "2022 (13.6 TeV)"
+LUMITEXT = "(13.6 TeV)"
 
 # CMS colour palette of mplhep: the first colour is used for the background
 # and the second one for the signal, consistently in all the plotting scripts
@@ -366,7 +366,7 @@ def plot_sig_bkg_distributions(
                     "x": dnn_score_target,
                     "color": "grey",
                     "linestyle": "--",
-                    "label": "Sig efficiency {:.2f}\nBkg rejection {:.2f}\nDNN score {:.2f}".format(
+                    "label": "Sig efficiency = {:.2f}\nBkg rejection = {:.2f}\nDNN score cut = {:.2f}".format(
                         signal_eff,
                         bkg_rejection,
                         dnn_score_target,
@@ -393,10 +393,10 @@ def plot_sig_bkg_distributions(
                 "data": hist_sig_train,
                 "style": {
                     "color": SIG_COLOR,
-                    "histtype": "fill",
-                    "edgecolor": SIG_COLOR,
-                    "facecolor": SIG_COLOR,
-                    "alpha": 0.5,
+                    "histtype": "step",
+                    # "edgecolor": SIG_COLOR,
+                    # "facecolor": SIG_COLOR,
+                    # "alpha": 0.5,
                 },
             },
             "Signal (test)": {
@@ -425,10 +425,10 @@ def plot_sig_bkg_distributions(
         for log in [False, True]:
             plotter = (
                 HEPPlotter("CMS")
-                .set_plot_config(figsize=[13, 13], lumitext=LUMITEXT)
+                .set_plot_config(figsize=[13, 13], lumitext=LUMITEXT, cmstext="Private")
                 .set_output(f"{base}{'_log' if log else ''}")
                 .set_labels(
-                    xlabel="Output score",
+                    xlabel="DNN Class Score",
                     ylabel="Normalized counts",
                 )
                 .set_data(series_dict, plot_type="1d")
@@ -439,52 +439,64 @@ def plot_sig_bkg_distributions(
                     grid=True,
                     y_log=log,
                     ylim_bottom_value=1e-4 if log else 0.0,
-                    ylim_top_value=1 if log else None,
-                    ylim_top_factor=2,
+                    ylim_top_value=5 if log else 0.15,
+                    # ylim_top_factor=2,
+                )
+                .add_annotation(
+                    x=0.6,
+                    y=0.95,
+                    s=f"KS sig: p-value = {p_value_sig:.2f}",
+                    fontsize=20,
+                    ha="left",
+                    va="center",
+                    color=SIG_COLOR,
                 )
                 .add_annotation(
                     x=0.6,
                     y=0.9,
-                    s=f"KS sig: p-value = {p_value_sig:.2f}",
+                    s=f"KS bkg: p-value = {p_value_bkg:.2f}",
                     fontsize=20,
-                    color=SIG_COLOR,
+                    ha="left",
+                    va="center",
+                    color=BKG_COLOR,
                 )
                 .add_annotation(
                     x=0.6,
                     y=0.85,
-                    s=f"KS bkg: p-value = {p_value_bkg:.2f}",
+                    s=r"$\chi^2$/ndof= {:.1f},".format(chi2_sig)
+                    + f"  p-value= {pvalue_sig:.2f}",
                     fontsize=20,
-                    color=BKG_COLOR,
+                    ha="left",
+                    va="center",
+                    color=SIG_COLOR,
                 )
                 .add_annotation(
                     x=0.6,
                     y=0.8,
-                    s=r"$\chi^2$/ndof= {:.1f},".format(chi2_sig)
-                    + f"  p-value= {pvalue_sig:.2f}",
+                    s=r"$\chi^2$/ndof= {:.1f},".format(chi2_bkg)
+                    + f"  p-value= {pvalue_bkg:.2f}",
                     fontsize=20,
-                    color=SIG_COLOR,
                     ha="left",
                     va="center",
+                    color=BKG_COLOR,
                 )
                 .add_annotation(
                     x=0.6,
                     y=0.75,
-                    s=r"$\chi^2$/ndof= {:.1f},".format(chi2_bkg)
-                    + f"  p-value= {pvalue_bkg:.2f}",
+                    s=rf"sig $\kappa_\lambda$ = {kl_str}",
                     fontsize=20,
-                    color=BKG_COLOR,
                     ha="left",
                     va="center",
+                    color=SIG_COLOR,
                 )
                 .add_annotation(
                     x=0.6,
-                    y=0.6,
-                    s=rf"sig $\kappa_\lambda$ = {kl_str}"
-                    + "\n"
-                    + rf"bkg $\kappa_\lambda$ = {kl_bkg_str if kl_bkg_str else 'all'}",
-                    fontsize=18,
-                    ha="right",
-                    va="bottom",
+                    y=0.7,
+                    s=rf"bkg $\kappa_\lambda$ = {kl_bkg_str if kl_bkg_str else 'all'}",
+                    fontsize=20,
+                    ha="left",
+                    va="center",
+                    color=BKG_COLOR,
                 )
             )
             for line in lines:
