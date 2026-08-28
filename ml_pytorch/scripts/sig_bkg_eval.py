@@ -411,8 +411,8 @@ def plot_sig_bkg_distributions(
                     color="r",
                 )
                 .add_annotation(
-                    x=0.98,
-                    y=0.05,
+                    x=0.6,
+                    y=0.7,
                     s=rf"sig $\kappa_\lambda$ = {kl_str}"
                     + "\n"
                     + rf"bkg $\kappa_\lambda$ = {kl_bkg_str if kl_bkg_str else 'all'}",
