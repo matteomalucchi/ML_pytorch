@@ -4,6 +4,7 @@ import matplotlib
 matplotlib.use("Agg")
 import argparse
 import numpy as np
+import mplhep as hep
 from scipy import stats
 from sklearn.metrics import roc_curve, roc_auc_score, auc
 
@@ -11,6 +12,12 @@ from hist import Hist
 from utils_configs.plot.HEPPlotter import HEPPlotter
 
 LUMITEXT = "2022 (13.6 TeV)"
+
+# CMS colour palette of mplhep: the first colour is used for the background
+# and the second one for the signal, consistently in all the plotting scripts
+CMS_COLORS = [cycle["color"] for cycle in hep.style.CMS["axes.prop_cycle"]]
+BKG_COLOR = CMS_COLORS[0]
+SIG_COLOR = CMS_COLORS[1]
 
 
 def handle_arrays(score_lbl_tensor, column=0):
@@ -111,6 +118,37 @@ def find_threshold_and_bkg_rejection(
         else 0.0
     )
     return threshold, bkg_rejection
+
+
+def chi_square(hist_test, hist_train):
+    """Chi2/ndof and p-value between the test and the training distribution.
+
+    Both histograms are normalized to unit integral, as they are drawn, and the
+    empty bins are skipped. The uncertainties of both are propagated.
+    """
+    integral_test = hist_test.values().sum()
+    integral_train = hist_train.values().sum()
+    if integral_test == 0 or integral_train == 0:
+        return np.nan, np.nan
+
+    h_test = hist_test.values() / integral_test
+    h_train = hist_train.values() / integral_train
+    err_test = np.sqrt(hist_test.variances()) / integral_test
+    err_train = np.sqrt(hist_train.variances()) / integral_train
+
+    # remove empty bins
+    mask = (h_test != 0) & (h_train != 0)
+
+    chi_squared = np.sum(
+        (
+            (h_test[mask] - h_train[mask])
+            / np.sqrt(err_test[mask] ** 2 + err_train[mask] ** 2)
+        )
+        ** 2
+    )
+    ndof = len(h_test) - 1
+
+    return chi_squared / ndof, 1 - stats.chi2.cdf(chi_squared, ndof)
 
 
 def compute_significance(
@@ -336,40 +374,49 @@ def plot_sig_bkg_distributions(
                 }
             )
 
-        # Single overtraining plot with signal and background overlaid
-        hist_sig_train = Hist.new.Reg(50, 0, 1, name="score").Weight()
-        hist_sig_train.fill(sig_score_train_kl, weight=sig_weight_train_kl)
-        hist_sig_test = Hist.new.Reg(50, 0, 1, name="score").Weight()
-        hist_sig_test.fill(sig_score_test_kl, weight=sig_weight_test_kl)
-        hist_bkg_train = Hist.new.Reg(50, 0, 1, name="score").Weight()
-        hist_bkg_train.fill(bkg_score_train, weight=bkg_weight_train)
-        hist_bkg_test = Hist.new.Reg(50, 0, 1, name="score").Weight()
-        hist_bkg_test.fill(bkg_score_test, weight=bkg_weight_test)
+        # Single overtraining plot with signal and background overlaid.
+        # The histograms are filled with weights normalized to unit integral,
+        # so that the four distributions can be compared with each other.
+        def normalized_hist(scores, weights):
+            h = Hist.new.Reg(50, 0, 1, name="score").Weight()
+            total = np.sum(weights)
+            h.fill(scores, weight=weights / total if total else weights)
+            return h
+
+        hist_sig_train = normalized_hist(sig_score_train_kl, sig_weight_train_kl)
+        hist_sig_test = normalized_hist(sig_score_test_kl, sig_weight_test_kl)
+        hist_bkg_train = normalized_hist(bkg_score_train, bkg_weight_train)
+        hist_bkg_test = normalized_hist(bkg_score_test, bkg_weight_test)
 
         series_dict = {
             "Signal (training)": {
                 "data": hist_sig_train,
                 "style": {
-                    "color": "blue",
+                    "color": SIG_COLOR,
                     "histtype": "fill",
-                    "edgecolor": "blue",
-                    "facecolor": "dodgerblue",
+                    "edgecolor": SIG_COLOR,
+                    "facecolor": SIG_COLOR,
                     "alpha": 0.5,
                 },
             },
             "Signal (test)": {
                 "data": hist_sig_test,
-                "style": {"histtype": "errorbar", "color": "blue"},
+                "style": {"histtype": "errorbar", "color": SIG_COLOR},
             },
             "Background (training)": {
                 "data": hist_bkg_train,
-                "style": {"color": "r", "histtype": "step"},
+                "style": {"color": BKG_COLOR, "histtype": "step"},
             },
             "Background (test)": {
                 "data": hist_bkg_test,
-                "style": {"histtype": "errorbar", "color": "r"},
+                "style": {"histtype": "errorbar", "color": BKG_COLOR},
             },
         }
+
+        chi2_sig, pvalue_sig = chi_square(hist_sig_test, hist_sig_train)
+        chi2_bkg, pvalue_bkg = chi_square(hist_bkg_test, hist_bkg_train)
+        print(f"\nchi2/ndof (sig) = {chi2_sig:.3f}, p-value = {pvalue_sig:.3f}")
+        print(f"chi2/ndof (bkg) = {chi2_bkg:.3f}, p-value = {pvalue_bkg:.3f}")
 
         base = f"{dir}/sig_bkg_distributions_kl_{kl_tag}"
 
@@ -386,7 +433,6 @@ def plot_sig_bkg_distributions(
                 )
                 .set_data(series_dict, plot_type="1d")
                 .set_options(
-                    normalize_1d_histo=True,
                     legend_loc="upper left",
                     legend_font_size=20,
                     split_legend=False,
@@ -401,18 +447,38 @@ def plot_sig_bkg_distributions(
                     y=0.9,
                     s=f"KS sig: p-value = {p_value_sig:.2f}",
                     fontsize=20,
-                    color="blue",
+                    color=SIG_COLOR,
                 )
                 .add_annotation(
                     x=0.6,
                     y=0.85,
                     s=f"KS bkg: p-value = {p_value_bkg:.2f}",
                     fontsize=20,
-                    color="r",
+                    color=BKG_COLOR,
                 )
                 .add_annotation(
                     x=0.6,
-                    y=0.7,
+                    y=0.8,
+                    s=r"$\chi^2$/ndof= {:.1f},".format(chi2_sig)
+                    + f"  p-value= {pvalue_sig:.2f}",
+                    fontsize=20,
+                    color=SIG_COLOR,
+                    ha="left",
+                    va="center",
+                )
+                .add_annotation(
+                    x=0.6,
+                    y=0.75,
+                    s=r"$\chi^2$/ndof= {:.1f},".format(chi2_bkg)
+                    + f"  p-value= {pvalue_bkg:.2f}",
+                    fontsize=20,
+                    color=BKG_COLOR,
+                    ha="left",
+                    va="center",
+                )
+                .add_annotation(
+                    x=0.6,
+                    y=0.6,
                     s=rf"sig $\kappa_\lambda$ = {kl_str}"
                     + "\n"
                     + rf"bkg $\kappa_\lambda$ = {kl_bkg_str if kl_bkg_str else 'all'}",

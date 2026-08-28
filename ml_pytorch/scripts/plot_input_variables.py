@@ -18,6 +18,7 @@ import logging
 import os
 
 import numpy as np
+import mplhep as hep
 from hist import Hist
 from utils_configs.plot.HEPPlotter import HEPPlotter
 
@@ -32,9 +33,11 @@ DISCRETE_THRESHOLD = 15
 # percentiles used to define the plotting range (robust against outliers)
 RANGE_PERCENTILES = (0.1, 99.9)
 
-SIG_COLOR = "blue"
-SIG_FACECOLOR = "dodgerblue"
-BKG_COLOR = "r"
+# CMS colour palette of mplhep: the first colour is used for the background
+# and the second one for the signal, consistently in all the plotting scripts
+CMS_COLORS = [cycle["color"] for cycle in hep.style.CMS["axes.prop_cycle"]]
+BKG_COLOR = CMS_COLORS[0]
+SIG_COLOR = CMS_COLORS[1]
 
 
 def to_numpy(array):
@@ -198,7 +201,7 @@ def plot_single_variable(
                 "histtype": "fill",
                 "color": SIG_COLOR,
                 "edgecolor": SIG_COLOR,
-                "facecolor": SIG_FACECOLOR,
+                "facecolor": SIG_COLOR,
                 "alpha": 0.5,
             },
         },

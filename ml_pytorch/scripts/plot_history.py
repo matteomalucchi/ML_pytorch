@@ -4,9 +4,13 @@ import os
 import numpy as np
 from glob import glob
 
+import mplhep as hep
 from utils_configs.plot.HEPPlotter import HEPPlotter
 
 LUMITEXT = "2022 (13.6 TeV)"
+
+# CMS colour palette of mplhep, used consistently in all the plotting scripts
+CMS_COLORS = [cycle["color"] for cycle in hep.style.CMS["axes.prop_cycle"]]
 
 
 def read_from_txt(file):
@@ -84,7 +88,7 @@ def plot_history(
                 "y": [uniform_filter1d(info["train"], size=uniform_filter), None],
             },
             "style": {
-                "color": "dodgerblue",
+                "color": CMS_COLORS[0],
                 "linestyle": line_style[type],
                 "markersize": 0,
             },
@@ -109,7 +113,11 @@ def plot_history(
                 ],
                 "y": [uniform_filter1d(info["val"], size=uniform_filter), None],
             },
-            "style": {"color": "r", "linestyle": line_style[type], "markersize": 0},
+            "style": {
+                "color": CMS_COLORS[1],
+                "linestyle": line_style[type],
+                "markersize": 0,
+            },
         }
 
     if not series_dict:
@@ -148,7 +156,7 @@ def plot_lr(lr, main_dir, show, comet_logger=None):
                 "x": [np.arange(len(lr)), None],
                 "y": [np.asarray(lr, dtype=float), None],
             },
-            "style": {"color": "tab:blue", "linestyle": "-", "markersize": 0},
+            "style": {"color": CMS_COLORS[0], "linestyle": "-", "markersize": 0},
         }
     }
 
