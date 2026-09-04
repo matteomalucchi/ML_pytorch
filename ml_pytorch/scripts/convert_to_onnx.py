@@ -55,6 +55,7 @@ if args.model_type == "keras":
 input_variables_name = args.input_variables
 if args.config is not None:
     from omegaconf import OmegaConf
+
     _cfg = OmegaConf.load(args.config)
     if _cfg.get("input_variables") is not None:
         input_variables_name = _cfg.input_variables
@@ -139,7 +140,6 @@ def compare_output_onnx_ratio(
     print("output_onnx", output_onnx)
     print("output_onnx by hand ratio", output_onnx[:, 1] / output_onnx[:, 0])
 
-
     if onnx_model_name_2:
         output_onnx_2 = get_onnx_output(onnx_model_name_2, input_data)[0]
         output_onnx_ratio_2 = output_onnx_2[:, 1] / output_onnx_2[:, 0]
@@ -154,12 +154,11 @@ def compare_output_onnx_ratio(
     output_onnx_ratio = get_onnx_output(onnx_model_ratio_name, input_data)
     print("output onnx directly from pad", output_onnx_ratio)
     print("for ", onnx_model_ratio_name)
-    
-    
+
     assert np.allclose(
-        output_onnx_ratio,
-        output_by_hand if onnx_model_name_2 else output_onnx_ratio
+        output_onnx_ratio, output_by_hand if onnx_model_name_2 else output_onnx_ratio
     )
+
 
 def get_ratio_model_tensor_onnx(onnx_model, b):
     inferred_model = onnx.shape_inference.infer_shapes(onnx_model)

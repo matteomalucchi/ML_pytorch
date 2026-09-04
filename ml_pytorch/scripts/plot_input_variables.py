@@ -1,7 +1,8 @@
 """Plot the input variable distributions of signal and background.
 
-The histograms are normalized to unit area and are drawn in the CMS style
-(as done in `sig_bkg_eval.py`), together with a signal/background ratio panel.
+The histograms are normalized to unit area and are drawn with the `HEPPlotter`
+class of the AnalysisConfigs repository (as done in `sig_bkg_eval.py`),
+together with a signal/background ratio panel.
 
 The plots are produced *before* the training starts and are saved in a
 subdirectory of the output directory (`input_variables` by default).
@@ -16,14 +17,14 @@ import importlib
 import logging
 import os
 
-import matplotlib.pyplot as plt
-import mplhep as hep
 import numpy as np
-
-hep.style.use("CMS")
-hep.cms.label(loc=0)
+import mplhep as hep
+from hist import Hist
+from utils_configs.plot.HEPPlotter import HEPPlotter
 
 logger = logging.getLogger(__name__)
+
+LUMITEXT = "2022 (13.6 TeV)"
 
 DEFAULT_SUBDIR = "input_variables"
 DEFAULT_BINS = 30
@@ -32,9 +33,11 @@ DISCRETE_THRESHOLD = 15
 # percentiles used to define the plotting range (robust against outliers)
 RANGE_PERCENTILES = (0.1, 99.9)
 
-SIG_COLOR = "blue"
-SIG_FACECOLOR = "dodgerblue"
-BKG_COLOR = "r"
+# CMS colour palette of mplhep: the first colour is used for the background
+# and the second one for the signal, consistently in all the plotting scripts
+CMS_COLORS = [cycle["color"] for cycle in hep.style.CMS["axes.prop_cycle"]]
+BKG_COLOR = CMS_COLORS[0]
+SIG_COLOR = CMS_COLORS[1]
 
 
 def to_numpy(array):
@@ -158,29 +161,6 @@ def get_bin_edges(sig_values, bkg_values, bins=DEFAULT_BINS):
     return np.linspace(low, high, bins + 1)
 
 
-def weighted_histogram(values, weights, bin_edges, normalize=True):
-    """Weighted histogram with statistical errors, normalized to unit area.
-
-    The events outside the histogram range are clipped into the first/last bin
-    so that no event is lost in the normalization.
-    """
-    mask = np.isfinite(values) & np.isfinite(weights)
-    values = np.clip(values[mask], bin_edges[0], bin_edges[-1])
-    weights = weights[mask]
-
-    counts, _ = np.histogram(values, bins=bin_edges, weights=weights)
-    sumw2, _ = np.histogram(values, bins=bin_edges, weights=weights**2)
-    errors = np.sqrt(sumw2)
-
-    if normalize:
-        integral = np.sum(counts * np.diff(bin_edges))
-        if integral != 0:
-            counts = counts / integral
-            errors = errors / abs(integral)
-
-    return counts, errors
-
-
 def plot_single_variable(
     variable,
     sig_values,
@@ -191,7 +171,7 @@ def plot_single_variable(
     bins=DEFAULT_BINS,
     show=False,
     log_scale=False,
-    lumitext="2022 (13.6 TeV)",
+    lumitext=LUMITEXT,
     sig_label="Signal",
     bkg_label="Background",
     formats=("png", "pdf"),
@@ -199,128 +179,83 @@ def plot_single_variable(
 ):
     """Plot the normalized signal and background distribution of one variable."""
     bin_edges = get_bin_edges(sig_values, bkg_values, bins)
-    bin_centers = (bin_edges[1:] + bin_edges[:-1]) / 2
 
-    sig_counts, sig_errors = weighted_histogram(sig_values, sig_weights, bin_edges)
-    bkg_counts, bkg_errors = weighted_histogram(bkg_values, bkg_weights, bin_edges)
+    def make_hist(values, weights):
+        """Fill a hist.Hist, clipping the entries outside the range into the
+        first/last bin so that none of them is lost in the normalization."""
+        values = np.asarray(values, dtype=float)
+        weights = np.asarray(weights, dtype=float)
+        mask = np.isfinite(values) & np.isfinite(weights)
 
-    fig, (ax, ax_ratio) = plt.subplots(
-        2,
-        1,
-        figsize=[13, 13],
-        sharex=True,
-        gridspec_kw={"height_ratios": [2.5, 1]},
-    )
+        h = Hist.new.Var(bin_edges, name="x", flow=False).Weight()
+        h.fill(np.clip(values[mask], bin_edges[0], bin_edges[-1]), weight=weights[mask])
+        return h
 
-    ax.stairs(
-        sig_counts,
-        bin_edges,
-        fill=True,
-        facecolor=SIG_FACECOLOR,
-        edgecolor=SIG_COLOR,
-        alpha=0.5,
-        label=sig_label,
-    )
-    ax.stairs(
-        bkg_counts,
-        bin_edges,
-        fill=False,
-        edgecolor=BKG_COLOR,
-        hatch="\\\\",
-        label=bkg_label,
-    )
-    ax.errorbar(
-        bin_centers,
-        sig_counts,
-        yerr=sig_errors,
-        color=SIG_COLOR,
-        linestyle="None",
-        marker="None",
-    )
-    ax.errorbar(
-        bin_centers,
-        bkg_counts,
-        yerr=bkg_errors,
-        color=BKG_COLOR,
-        linestyle="None",
-        marker="None",
-    )
-
-    # ratio plot: signal over background
-    valid = (bkg_counts != 0) & (sig_counts != 0)
-    ratio = np.full_like(sig_counts, np.nan, dtype=float)
-    ratio_err = np.full_like(sig_counts, np.nan, dtype=float)
-    ratio_band = np.zeros_like(bkg_counts, dtype=float)
-
-    ratio[valid] = sig_counts[valid] / bkg_counts[valid]
-    ratio_err[valid] = np.abs(sig_errors[valid] / bkg_counts[valid])
-    ratio_band[valid] = np.abs(bkg_errors[valid] / bkg_counts[valid])
-
-    ax_ratio.errorbar(
-        bin_centers,
-        ratio,
-        yerr=ratio_err,
-        marker="o",
-        color="black",
-        linestyle="None",
-    )
-    ax_ratio.fill_between(
-        bin_centers,
-        1 - ratio_band,
-        1 + ratio_band,
-        color=BKG_COLOR,
-        alpha=0.2,
-        step="mid",
-    )
-    ax_ratio.axhline(y=1, color="black", linestyle="--")
-
-    finite = np.isfinite(ratio) & np.isfinite(ratio_err)
-    if finite.any():
-        low = float(np.min(ratio[finite] - ratio_err[finite]))
-        high = float(np.max(ratio[finite] + ratio_err[finite]))
-        padding = 0.1 * (high - low) if high > low else 0.1
-        ax_ratio.set_ylim(max(0.0, low - padding), high + padding)
-
-    max_bin = max(np.max(sig_counts, initial=0), np.max(bkg_counts, initial=0))
-    if max_bin > 0:
-        ax.set_ylim(bottom=0, top=max_bin * 1.5)
-
-    ax.set_ylabel("Normalized counts")
-    ax_ratio.set_xlabel(variable)
-    ax_ratio.set_ylabel("Signal/Background")
-    ax_ratio.set_xlim(bin_edges[0], bin_edges[-1])
-
-    ax.legend(loc="upper right", fontsize=20, frameon=False)
-    ax.grid()
-    ax_ratio.grid()
-
-    hep.cms.lumitext(lumitext, ax=ax)
-    hep.cms.text(text="Preliminary", ax=ax, loc=0)
+    # the background is the reference: HEPPlotter normalizes the histograms,
+    # draws the signal/background ratio and the background uncertainty band
+    # around one, and takes the error bars from the histogram variances
+    series_dict = {
+        sig_label: {
+            "data": make_hist(sig_values, sig_weights),
+            "style": {
+                "histtype": "fill",
+                "color": SIG_COLOR,
+                "edgecolor": SIG_COLOR,
+                "facecolor": SIG_COLOR,
+                "alpha": 0.5,
+            },
+        },
+        bkg_label: {
+            "data": make_hist(bkg_values, bkg_weights),
+            "style": {
+                "histtype": "step",
+                "color": BKG_COLOR,
+                "is_reference": True,
+            },
+        },
+    }
 
     file_name = safe_file_name(variable)
-    if comet_logger:
-        comet_logger.log_figure(f"input_variables/{variable}", plt)
-    for extension in formats:
-        fig.savefig(
-            f"{dir}/{file_name}.{extension}", bbox_inches="tight", dpi=300
-        )
 
-    if log_scale and max_bin > 0:
-        positive_counts = np.concatenate([sig_counts, bkg_counts])
-        positive_counts = positive_counts[positive_counts > 0]
-        bottom = np.min(positive_counts) * 0.1 if positive_counts.size > 0 else 1e-3
-        ax.set_yscale("log")
-        ax.set_ylim(bottom=bottom, top=max_bin * 100)
-        if comet_logger:
-            comet_logger.log_figure(f"input_variables/{variable}_log", plt)
-        for extension in formats:
-            fig.savefig(
-                f"{dir}/{file_name}_log.{extension}", bbox_inches="tight", dpi=300
+    # the histograms are normalized to unit integral by HEPPlotter, so the same
+    # log range can be used for every variable
+    for log in [False, True] if log_scale else [False]:
+        plotter = (
+            HEPPlotter("CMS")
+            .set_plot_config(
+                figsize=[13, 13], lumitext=lumitext, data_formats=list(formats)
             )
+            .set_output(f"{dir}/{file_name}{'_log' if log else ''}")
+            .set_labels(
+                xlabel=variable,
+                ylabel="Normalized counts",
+                ratio_label="Signal/Background",
+            )
+            .set_data(series_dict, plot_type="1d")
+            .set_options(
+                normalize_1d_histo=True,
+                legend_loc="upper right",
+                legend_font_size=20,
+                split_legend=False,
+                grid=True,
+                set_xlim=True,
+                xlim_left_value=bin_edges[0],
+                xlim_right_value=bin_edges[-1],
+                y_log=log,
+                ylim_bottom_value=1e-4 if log else 0.0,
+                ylim_top_value=1 if log else None,
+                ylim_top_factor=1.5,
+            )
+        )
+        if show:
+            plotter.show()
+        plotter.run()
 
-    if show:
-        plt.show()
-    plt.close(fig)
+        if comet_logger and "png" in formats:
+            comet_logger.log_image(
+                f"{dir}/{file_name}{'_log' if log else ''}.png",
+                name=f"input_variables/{variable}{'_log' if log else ''}",
+            )
 
 
 def plot_input_variables(
@@ -498,7 +433,7 @@ def main():
             cfg.run2, dnn_input_variables_file.dnn_input_variables
         )
 
-    (training_loader, val_loader, test_loader, _, _) = load_data(cfg, cfg.seed)
+    training_loader, val_loader, test_loader, _, _ = load_data(cfg, cfg.seed)
 
     plot_input_variables_from_loaders(
         [training_loader, val_loader, test_loader],
