@@ -76,6 +76,8 @@ Evaluation / output
   -ev, --eval                  Evaluate the model on the test set (no training)
   -em, --eval-model PATH       Path to an existing model to evaluate instead of training
   -l,  --load-model PATH       Load a checkpoint and continue training from it
+  -mp, --ml-model-path PATH    Path to the ML_model.py file used with --load-model/--eval-model
+                                (default: <output_dir>/ML_model.py)
   --onnx                       Export the best model to ONNX format after training
   -sm, --save-model            Save the full model object next to the state dict
   -s-n, --save-numpy           Save numpy arrays of the output scores

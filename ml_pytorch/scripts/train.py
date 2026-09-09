@@ -1,5 +1,6 @@
 import datetime
 import importlib
+import importlib.util
 import os
 import sys
 import time
@@ -111,10 +112,15 @@ def main():
     saved_ML_model_path = f"{main_dir}/ML_model.py"
 
     if cfg.load_model or cfg.eval_model:
+        if not os.path.exists(main_dir):
+            os.makedirs(main_dir)
+        ml_model_path = cfg.ml_model_path or saved_ML_model_path
         # os.system(f"cp {saved_ML_model_path} {file_dir}/../models/ML_model_loaded.py")
-        sys.path.append(main_dir)
+        sys.path.append(os.path.dirname(ml_model_path))
         print("sys.path", sys.path)
-        import ML_model
+        spec = importlib.util.spec_from_file_location("ML_model", ml_model_path)
+        ML_model = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(ML_model)
 
         # ML_model = importlib.import_module(saved_ML_model_path.replace("/", ".").replace(".py", ""))
         # ML_model = importlib.import_module(f"ml_pytorch.models.ML_model_loaded")
@@ -235,7 +241,7 @@ def main():
         )
         logger.info(f"Input variable distributions saved in {input_plots_dir}")
 
-    if cfg.gpus is not None:
+    if cfg.gpus is not None and cfg.gpus != "cpu":
         gpus = [int(i) for i in cfg.gpus.split(",")]
         device = torch.device(gpus[0])
     else:
@@ -266,7 +272,9 @@ def main():
         model = torch.nn.DataParallel(model, device_ids=gpus)
 
     if cfg.load_model or cfg.eval_model:
-        checkpoint = torch.load(cfg.load_model if cfg.load_model else cfg.eval_model)
+        checkpoint = torch.load(
+            cfg.load_model if cfg.load_model else cfg.eval_model, map_location=device
+        )
         model.load_state_dict(checkpoint["state_dict"])
         optimizer.load_state_dict(checkpoint["optimizer"])
         loaded_epoch = checkpoint["epoch"]
@@ -430,7 +438,7 @@ def main():
 
     # load best model
     model.load_state_dict(
-        torch.load(best_model_name if not cfg.eval_model else cfg.eval_model)[
+        torch.load(best_model_name if not cfg.eval_model else cfg.eval_model, map_location=device)[
             "state_dict"
         ]
     )
@@ -448,7 +456,7 @@ def main():
         # move model to cpu
         model.to("cpu")
         export_onnx(
-            model,
+            model   ,
             best_model_name if not cfg.eval_model else cfg.eval_model,
             batch_size,
             input_size,

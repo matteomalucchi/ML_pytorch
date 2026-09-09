@@ -42,7 +42,7 @@ parser.add_argument(
     "-ev",
     "--eval",
     action="store_true",
-    help="Evaluate the model",
+    help="Evaluate the model on test dataset after training",
     default=None,
 )
 parser.add_argument(
@@ -86,7 +86,7 @@ parser.add_argument(
     type=str,
 )
 parser.add_argument(
-    "-g", "--gpus", default=None, help="GPU numbers separated by a comma", type=str
+    "-g", "--gpus", default=None, help="GPU numbers separated by a comma. Use 'cpu' for CPU", type=str
 )
 parser.add_argument(
     "--histos", default=None, help="Make histograms of sig and bkg output distribution", action="store_true"
@@ -133,7 +133,7 @@ parser.add_argument(
     "-em",
     "--eval-model",
     default=None,
-    help="Path to model to evaluate",
+    help="Path to model to evaluate (should be the state at the best epoch after training)",
     type=str,
 )
 parser.add_argument(
@@ -141,6 +141,13 @@ parser.add_argument(
     "--load-model",
     default=None,
     help="Path to model to load and continue training. The model should be the state at the best epoch",
+    type=str,
+)
+parser.add_argument(
+    "-mp",
+    "--ml-model-path",
+    default=None,
+    help="Path to the ML_model.py file to use when loading/evaluating a model (default: <output_dir>/ML_model.py)",
     type=str,
 )
 parser.add_argument(
