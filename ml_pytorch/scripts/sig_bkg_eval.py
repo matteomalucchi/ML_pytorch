@@ -566,7 +566,12 @@ def plot_roc_curve(score_lbl_tensor_test, dir, show, comet_logger=None, class_in
     n_score, label_col, weight_col, kl_col = get_layout(score_lbl_tensor_test)
     if n_score > 1:
         plot_multiclass_roc_curves(
-            score_lbl_tensor_test, dir, show, class_info, comet_logger=comet_logger
+            score_lbl_tensor_test,
+            dir,
+            show,
+            class_info,
+            comet_logger=comet_logger,
+            kl_bkg_str=kl_bkg_str,
         )
         return
 
@@ -710,10 +715,26 @@ def plot_kl_distributions(
     get_max_significance=False,
     do_histos=True,
     do_roc=True,
+    class_info=None,
     comet_logger=None,
 ):
     if rescale is None:
         rescale = []
+
+    # The per-background-kl split below indexes the label/kl columns with the
+    # binary layout (label at column 1, kl at column 3). For a multi-class
+    # output the score block spans several leading columns, so those indices
+    # point at class scores instead and the split keeps almost no events (the
+    # kl column is also a single dummy value for every non-HH class). Only the
+    # inclusive "all" set is meaningful in that case.
+    n_score, _, _, _ = get_layout(score_lbl_train)
+    if n_score > 1 and list(kls_background_to_plot) != ["all"]:
+        print(
+            "Multi-class output detected: skipping the per-background-kl split "
+            "and producing only the inclusive 'all' plots."
+        )
+        kls_background_to_plot = ["all"]
+
     for kl_bkg in kls_background_to_plot:
         kl_bkg_str = "all" if kl_bkg == "all" else f"{kl_bkg:.2f}"
 
@@ -750,6 +771,7 @@ def plot_kl_distributions(
                 signal_eff=signal_eff,
                 get_max_significance=get_max_significance,
                 comet_logger=comet_logger,
+                class_info=class_info,
                 kl_bkg_str=kl_bkg_str,
             )
 
@@ -762,6 +784,7 @@ def plot_kl_distributions(
                 show,
                 comet_logger=comet_logger,
                 kl_bkg_str=kl_bkg_str,
+                class_info=class_info,
             )
 
 
@@ -773,8 +796,9 @@ def plot_multiclass_distributions(
     class_info=None,
     comet_logger=None,
 ):
-    """Plot, for each output node, the distribution of its score split by
-    true class. Produces ``score_distribution_class_<i>.png`` per output."""
+    """Plot, for each output node, the distribution of its score split by true
+    class, using :class:`HEPPlotter` so the style matches the binary plots.
+    Produces ``score_distribution_class_<i>{,_log}.{png,pdf,svg}`` per output."""
     n_score, label_col, weight_col, _ = get_layout(score_lbl_tensor_test)
     train_labels = score_lbl_tensor_train[:, label_col].astype(int)
     test_labels = score_lbl_tensor_test[:, label_col].astype(int)
@@ -782,81 +806,85 @@ def plot_multiclass_distributions(
     test_weights = score_lbl_tensor_test[:, weight_col]
 
     true_classes = sorted(set(np.unique(train_labels)).union(np.unique(test_labels)))
-    print(f"Multi-class evaluation: output nodes = {n_score}, true classes = {true_classes}")
+    print(
+        f"Multi-class evaluation: output nodes = {n_score}, "
+        f"true classes = {true_classes}"
+    )
 
-    colors = plt.get_cmap("tab10").colors
+    def normalized_hist(scores, weights):
+        h = Hist.new.Reg(30, 0, 1, name="score").Weight()
+        total = np.sum(weights)
+        h.fill(scores, weight=weights / total if total else weights)
+        return h
 
     for out_idx in range(n_score):
-        fig, ax = plt.subplots(figsize=[13, 9])
         node_name = _class_label(class_info, out_idx, fallback=f"class {out_idx}")
-
         train_scores = score_lbl_tensor_train[:, out_idx]
         test_scores = score_lbl_tensor_test[:, out_idx]
 
+        series_dict = {}
         for j, true_c in enumerate(true_classes):
-            color = colors[j % len(colors)]
+            color = CMS_COLORS[j % len(CMS_COLORS)]
             tr_mask = train_labels == true_c
             te_mask = test_labels == true_c
             if tr_mask.sum() == 0 and te_mask.sum() == 0:
                 continue
 
             label = _class_label(class_info, true_c, fallback=f"true class {true_c}")
-            ax.hist(
-                train_scores[tr_mask],
-                weights=train_weights[tr_mask],
-                bins=30,
-                range=(0, 1),
-                histtype="step",
-                density=True,
-                color=color,
-                linestyle="--",
-                label=f"{label} (train)",
-            )
-            ax.hist(
-                test_scores[te_mask],
-                weights=test_weights[te_mask],
-                bins=30,
-                range=(0, 1),
-                histtype="step",
-                density=True,
-                color=color,
-                linestyle="-",
-                label=f"{label} (test)",
-            )
+            series_dict[f"{label} (training)"] = {
+                "data": normalized_hist(
+                    train_scores[tr_mask], train_weights[tr_mask]
+                ),
+                "style": {"color": color, "histtype": "step"},
+            }
+            series_dict[f"{label} (test)"] = {
+                "data": normalized_hist(test_scores[te_mask], test_weights[te_mask]),
+                "style": {"color": color, "histtype": "errorbar"},
+            }
 
-        ax.set_xlabel(f"Score of output node: {node_name}")
-        ax.set_ylabel("Normalized counts")
-        ax.legend(loc="upper center", fontsize=14, frameon=False)
-        ax.grid()
-        hep.cms.lumitext("2022 (13.6 TeV)", ax=ax)
-        hep.cms.text(text="Preliminary", ax=ax, loc=0)
-        if comet_logger:
-            comet_logger.log_figure(f"score_distribution_class_{out_idx}", plt)
-        plt.savefig(
-            f"{dir}/score_distribution_class_{out_idx}.png",
-            bbox_inches="tight",
-            dpi=300,
-        )
-        plt.savefig(
-            f"{dir}/score_distribution_class_{out_idx}.pdf",
-            bbox_inches="tight",
-            dpi=300,
-        )
-        ax.set_yscale("log")
-        plt.savefig(
-            f"{dir}/score_distribution_class_{out_idx}_log.png",
-            bbox_inches="tight",
-            dpi=300,
-        )
-        if show:
-            plt.show()
-        plt.close(fig)
+        base = f"{dir}/score_distribution_class_{out_idx}"
+        for log in [False, True]:
+            plotter = (
+                HEPPlotter("CMS")
+                .set_plot_config(
+                    figsize=[13, 13], lumitext=LUMITEXT, cmstext="Private"
+                )
+                .set_output(f"{base}{'_log' if log else ''}")
+                .set_labels(
+                    xlabel=f"Score of output node: {node_name}",
+                    ylabel="Normalized counts",
+                )
+                .set_data(series_dict, plot_type="1d")
+                .set_options(
+                    legend_loc="upper center",
+                    legend_font_size=20,
+                    split_legend=False,
+                    grid=True,
+                    y_log=log,
+                    ylim_bottom_value=1e-4 if log else 0.0,
+                )
+            )
+            if show:
+                plotter.show()
+            plotter.run()
+
+            if comet_logger:
+                comet_logger.log_image(
+                    f"{base}{'_log' if log else ''}.png",
+                    name=f"score_distribution_class_{out_idx}"
+                    f"{'_log' if log else ''}",
+                )
 
 
 def plot_multiclass_roc_curves(
-    score_lbl_tensor_test, dir, show, class_info=None, comet_logger=None
+    score_lbl_tensor_test,
+    dir,
+    show,
+    class_info=None,
+    comet_logger=None,
+    kl_bkg_str=None,
 ):
-    """Plot ROC curves for the multi-class output:
+    """Plot ROC curves for the multi-class output with :class:`HEPPlotter`:
 
     * One-vs-rest ROC for every output node (signal=node i, background=all
       events whose true class != i, using score of node i).
@@ -873,8 +901,41 @@ def plot_multiclass_roc_curves(
 
     roc_info_dict = {}
 
+    def _make_roc_plot(series_dict, output_base, image_name):
+        if not series_dict:
+            return
+        plotter = (
+            HEPPlotter("CMS")
+            .set_plot_config(lumitext=LUMITEXT)
+            .set_output(f"{dir}/{output_base}")
+            .set_labels(xlabel="True positive rate", ylabel="False positive rate")
+            .set_data(series_dict, plot_type="graph")
+            .set_options(
+                y_log=True,
+                legend_loc="upper left",
+                legend_font_size="small",
+                split_legend=False,
+                grid=False,
+                set_ylim=False,
+            )
+        )
+        if kl_bkg_str:
+            plotter.add_annotation(
+                x=0.98,
+                y=0.05,
+                s=rf"bkg $\kappa_\lambda$ = {kl_bkg_str}",
+                fontsize=16,
+                ha="right",
+                va="bottom",
+            )
+        if show:
+            plotter.show()
+        plotter.run()
+        if comet_logger:
+            comet_logger.log_image(f"{dir}/{output_base}.png", name=image_name)
+
     # --- One-vs-rest ROCs (overlaid on a single figure) ---
-    fig, ax = plt.subplots(figsize=[10, 8])
+    ovr_series = {}
     for out_idx in range(n_score):
         scores = score_lbl_tensor_test[:, out_idx]
         ovr_labels = (labels == out_idx).astype(int)
@@ -889,28 +950,18 @@ def plot_multiclass_roc_curves(
             continue
 
         name = _class_label(class_info, out_idx, fallback=f"class {out_idx}")
-        ax.plot(tpr, fpr, label=f"{name} vs rest (AUC = {roc_auc:.3f})")
+        ovr_series[f"{name} vs rest (AUC = {roc_auc:.3f})"] = {
+            "data": {"x": [tpr, None], "y": [fpr, None]},
+            "style": {"linestyle": "-", "markersize": 0},
+        }
         roc_info_dict[f"ovr_tpr_class_{out_idx}"] = tpr
         roc_info_dict[f"ovr_fpr_class_{out_idx}"] = fpr
         roc_info_dict[f"ovr_auc_class_{out_idx}"] = roc_auc
 
-    ax.set_xlabel("True positive rate")
-    ax.set_ylabel("False positive rate")
-    ax.set_yscale("log")
-    ax.legend(loc="upper left", fontsize="small")
-    ax.grid()
-    hep.cms.lumitext("2022 (13.6 TeV)", ax=ax)
-    hep.cms.text(text="Preliminary", ax=ax, loc=0)
-    if comet_logger:
-        comet_logger.log_figure("roc_curve_one_vs_rest", plt)
-    plt.savefig(f"{dir}/roc_curve_one_vs_rest.png", bbox_inches="tight", dpi=300)
-    plt.savefig(f"{dir}/roc_curve_one_vs_rest.pdf", bbox_inches="tight", dpi=300)
-    if show:
-        plt.show()
-    plt.close(fig)
+    _make_roc_plot(ovr_series, "roc_curve_one_vs_rest", "roc_curve_one_vs_rest")
 
     # --- One-vs-one pairwise ROCs (overlaid) ---
-    fig, ax = plt.subplots(figsize=[10, 8])
+    ovo_series = {}
     for a, b in itertools.combinations(range(n_score), 2):
         mask = (labels == a) | (labels == b)
         if mask.sum() == 0:
@@ -934,27 +985,15 @@ def plot_multiclass_roc_curves(
 
         a_name = _class_label(class_info, a, fallback=f"class {a}")
         b_name = _class_label(class_info, b, fallback=f"class {b}")
-        ax.plot(
-            tpr, fpr, label=f"{a_name} vs {b_name} (AUC = {roc_auc:.3f})"
-        )
+        ovo_series[f"{a_name} vs {b_name} (AUC = {roc_auc:.3f})"] = {
+            "data": {"x": [tpr, None], "y": [fpr, None]},
+            "style": {"linestyle": "-", "markersize": 0},
+        }
         roc_info_dict[f"ovo_tpr_{a}_vs_{b}"] = tpr
         roc_info_dict[f"ovo_fpr_{a}_vs_{b}"] = fpr
         roc_info_dict[f"ovo_auc_{a}_vs_{b}"] = roc_auc
 
-    ax.set_xlabel("True positive rate")
-    ax.set_ylabel("False positive rate")
-    ax.set_yscale("log")
-    ax.legend(loc="upper left", fontsize="small")
-    ax.grid()
-    hep.cms.lumitext("2022 (13.6 TeV)", ax=ax)
-    hep.cms.text(text="Preliminary", ax=ax, loc=0)
-    if comet_logger:
-        comet_logger.log_figure("roc_curve_one_vs_one", plt)
-    plt.savefig(f"{dir}/roc_curve_one_vs_one.png", bbox_inches="tight", dpi=300)
-    plt.savefig(f"{dir}/roc_curve_one_vs_one.pdf", bbox_inches="tight", dpi=300)
-    if show:
-        plt.show()
-    plt.close(fig)
+    _make_roc_plot(ovo_series, "roc_curve_one_vs_one", "roc_curve_one_vs_one")
 
     np.savez(f"{dir}/tpr_fpr_multiclass.npz", **roc_info_dict)
 
