@@ -207,6 +207,7 @@ def save_pytorch_model(main_dir, epoch_index, model, optimizer, save_model=False
         os.makedirs(model_dir, exist_ok=True)
         model_name = f"{model_dir}/model_{epoch_index}.pt"
         torch.save(model, model_name)
+        logger.info(f"Saved model at epoch {epoch_index} to {model_name}")
     os.makedirs(state_dict_dir, exist_ok=True)
     state_dict_name = f"{state_dict_dir}/model_{epoch_index}_state_dict.pt"
     checkpoint = {
@@ -215,6 +216,7 @@ def save_pytorch_model(main_dir, epoch_index, model, optimizer, save_model=False
         "optimizer": optimizer.state_dict(),
     }
     torch.save(checkpoint, state_dict_name)
+    logger.info(f"Saved state_dict at epoch {epoch_index} to {state_dict_name}")
     return state_dict_name
 
 
@@ -421,7 +423,7 @@ def eval_model(model, loader, loss_fn, type_eval, device, best_epoch):
 
 def export_onnx(model, model_name, batch_size, input_size, device, onnx_model_name):
     model_dir = os.path.dirname(model_name)
-    
+    logger.info(f"Exporting model to ONNX format at {model_dir}/{onnx_model_name}.onnx")
     if hasattr(model, "export_model"):
         model = model.export_model(model)
 
@@ -434,6 +436,7 @@ def export_onnx(model, model_name, batch_size, input_size, device, onnx_model_na
         verbose=True,
         export_params=True,
         opset_version=13,
+        dynamo=False,  # newer torch defaults to the dynamo/onnxscript exporter, which ignores opset_version and splits weights into a companion .onnx.data file
         input_names=["InputVariables"],  # the model's input names
         output_names=["Output"],  # the model's output names
         dynamic_axes={
@@ -441,6 +444,7 @@ def export_onnx(model, model_name, batch_size, input_size, device, onnx_model_na
             "Output": {0: "batch_size"},
         },
     )
+    logger.info(f"Exported model to ONNX format at {model_dir}/{onnx_model_name}.onnx")
 
 
 def create_DNN_columns_list(run2, dnn_input_variables):
