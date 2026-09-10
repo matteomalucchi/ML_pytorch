@@ -8,6 +8,7 @@ mplhep>=0.3
 numpy>=1.23
 omegaconf>=2.3
 onnx>=1.15
+onnxscript
 onnxruntime>=1.15
 pandas>=2
 pyarrow>=9
