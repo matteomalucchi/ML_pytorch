@@ -42,6 +42,11 @@ oversample_split: False
 split_oversample: False
 undersample: False
 
+# padded inputs (handled by MaskedBatchNorm1d inside the model)
+pad_value: -999.0  # value of the padded entries, must match the PocketCoffea fill value
+pad_fill_value: 0.0  # value (in normalised units) given to padded entries, or "learn"
+pad_indicators: True  # append one 0/1 "is real value" input per feature
+
 num_workers: 4
 data_dirs: [/work/mmalucch/out_hh4b/out_vbf_ggf_dnn_full/]
 eval: True

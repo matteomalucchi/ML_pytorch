@@ -220,8 +220,6 @@ def main():
         batch_size,
         num_classes,
         class_info,
-        mean,
-        std,
     ) = load_data(cfg, cfg.seed)
 
     # plot the input variable distributions of signal and background before training
@@ -264,26 +262,20 @@ def main():
 
     get_model_sig = _inspect.signature(ML_model.get_model)
     if "num_classes" in get_model_sig.parameters:
-        if "mean" in get_model_sig.parameters:
-            model, loss_fn, optimizer, scheduler = ML_model.get_model(
-                input_size,
-                num_classes,
-                device,
-                cfg.learning_rate,
-                cfg.learning_rate_schedule,
-                n_epochs,
-                mean.to(device),
-                std.to(device),
-            )
-        else:
-            model, loss_fn, optimizer, scheduler = ML_model.get_model(
-                input_size,
-                num_classes,
-                device,
-                cfg.learning_rate,
-                cfg.learning_rate_schedule,
-                n_epochs,
-            )
+        pad_kwargs = {
+            k: cfg[k]
+            for k in ["pad_value", "pad_fill_value", "pad_indicators"]
+            if k in get_model_sig.parameters
+        }
+        model, loss_fn, optimizer, scheduler = ML_model.get_model(
+            input_size,
+            num_classes,
+            device,
+            cfg.learning_rate,
+            cfg.learning_rate_schedule,
+            n_epochs,
+            **pad_kwargs,
+        )
     else:
         if num_classes > 2:
             raise ValueError(
@@ -292,14 +284,9 @@ def main():
                 "Use a model whose get_model accepts a num_classes argument "
                 "(e.g. DNN_multiclass_model)."
             )
-        if "mean" in get_model_sig.parameters:
-            model, loss_fn, optimizer, scheduler = ML_model.get_model(
-                input_size, device, cfg.learning_rate, cfg.learning_rate_schedule, n_epochs, mean.to(device), std.to(device)
-            )
-        else:
-            model, loss_fn, optimizer, scheduler = ML_model.get_model(
-                input_size, device, cfg.learning_rate, cfg.learning_rate_schedule, n_epochs
-            )
+        model, loss_fn, optimizer, scheduler = ML_model.get_model(
+            input_size, device, cfg.learning_rate, cfg.learning_rate_schedule, n_epochs
+        )
     num_parameters = get_model_parameters_number(model)
 
     logger.info(f"Number of parameters: {num_parameters}")

@@ -430,6 +430,8 @@ def export_onnx(model, model_name, batch_size, input_size, device, onnx_model_na
     
     if hasattr(model, "export_model"):
         model = model.export_model(model)
+    # export with the running statistics of the (masked) batch norm
+    model.eval()
 
     # Export the model to ONNX format
     dummy_input = torch.zeros(batch_size, input_size, device=device)

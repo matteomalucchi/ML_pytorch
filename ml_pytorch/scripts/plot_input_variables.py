@@ -32,6 +32,8 @@ DEFAULT_BINS = 30
 DISCRETE_THRESHOLD = 15
 # percentiles used to define the plotting range (robust against outliers)
 RANGE_PERCENTILES = (0.1, 99.9)
+# padded entries (missing objects) are not plotted
+PAD_VALUE = -999.0
 
 # CMS colour palette of mplhep: the first colour is used for the background
 # and the second one for the signal, consistently in all the plotting scripts
@@ -130,7 +132,7 @@ def safe_file_name(variable):
 def get_bin_edges(sig_values, bkg_values, bins=DEFAULT_BINS):
     """Compute the bin edges common to signal and background."""
     values = np.concatenate([sig_values, bkg_values])
-    values = values[np.isfinite(values)]
+    values = values[np.isfinite(values) & (values != PAD_VALUE)]
 
     if values.size == 0:
         return np.linspace(0.0, 1.0, bins + 1)
@@ -185,7 +187,7 @@ def plot_single_variable(
         first/last bin so that none of them is lost in the normalization."""
         values = np.asarray(values, dtype=float)
         weights = np.asarray(weights, dtype=float)
-        mask = np.isfinite(values) & np.isfinite(weights)
+        mask = np.isfinite(values) & np.isfinite(weights) & (values != PAD_VALUE)
 
         h = Hist.new.Var(bin_edges, name="x", flow=False).Weight()
         h.fill(np.clip(values[mask], bin_edges[0], bin_edges[-1]), weight=weights[mask])
@@ -433,7 +435,7 @@ def main():
             cfg.run2, dnn_input_variables_file.dnn_input_variables
         )
 
-    training_loader, val_loader, test_loader, _, _ = load_data(cfg, cfg.seed)
+    training_loader, val_loader, test_loader, *_ = load_data(cfg, cfg.seed)
 
     plot_input_variables_from_loaders(
         [training_loader, val_loader, test_loader],

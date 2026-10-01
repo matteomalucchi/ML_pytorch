@@ -174,6 +174,7 @@ def get_variables(
     data_format,
     preprocess_variables_functions,
     novars=False,
+    pad_value=-999.0,
 ):
     """Load the input features and weights for a single class.
 
@@ -252,11 +253,15 @@ def get_variables(
             logger.debug(f"jagged_variables {jagged_variables}")
 
             # add the wanted number of flattened features from the jagged variables to the feature array
+            # events with fewer objects than requested are padded with pad_value
             for k in jagged_variables:
+                padded = ak.fill_none(
+                    ak.pad_none(jagged_variables_array[k], max_pos + 1, axis=1),
+                    pad_value,
+                    axis=1,
+                )
                 for pos in range(max_pos + 1):
-                    variables_array[k + ":" + str(pos)] = jagged_variables_array[k][
-                        :, int(pos)
-                    ]
+                    variables_array[k + ":" + str(pos)] = padded[:, pos]
 
             # apply any preprocessing function to the variables
             for k in input_variables:
@@ -493,7 +498,7 @@ def get_variables(
                 variable_name, pos = k.split(":")
                 pos = int(pos)
                 number_per_event = ak.Array(vars_array[f"{collection}_N"])
-                ragged = ak.fill_none(ak.pad_none(ak.unflatten(vars_array[variable_name], number_per_event), pos + 1, axis=1), -999, axis=1)
+                ragged = ak.fill_none(ak.pad_none(ak.unflatten(vars_array[variable_name], number_per_event), pos + 1, axis=1), pad_value, axis=1)
                 sliced = ragged[:, pos]
                 variables_dict[k] = ak.to_numpy(sliced).reshape(-1,1)
 
@@ -688,6 +693,7 @@ def load_data(cfg, seed):
             cfg.data_format,
             cfg.preprocess_variables_functions,
             cfg.novars,
+            cfg.pad_value,
         )
         X_per_class.append(X_class)
         n_per_class.append(n_class)
@@ -800,13 +806,6 @@ def load_data(cfg, seed):
     logger.info(f"X_clsw shape: {X_clsw.shape}")
     logger.info(f"X_k shape: {X_k.shape}")
 
-    # Normalise inputs:
-    features = X_fts[:, :-1]
-    mean = features.mean(dim=0)
-    std = features.std(dim=0)
-    std[std == 0] = 1.0  # avoid division by zero for constant features
-    X_fts[:, :-1] = (features - mean) / std
-
     tot_num_events = X_fts.shape[0]
 
     # shuffle the tensor with numpy random
@@ -900,8 +899,6 @@ def load_data(cfg, seed):
         batch_size,
         num_classes,
         class_info,
-        mean,
-        std,
     )
 
 
