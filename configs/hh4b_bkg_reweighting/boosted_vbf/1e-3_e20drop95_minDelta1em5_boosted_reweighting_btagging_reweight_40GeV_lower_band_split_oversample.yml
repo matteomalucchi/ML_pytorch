@@ -46,4 +46,4 @@ train_fraction: 0.75
 val_fraction: 0.20
 test_fraction: 0.05
 
-data_dirs: [/work/tharte/datasets/samples_vbf_boosted/other_group/full_2024_40GeV_lower_sideband_for_reweight]
+data_dirs: [/work/tharte/datasets/samples_vbf_boosted/other_group/full_2024_40GeV_lower_sideband_rerun]

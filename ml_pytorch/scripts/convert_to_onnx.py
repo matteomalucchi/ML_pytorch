@@ -254,6 +254,67 @@ def get_ratio_model_tensor_onnx(onnx_model, b):
 
     return r
 
+def get_multiclass_num_den_tensor_onnx(onnx_model, b, alpha, alpha_den):
+    """Build the *raw*, un-clamped numerator/denominator tensors for one
+    k-fold multiclass model -- i.e. ``r_0 - alpha*r_2`` and
+    ``r_1 - alpha_den*r_3`` with no ``relu`` and no epsilon floor applied.
+
+    This exists so the per-fold numerator and denominator can be summed
+    across all k-fold models and averaged *before* non-negativity is
+    enforced (see ``main()``), instead of enforcing it on each fold
+    individually and then averaging the already-clipped per-fold ratios
+    (what ``get_multiclass_ratio_model_tensor_onnx`` does, still used for
+    the per-fold diagnostic outputs in ``all_ratios_model_*.onnx``).
+
+    Clipping every fold separately before averaging is worse than clipping
+    the average once: (1) ``relu`` is convex, so by Jensen's inequality
+    ``E[relu(x)] >= relu(E[x])`` -- averaging noisy per-fold values *after*
+    the floor systematically overestimates the true (non-negative)
+    quantity whenever it sits near zero; (2) whenever a single fold's
+    estimate dips negative for a given event, it gets hard-zeroed for that
+    fold regardless of what the other folds say, instead of letting the
+    folds' independent statistical noise partially cancel in the average
+    first. Averaging the raw numerator/denominator first and clipping once
+    avoids both effects.
+    """
+    inferred_model = onnx.shape_inference.infer_shapes(onnx_model)
+    output_shape = (
+        inferred_model.graph.output[0].type.tensor_type.shape.dim[1].dim_value
+    )
+    if output_shape != 4:
+        raise ValueError(
+            f"Multiclass morphing expects a 4-node model, got {output_shape} outputs"
+        )
+
+    (r,) = inline(onnx_model)(b).values()
+
+    def _node(i):
+        return op.squeeze(
+            op.slice(
+                r,
+                op.constant(value=np.array([0, i])),
+                op.constant(value=np.array([sys.maxsize, i + 1])),
+            ),
+            axes=op.const([-1]),
+        )
+
+    r_0 = _node(0)  # data,  numerator region
+    r_1 = _node(1)  # data,  denominator region
+    r_2 = _node(2)  # ttbar, numerator region
+    r_3 = _node(3)  # ttbar, denominator region
+
+    if alpha:
+        numerator = op.sub(r_0, op.mul(op.const(float(alpha), dtype="float32"), r_2))
+    else:
+        numerator = r_0
+    if alpha_den:
+        denominator = op.sub(r_1, op.mul(op.const(float(alpha_den), dtype="float32"), r_3))
+    else:
+        denominator = r_1
+
+    return numerator, denominator
+
+
 def get_multiclass_ratio_model_tensor_onnx(onnx_model, b, alpha, alpha_den):
     """Build the QCD-morphing weight tensor for a 4-node multiclass model.
 
@@ -381,6 +442,8 @@ def main():
         tot_len = 1
         first_file_name = os.path.join(in_dir, model_files[0])
         b = argument(Tensor(np.float32, ("N", len(columns))))
+        num_sum_graph = None
+        den_sum_graph = None
         if args.model_type == "keras":
             model = tf.keras.models.load_model(first_file_name)
             model_ratio = tf.keras.models.Model(
@@ -403,6 +466,11 @@ def main():
                 r = get_multiclass_ratio_model_tensor_onnx(
                     onnx_model_ratio_sum, b, args.alpha, args.alpha_den
                 )
+                num0, den0 = get_multiclass_num_den_tensor_onnx(
+                    onnx_model_ratio_sum, b, args.alpha, args.alpha_den
+                )
+                num_sum_graph = build({"args_0": b}, {"sum_num": num0})
+                den_sum_graph = build({"args_0": b}, {"sum_den": den0})
             r_list = []
             r_list.append(r)
 
@@ -451,6 +519,17 @@ def main():
                         r1 = get_multiclass_ratio_model_tensor_onnx(
                             onnx_model_ratio_add, b, args.alpha, args.alpha_den
                         )
+                        num_i, den_i = get_multiclass_num_den_tensor_onnx(
+                            onnx_model_ratio_add, b, args.alpha, args.alpha_den
+                        )
+                        (num_prev,) = inline(num_sum_graph)(b).values()
+                        (den_prev,) = inline(den_sum_graph)(b).values()
+                        num_sum_graph = build(
+                            {"args_0": b}, {"sum_num": op.add(num_prev, num_i)}
+                        )
+                        den_sum_graph = build(
+                            {"args_0": b}, {"sum_den": op.add(den_prev, den_i)}
+                        )
                     r_list.append(r1)
 
                     if SAVE_SINGLE_RATIOS:
@@ -467,15 +546,35 @@ def main():
 
         print(f"\ntotal length: {tot_len}")
 
-        # Output all individual ratios
+        # Output all individual per-fold ratios (diagnostic only: each is
+        # that fold's own relu(num)/den, computed independently of the
+        # other folds -- not used to build the ensemble average below).
         onnx_model_ratio_list = build(
             {"args_0": b}, {f"ratio_{i}": r for i, r in enumerate(r_list)}
         )
         onnx_model_ratios_name = f"{out_dir}/all_ratios_model_{args.model_type}.onnx"
         save_onnx_model(onnx_model_ratio_list, onnx_model_ratios_name)
 
-        (r_sum,) = inline(onnx_model_ratio_sum)(b).values()
-        a = op.div(r_sum, op.constant(value_float=tot_len))
+        if args.multiclass:
+            # Average the RAW numerator and denominator across folds first,
+            # and only then enforce non-negativity (relu) and divide -- see
+            # get_multiclass_num_den_tensor_onnx for why this order matters.
+            (num_sum,) = inline(num_sum_graph)(b).values()
+            (den_sum,) = inline(den_sum_graph)(b).values()
+            avg_num = op.div(num_sum, op.constant(value_float=tot_len))
+            avg_den = op.div(den_sum, op.constant(value_float=tot_len))
+
+            avg_num = op.relu(avg_num)
+            if args.alpha_den:
+                avg_den = op.relu(avg_den)
+            avg_den = op.add(
+                avg_den, op.const(float(RATIO_DEN_EPS), dtype="float32")
+            )
+
+            a = op.div(avg_num, avg_den)
+        else:
+            (r_sum,) = inline(onnx_model_ratio_sum)(b).values()
+            a = op.div(r_sum, op.constant(value_float=tot_len))
 
         onnx_model_final = build({"args_0": b}, {"avg_w": a})
         onnx_model_final_name = (

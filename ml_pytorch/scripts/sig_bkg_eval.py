@@ -7,7 +7,8 @@ import itertools
 import numpy as np
 import mplhep as hep
 from scipy import stats
-from sklearn.metrics import roc_curve, roc_auc_score, auc
+from sklearn.metrics import roc_curve, roc_auc_score, auc, brier_score_loss
+from sklearn.calibration import calibration_curve
 
 from hist import Hist
 from utils_configs.plot.HEPPlotter import HEPPlotter
@@ -118,6 +119,177 @@ def my_roc_auc(
     return ((cumsum_0 * weights_1).sum() - correction) / (
         weights_1.sum() * cumsum_0[-1]
     )
+
+
+def plot_calibration_curve(
+    score_lbl_tensor_test,
+    dir,
+    show,
+    comet_logger=None,
+    class_info=None,
+    n_bins=10,
+    kl_bkg_str=None,
+):
+    """Plot the calibration curves (reliability diagrams) of the classifier.
+
+    * Binary output (one score column): a single curve, with the signal
+      (label 1) as the positive class.
+    * Multi-class output: one curve per output node, in a one-vs-rest
+      fashion. For node ``i`` the true labels are turned into binary ones
+      (``1`` for events of class ``i``, ``0`` for all the others).
+
+    Note that ``sklearn.calibration.calibration_curve`` does not support
+    event weights, so both the curve and the Brier score are unweighted.
+
+    Produces ``calibration_curve{,_class_<i>}.{png,pdf,svg}`` in ``dir``.
+    """
+    n_score, label_col, _, _ = get_layout(score_lbl_tensor_test)
+    labels = score_lbl_tensor_test[:, label_col].astype(int)
+
+    for out_idx in range(n_score):
+        scores = score_lbl_tensor_test[:, out_idx]
+        # binary case: the positive class is the signal (label 1), which is
+        # stored in the single score column
+        ## score vs all
+        pos_class = out_idx if n_score > 1 else 1
+        binary_labels = (labels == pos_class).astype(int)
+
+        if binary_labels.sum() == 0 or (1 - binary_labels).sum() == 0:
+            print(f"Skipping calibration curve for class {pos_class}: only one class present")
+            continue
+
+        prob_true, prob_pred = calibration_curve(
+            binary_labels, scores, n_bins=n_bins
+        )
+        brier_score = brier_score_loss(binary_labels, scores)
+
+        if n_score > 1:
+            name = _class_label(class_info, out_idx, fallback=f"class {out_idx}")
+            base = f"calibration_curve_class_{out_idx}"
+            xlabel = f"Mean predicted probability: {name}"
+        else:
+            name = "Signal"
+            base = "calibration_curve"
+            xlabel = "Mean predicted probability"
+        print(f"Brier score loss ({name}): {brier_score:.4f}")
+
+        series_dict = {
+            f"{name} vs rest" if n_score > 1 else "Signal vs background": {
+                "data": {"x": [prob_pred, None], "y": [prob_true, None]},
+                "style": {"linestyle": "", "fmt": "o", "color": SIG_COLOR},
+            },
+            "Perfectly calibrated": {
+                "data": {"x": [[0, 1], None], "y": [[0, 1], None]},
+                "style": {"linestyle": "--", "markersize": 0, "color": "grey"},
+            },
+        }
+
+        plotter = (
+            HEPPlotter("CMS")
+            .set_plot_config(figsize=[13, 13], lumitext=LUMITEXT, cmstext="Private")
+            .set_output(f"{dir}/{base}")
+            .set_labels(
+                xlabel=xlabel,
+                ylabel="Fraction of positives",
+            )
+            .set_data(series_dict, plot_type="graph")
+            .set_options(
+                legend_loc="upper left",
+                legend_font_size="small",
+                split_legend=False,
+                grid=False,
+                set_ylim=False,
+            )
+            .add_annotation(
+                x=0.98,
+                y=0.05,
+                s=f"Brier score loss = {brier_score:.4f}"
+                + (f"\n" + rf"bkg $\kappa_\lambda$ = {kl_bkg_str}" if kl_bkg_str else ""),
+                fontsize=20,
+                ha="right",
+                va="bottom",
+            )
+        )
+        if show:
+            plotter.show()
+        plotter.run()
+
+        if comet_logger:
+            comet_logger.log_image(f"{dir}/{base}.png", name=base)
+
+        # =========== score vs single others:
+        if n_score > 1:
+            for ref_idx in range(n_score):
+                if ref_idx == out_idx:
+                    continue
+                pair_mask = (labels == ref_idx) | (labels == out_idx)
+                reduced_labels = (labels[pair_mask] == pos_class).astype(int)
+                scores_binary = score_lbl_tensor_test[:, out_idx] / (score_lbl_tensor_test[:, out_idx] + score_lbl_tensor_test[:, ref_idx] )
+                reduced_scores = scores_binary[pair_mask]
+
+                if reduced_labels.sum() == 0 or (1 - reduced_labels).sum() == 0:
+                    print(
+                        f"Skipping calibration curve for class {out_idx} vs {ref_idx}: only one class present"
+                    )
+                    continue
+
+                prob_true, prob_pred = calibration_curve(
+                    reduced_labels, reduced_scores, n_bins=n_bins
+                )
+                brier_score = brier_score_loss(reduced_labels, reduced_scores)
+
+                name = _class_label(class_info, out_idx, fallback=f"class {out_idx}")
+                name_ref = _class_label(class_info, ref_idx, fallback=f"class {out_idx}")
+                base = f"calibration_curve_class_{out_idx}_vs_{ref_idx}"
+                xlabel = f"Mean predicted probability: {name}"
+                print(f"Brier score loss ({name}): {brier_score:.4f}")
+
+                series_dict = {
+                    f"{name} vs {name_ref}" if n_score > 1 else "Signal vs background": {
+                        "data": {"x": [prob_pred, None], "y": [prob_true, None]},
+                        "style": {"linestyle": "", "fmt": "o", "color": SIG_COLOR},
+                    },
+                    "Perfectly calibrated": {
+                        "data": {"x": [[0, 1], None], "y": [[0, 1], None]},
+                        "style": {"linestyle": "--", "markersize": 0, "color": "grey"},
+                    },
+                }
+
+                plotter = (
+                    HEPPlotter("CMS")
+                    .set_plot_config(figsize=[13, 13], lumitext=LUMITEXT, cmstext="Private")
+                    .set_output(f"{dir}/{base}")
+                    .set_labels(
+                        xlabel=xlabel,
+                        ylabel="Fraction of positives",
+                    )
+                    .set_data(series_dict, plot_type="graph")
+                    .set_options(
+                        legend_loc="upper left",
+                        legend_font_size="small",
+                        split_legend=False,
+                        grid=False,
+                        set_ylim=False,
+                    )
+                    .add_annotation(
+                        x=0.98,
+                        y=0.05,
+                        s=f"Brier score loss = {brier_score:.4f}"
+                        + (f"\n" + rf"bkg $\kappa_\lambda$ = {kl_bkg_str}" if kl_bkg_str else ""),
+                        fontsize=20,
+                        ha="right",
+                        va="bottom",
+                    )
+                )
+                if show:
+                    plotter.show()
+                plotter.run()
+
+                if comet_logger:
+                    comet_logger.log_image(f"{dir}/{base}.png", name=base)
+
+
+
 
 
 def weighted_quantile(values, quantile, weights):
@@ -715,6 +887,7 @@ def plot_kl_distributions(
     get_max_significance=False,
     do_histos=True,
     do_roc=True,
+    do_calibration=True,
     class_info=None,
     comet_logger=None,
 ):
@@ -785,6 +958,18 @@ def plot_kl_distributions(
                 comet_logger=comet_logger,
                 kl_bkg_str=kl_bkg_str,
                 class_info=class_info,
+            )
+
+        if do_calibration:
+            calib_out_dir = f"{out_dir}/calibration_bkgkl_{kl_bkg_str}"
+            os.makedirs(calib_out_dir, exist_ok=True)
+            plot_calibration_curve(
+                test_data,
+                calib_out_dir,
+                show,
+                comet_logger=comet_logger,
+                class_info=class_info,
+                kl_bkg_str=kl_bkg_str,
             )
 
 

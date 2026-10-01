@@ -58,7 +58,6 @@ To execute an example training, evaluate the model on the test set, plot the his
 ml_train  -c configs/example_DNN_config_ggF_VBF.yml
 ```
 
-<<<<<<< HEAD
 ## Repository layout
 
 ```

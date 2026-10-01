@@ -94,7 +94,8 @@ def main():
 
     name = main_dir.rstrip("/").split("/")[-1]  # actually run number
     name_configuration = os.path.basename(cfg_file_name).rsplit('.', 1)[0]  # split once from right side at . and take first part (should remove ending of file)
-    type_configuration  = cfg_file_name.split("/")[-2] if "hh4b" in cfg_file_name.split("/")[-2] else cfg_file_name.split("/")[-3]  # Should give name of type by choice of in which folder the config file is saved. Watch out, if we have subfolders.
+    if args.comet_token:
+        type_configuration = cfg_file_name.split("/")[-2] if "hh4b" in cfg_file_name.split("/")[-2] else cfg_file_name.split("/")[-3]  # Should give name of type by choice of in which folder the config file is saved. Watch out, if we have subfolders.
 
     best_vloss = 1_000_000.0
     best_vaccuracy = 0.0
@@ -557,16 +558,6 @@ def main():
                 train_test_fractions[1],
                 do_histos=cfg.histos,
                 do_roc=cfg.roc,
-                comet_logger=comet_logger,
-                class_info=class_info,
-            )
-        if cfg.roc:
-            logger.info("\n\n\n")
-            logger.info("Plotting ROC curve")
-            plot_roc_curve(
-                score_lbl_array_test,
-                main_dir,
-                False,
                 comet_logger=comet_logger,
                 class_info=class_info,
             )

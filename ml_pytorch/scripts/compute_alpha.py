@@ -23,10 +23,10 @@ import sys
 from coffea.util import load
 
 REGIONS = [
-    "boosted_signal_region_A",
-    "boosted_signal_sideband_region_B",
-    "boosted_control_region_C",
-    "boosted_control_sideband_region_D",
+    "boosted_signal_region_D",
+    "boosted_signal_sideband_region_C",
+    "boosted_control_region_B",
+    "boosted_control_sideband_region_A",
 ]
 
 
