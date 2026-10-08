@@ -7,7 +7,9 @@ from glob import glob
 import mplhep as hep
 from utils_configs.plot.HEPPlotter import HEPPlotter
 
-LUMITEXT = "2022 (13.6 TeV)"
+from ml_pytorch.utils.lumitext import ENERGY_TEXT, get_lumitext_from_dir
+
+LUMITEXT = ENERGY_TEXT
 
 # CMS colour palette of mplhep, used consistently in all the plotting scripts
 CMS_COLORS = [cycle["color"] for cycle in hep.style.CMS["axes.prop_cycle"]]
@@ -60,6 +62,7 @@ def plot_history(
     uniform_filter=10,
     lenght=-1,
     comet_logger=None,
+    lumitext=LUMITEXT,
 ):
     infos_dict = {
         "accuracy": {"train": train_accuracy[:lenght], "val": val_accuracy[:lenght]},
@@ -126,7 +129,7 @@ def plot_history(
 
     plotter = (
         HEPPlotter("CMS")
-        .set_plot_config(lumitext=LUMITEXT)
+        .set_plot_config(lumitext=lumitext)
         .set_output(f"{dir}/history")
         .set_labels(xlabel="Epoch", ylabel="")
         .set_data(series_dict, plot_type="graph")
@@ -145,7 +148,7 @@ def plot_history(
         comet_logger.log_image(f"{dir}/history.png", name="history")
 
 
-def plot_lr(lr, main_dir, show, comet_logger=None):
+def plot_lr(lr, main_dir, show, comet_logger=None, lumitext=LUMITEXT):
     if len(lr) == 0:
         print("WARNING: no learning rate to plot")
         return
@@ -162,7 +165,7 @@ def plot_lr(lr, main_dir, show, comet_logger=None):
 
     plotter = (
         HEPPlotter("CMS")
-        .set_plot_config(lumitext=LUMITEXT)
+        .set_plot_config(lumitext=lumitext)
         .set_output(f"{main_dir}/lr")
         .set_labels(xlabel="Epoch", ylabel="Learning rate")
         .set_data(series_dict, plot_type="graph")
@@ -210,6 +213,9 @@ def main():
 
     train_accuracy, train_loss, val_accuracy, val_loss, lr = read_from_txt(log_file)
 
+    # get the years from the config saved in the training directory
+    lumitext = get_lumitext_from_dir(os.path.dirname(args.input_path))
+
     plot_history(
         train_accuracy,
         train_loss,
@@ -219,9 +225,10 @@ def main():
         args.show,
         args.uniform_filter,
         args.lenght,
+        lumitext=lumitext,
     )
 
-    plot_lr(lr, os.path.dirname(args.input_path), args.show)
+    plot_lr(lr, os.path.dirname(args.input_path), args.show, lumitext=lumitext)
 
 
 if __name__ == "__main__":
