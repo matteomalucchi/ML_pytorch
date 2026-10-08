@@ -14,6 +14,7 @@ from ml_pytorch.utils.args_train import args
 # from torch.utils.tensorboard import SummaryWriter
 from ml_pytorch.utils.dataset import load_data
 from ml_pytorch.utils.early_stopper import EarlyStopper
+from ml_pytorch.utils.lumitext import get_lumitext
 from ml_pytorch.utils.setup_logger import setup_logger
 from ml_pytorch.utils.tools import (
     create_DNN_columns_list,
@@ -88,6 +89,8 @@ def main():
             f"{base_dir}/{os.path.basename(cfg_file_name).replace('.yml', '')}"
         )
     main_dir = cfg.output_dir
+    # text with the years of the datasets used in the training, shown on the plots
+    lumitext = get_lumitext(cfg)
 
     name = main_dir.rstrip("/").split("/")[-1]  # actually run number
     name_configuration = os.path.basename(cfg_file_name).rsplit(".", 1)[
@@ -238,6 +241,7 @@ def main():
             bins=cfg.input_plots_bins,
             log_scale=cfg.input_plots_log,
             comet_logger=comet_logger,
+            lumitext=lumitext,
         )
         logger.info(f"Input variable distributions saved in {input_plots_dir}")
 
@@ -433,8 +437,9 @@ def main():
             main_dir,
             False,
             comet_logger=comet_logger,
+            lumitext=lumitext,
         )
-        plot_lr(lr, main_dir, False, comet_logger=comet_logger)
+        plot_lr(lr, main_dir, False, comet_logger=comet_logger, lumitext=lumitext)
 
     # load best model
     model.load_state_dict(
@@ -534,6 +539,7 @@ def main():
                 do_histos=cfg.histos,
                 do_roc=cfg.roc,
                 comet_logger=comet_logger,
+                lumitext=lumitext,
             )
 
     # remove ML_model_loaded.py

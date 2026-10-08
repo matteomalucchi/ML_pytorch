@@ -22,9 +22,11 @@ import mplhep as hep
 from hist import Hist
 from utils_configs.plot.HEPPlotter import HEPPlotter
 
+from ml_pytorch.utils.lumitext import ENERGY_TEXT, get_lumitext
+
 logger = logging.getLogger(__name__)
 
-LUMITEXT = "2022 (13.6 TeV)"
+LUMITEXT = ENERGY_TEXT
 
 DEFAULT_SUBDIR = "input_variables"
 DEFAULT_BINS = 30
@@ -270,6 +272,7 @@ def plot_input_variables(
     log_scale=False,
     formats=("png", "pdf"),
     comet_logger=None,
+    lumitext=LUMITEXT,
 ):
     """Plot the normalized distributions of all the input variables.
 
@@ -325,6 +328,7 @@ def plot_input_variables(
             log_scale=log_scale,
             formats=formats,
             comet_logger=comet_logger,
+            lumitext=lumitext,
         )
 
     logger.info("Input variable distributions saved in %s", plot_dir)
@@ -342,6 +346,7 @@ def plot_input_variables_from_loaders(
     log_scale=False,
     formats=("png", "pdf"),
     comet_logger=None,
+    lumitext=LUMITEXT,
 ):
     """Plot the input variables starting from a list of torch dataloaders."""
     features, labels, weights = arrays_from_loaders(loaders)
@@ -358,6 +363,7 @@ def plot_input_variables_from_loaders(
         log_scale=log_scale,
         formats=formats,
         comet_logger=comet_logger,
+        lumitext=lumitext,
     )
 
 
@@ -443,6 +449,7 @@ def main():
         bins=args.bins,
         show=args.show,
         log_scale=args.log_scale,
+        lumitext=get_lumitext(cfg),
     )
 
 

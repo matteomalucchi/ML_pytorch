@@ -11,7 +11,9 @@ from sklearn.metrics import roc_curve, roc_auc_score, auc
 from hist import Hist
 from utils_configs.plot.HEPPlotter import HEPPlotter
 
-LUMITEXT = "(13.6 TeV)"
+from ml_pytorch.utils.lumitext import ENERGY_TEXT, get_lumitext_from_dir
+
+LUMITEXT = ENERGY_TEXT
 
 # CMS colour palette of mplhep: the first colour is used for the background
 # and the second one for the signal, consistently in all the plotting scripts
@@ -197,6 +199,7 @@ def plot_sig_bkg_distributions(
     get_max_significance=False,
     comet_logger=None,
     kl_bkg_str=None,
+    lumitext=LUMITEXT,
 ):
     # plot the signal and background distributions
     sig_score_train, bkg_score_train = handle_arrays(score_lbl_tensor_train, 0)
@@ -425,7 +428,7 @@ def plot_sig_bkg_distributions(
         for log in [False, True]:
             plotter = (
                 HEPPlotter("CMS")
-                .set_plot_config(figsize=[13, 13], lumitext=LUMITEXT, cmstext="Private")
+                .set_plot_config(figsize=[13, 13], lumitext=lumitext, cmstext="Private")
                 .set_output(f"{base}{'_log' if log else ''}")
                 .set_labels(
                     xlabel="DNN Class Score",
@@ -513,7 +516,12 @@ def plot_sig_bkg_distributions(
 
 
 def plot_roc_curve(
-    score_lbl_tensor_test, dir, show, comet_logger=None, kl_bkg_str=None
+    score_lbl_tensor_test,
+    dir,
+    show,
+    comet_logger=None,
+    kl_bkg_str=None,
+    lumitext=LUMITEXT,
 ):
     sig_score_test, bkg_score_test = handle_arrays(score_lbl_tensor_test, 0)
     sig_lbl_test, bkg_lbl_test = handle_arrays(score_lbl_tensor_test, 1)
@@ -607,7 +615,7 @@ def plot_roc_curve(
 
         plotter = (
             HEPPlotter("CMS")
-            .set_plot_config(lumitext=LUMITEXT)
+            .set_plot_config(lumitext=lumitext)
             .set_output(f"{dir}/roc_curve_kl_{kl_tag}")
             .set_labels(xlabel="True positive rate", ylabel="False positive rate")
             .set_data(series_dict, plot_type="graph")
@@ -654,6 +662,7 @@ def plot_kl_distributions(
     do_histos=True,
     do_roc=True,
     comet_logger=None,
+    lumitext=LUMITEXT,
 ):
     if rescale is None:
         rescale = []
@@ -694,6 +703,7 @@ def plot_kl_distributions(
                 get_max_significance=get_max_significance,
                 comet_logger=comet_logger,
                 kl_bkg_str=kl_bkg_str,
+                lumitext=lumitext,
             )
 
         if do_roc:
@@ -705,6 +715,7 @@ def plot_kl_distributions(
                 show,
                 comet_logger=comet_logger,
                 kl_bkg_str=kl_bkg_str,
+                lumitext=lumitext,
             )
 
 
@@ -790,6 +801,8 @@ def main():
         rescale=args.rescale,
         signal_eff=args.signal_eff,
         get_max_significance=False,
+        # get the years from the config saved in the training directory
+        lumitext=get_lumitext_from_dir(args.input_dir),
     )
 
 
