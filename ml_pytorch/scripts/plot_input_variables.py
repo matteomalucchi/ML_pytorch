@@ -272,6 +272,7 @@ def plot_input_variables(
     log_scale=False,
     formats=("png", "pdf"),
     comet_logger=None,
+    lumitext=LUMITEXT,
 ):
     """Plot the normalized distributions of all the input variables.
 
