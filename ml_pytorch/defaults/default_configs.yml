@@ -1,68 +1,184 @@
+# Default configuration of ml_train.
+# Every option can be overridden in the config file passed with -c, and most of
+# them also from the command line (command line > config file > these defaults).
+
+# ---------------------------------------------------------------------------
+# Input variables
+# ---------------------------------------------------------------------------
+
+# Input features of the model. Either an explicit list of column names
+# (jagged collections are selected as "<collection>_<var>:<position>", e.g.
+# "JetGood_pt:0"), or the name of a module in ml_pytorch/defaults/ (e.g.
+# sig_bkg_dnn_input_variables) whose dnn_input_variables dict is converted
+# into the list of column names.
 input_variables:
     [JetGood_pt, JetGood_eta, JetGood_phi, JetGood_mass, JetGood_btagPNetB]
 
+# Preprocessing functions applied to single input variables when loading the
+# data, as {variable: [function_name, [extra_args]]}. The function is taken
+# from ml_pytorch/defaults/preprocess_variables_functions.py and called as
+# function(values, *extra_args), e.g. {var: [arctanh, []]}.
 preprocess_variables_functions: {}
 
+# If True, the column names built from an input_variables module use the
+# Run2 naming (e.g. "JetGoodRun2_pt" instead of "JetGood_pt").
+run2: False
+
+# ---------------------------------------------------------------------------
+# Signal and background samples
+# ---------------------------------------------------------------------------
+
+# Samples (first level of the "columns" of the .coffea files) used as signal
+# and background. Only used with data_format coffea.
 signal_sample: [VBF_HHto4B]
 background_sample: [GluGlutoHHto4B]
 
-signal_region: [4b_region] 
-background_region: [4b_region] 
+# Regions (categories) from which the signal and background events are taken.
+signal_region: [4b_region]
+background_region: [4b_region]
 
+# Datasets used as signal and background. They are used to select the input
+# .coffea files (by name) and the datasets inside them (and, for parquet, the
+# parquet directories). Every listed dataset must be found.
+# The kl (or C2V) value is extracted from the dataset name and stored for
+# each event (9999 if not present).
 signal_dataset: [VBFHHto4B_CV_1_C2V_1_C3_1_2022_postEE]
 background_dataset: [GluGlutoHHto4B_kl-1p00_kt-1p00_c2-0p00__2022_postEE]
 
-ML_model: DNN_model
+# Directories containing the input files (.coffea files and, for parquet, the
+# config.json pointing to the parquet chunks).
+data_dirs: [/work/mmalucch/out_hh4b/out_vbf_ggf_dnn_full/]
 
+# Format of the input data: coffea or parquet (root is not supported anymore).
 data_format: coffea
-verbosity: info
 
-seed: 100
+# Only for data_format coffea: if True the columns in the .coffea files are
+# stored directly under the region, if False they are stored under the
+# "nominal" variation (columns[sample][dataset][region]["nominal"]).
+novars: True
 
-batch_size: 512
-epochs: 50
+# ---------------------------------------------------------------------------
+# Train / validation / test split
+# ---------------------------------------------------------------------------
 
-learning_rate: 1e-2
-learning_rate_schedule: linear
-
-early_stopping: False
-patience: 5
-min_delta: 1e-5
-
-eval_param: "loss"
-
+# Fractions of the total events used for training, validation and testing.
+# They must sum to <= 1; the remaining events are discarded.
 train_fraction: 0.5
 val_fraction: 0.25
 test_fraction: 0.25
 
-run2: False
+# ---------------------------------------------------------------------------
+# Event weights and class balancing
+# ---------------------------------------------------------------------------
+# The event weights are first divided by the sum of genweights of their
+# dataset (when available). Then, unless one of the oversampling/undersampling
+# options below is used, a class weight is computed for signal and background
+# such that the total sum of weights is the same for the two classes and the
+# average event weight is 1:
+#   class_weight = (N_sig + N_bkg) / (2 * sum(w_class))
 
-# class balancing
-oversample_split: False
-split_oversample: False
-undersample: False
-
-# normalize the weights of each individual dataset to sum(w) = 1 before
-# the class balancing (which still equalizes the total sum of weights of each class)
+# If True, the weights of every individual dataset are normalized such that
+# sum(w) = 1 for each dataset (summing over all its regions) before the class
+# balancing. In this way every dataset contributes equally within its class,
+# while the class balancing still makes the total sum of weights of signal
+# and background equal.
 normalize_weights_per_dataset: False
 
+# Class balancing via resampling. Only one of them can be True. When any of
+# them is used, the class weights above are set to 1.
+# oversample_split: replicate the signal events to match the number of
+#   background events before the train/val/test split.
+oversample_split: False
+# split_oversample: replicate the signal events to match the number of
+#   background events separately in the train, val and test datasets
+#   after the split.
+split_oversample: False
+# undersample: keep only as many background events as signal events.
+undersample: False
+
+# ---------------------------------------------------------------------------
+# Model and training
+# ---------------------------------------------------------------------------
+
+# Name of the model module in ml_pytorch/models/ (must define get_model).
+ML_model: DNN_model
+
+# Seed for the event shuffling and the train/val/test split (numpy and the
+# torch generator of random_split; the torch global seed is not set).
+seed: 100
+
+batch_size: 512
+# Maximum number of training epochs.
+epochs: 50
+
+# Initial learning rate (must be positive).
+learning_rate: 1e-2
+# Learning rate schedule (see ml_pytorch/utils/learning_rate_schedules.py):
+#   constant   : constant learning rate
+#   linear     : linear decrease from learning_rate to 0 over all the epochs
+#   eX_dropYY  : constant for X epochs, then multiplied by 0.YY every epoch
+#                (available: e5_drop75, e5_drop95, e20_drop75, e20_drop95, e30_drop95)
+learning_rate_schedule: linear
+
+# Stop the training if the validation metric (eval_param) does not improve
+# by more than min_delta for patience consecutive epochs.
+early_stopping: False
+patience: 5
+min_delta: 1e-5
+
+# Validation metric used to select the best model and for the early stopping:
+# loss (validation loss) or acc (validation accuracy).
+eval_param: "loss"
+
+# ---------------------------------------------------------------------------
+# Resources
+# ---------------------------------------------------------------------------
+
+# Number of worker processes of the DataLoaders.
 num_workers: 4
-data_dirs: [/work/mmalucch/out_hh4b/out_vbf_ggf_dnn_full/]
-eval: True
-gpus: '0'
-histos: True
-roc: True
-history: True
-# plot the input variable distributions of signal and background before the training
-input_plots: True
-input_plots_dir: input_variables
-input_plots_bins: 30
-input_plots_log: False
-eval_model: ''
-load_model: ''
-ml_model_path: ''
-onnx: True
+# Use pinned memory in the DataLoaders (faster transfer to GPU).
 pin_memory: False
-overwrite: False
+# Comma-separated list of GPU indices to use (e.g. '0' or '0,1'; more than one
+# GPU uses DataParallel), or 'cpu' to run on CPU.
+gpus: '0'
+
+# ---------------------------------------------------------------------------
+# Evaluation and outputs
+# ---------------------------------------------------------------------------
+
+# Evaluate the best model on the training and test datasets after the training.
+eval: True
+# Plot the histograms of the model score for signal and background (also per kl value).
+histos: True
+# Plot the ROC curves.
+roc: True
+# Plot the training history (loss, accuracy and learning rate vs epoch).
+history: True
+# Plot the input variable distributions of signal and background before the training
+input_plots: True
+# Subdirectory of the output directory where the input variable plots are saved.
+input_plots_dir: input_variables
+# Number of bins of the input variable plots.
+input_plots_bins: 30
+# Use a log scale for the y axis of the input variable plots.
+input_plots_log: False
+# Export the best model to ONNX.
+onnx: True
+
+# Path to a saved model (.pt) to evaluate without training. If empty, the
+# model is trained.
+eval_model: ''
+# Path to a saved model checkpoint (.pt) from which to resume the training.
+load_model: ''
+# Path to the python file defining the model when using eval_model or
+# load_model. If empty, the ML_model.py saved in the output directory is used.
+ml_model_path: ''
+
+# Output directory. If null, it is /work/$USER/out_ML_pytorch/<config name>
+# (or ./out/<config name> if /work/$USER does not exist).
 output_dir: null
-novars: True
+# Overwrite the output directory if it already exists without asking.
+overwrite: False
+
+# Logging verbosity: debug, info or warning.
+verbosity: info
