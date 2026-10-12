@@ -70,6 +70,32 @@ def oversample_dataset(X_dataset):
     return oversampled_dataset
 
 
+def normalize_weights_per_dataset(weights_list, dataset_names):
+    """
+    Normalize the weights of each dataset so that sum(w) = 1 for each of them.
+    Entries of weights_list belonging to the same dataset (e.g. multiple regions)
+    are normalized together.
+    """
+    sumw_per_dataset = {}
+    for w, name in zip(weights_list, dataset_names):
+        sumw_per_dataset[name] = sumw_per_dataset.get(name, 0.0) + np.sum(w)
+
+    normalized_weights_list = []
+    for w, name in zip(weights_list, dataset_names):
+        sumw = sumw_per_dataset[name]
+        if sumw <= 0:
+            raise ValueError(
+                f"Sum of weights of dataset {name} is {sumw}, cannot normalize it to 1"
+            )
+        normalized_weights_list.append(w / sumw)
+
+    for name, sumw in sumw_per_dataset.items():
+        logger.info(
+            f"Normalizing weights of dataset {name} to sum 1 (sum of weights before normalization: {sumw})"
+        )
+    return normalized_weights_list
+
+
 def get_variables(
     files,
     parquet_files,
@@ -82,6 +108,7 @@ def get_variables(
     data_format,
     preprocess_variables_functions,
     novars=False,
+    normalize_per_dataset=False,
 ):
     if data_format == "root":
         raise ValueError("Not updated for root format!")
@@ -96,6 +123,7 @@ def get_variables(
         # function to load input files from chunks of .parquet the structure here presupposes
         # that each directory contains a single region of a single dataset
         variables_array_list = []
+        dataset_names = []
         # here we loop over the directories
         for i, file_name in enumerate(parquet_files):
             logger.info(f"Loading directory {file_name}")
@@ -193,9 +221,18 @@ def get_variables(
 
             logger.info(f"variables_array complete shape {variables_array.shape}")
             variables_array_list.append(variables_array)
+            dataset_names.append(matching_dataset)
 
         if len(variables_array_list) == 0:
             raise ValueError("No parquet data loaded")
+
+        if normalize_per_dataset:
+            # the weights are the second to last row (before kl)
+            normalized_weights = normalize_weights_per_dataset(
+                [v[-2] for v in variables_array_list], dataset_names
+            )
+            for v, w in zip(variables_array_list, normalized_weights):
+                v[-2] = w
 
         # concatenate along event axis
         variables_array = np.concatenate(variables_array_list, axis=1)
@@ -205,6 +242,7 @@ def get_variables(
     elif data_format == "coffea":
         vars_array = []
         weights = []
+        dataset_names = []
         kl_values = []
         variables_dict = {}
         for i, file_name in enumerate(files):
@@ -334,6 +372,7 @@ def get_variables(
                                             logger.info(
                                                 f"sum_genweights: {file['sum_genweights'][dataset]}"
                                             )
+                                    dataset_names.append(dataset)
                                     logger.info(f"weight: {weights[-1]}")
 
         if len(vars_array) < 1:
@@ -360,6 +399,9 @@ def get_variables(
         for key in keys:
             concat[key] = np.concatenate([var[key].value for var in vars_array], axis=0)
         vars_array = concat
+        if normalize_per_dataset:
+            weights = normalize_weights_per_dataset(weights, dataset_names)
+
         # Concatenate multiple weights
         weights = np.concatenate(weights, axis=0)
 
@@ -563,6 +605,7 @@ def load_data(cfg, seed):
         cfg.data_format,
         cfg.preprocess_variables_functions,
         cfg.novars,
+        cfg.normalize_weights_per_dataset,
     )
     X_bkg, tot_lenght_bkg = get_variables(
         bkg_files,
@@ -576,6 +619,7 @@ def load_data(cfg, seed):
         cfg.data_format,
         cfg.preprocess_variables_functions,
         cfg.novars,
+        cfg.normalize_weights_per_dataset,
     )
 
     # compute class weights such that sumw is the same for signal and background and each weight is order of 1

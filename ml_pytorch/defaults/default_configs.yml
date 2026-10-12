@@ -42,6 +42,10 @@ oversample_split: False
 split_oversample: False
 undersample: False
 
+# normalize the weights of each individual dataset to sum(w) = 1 before
+# the class balancing (which still equalizes the total sum of weights of each class)
+normalize_weights_per_dataset: False
+
 num_workers: 4
 data_dirs: [/work/mmalucch/out_hh4b/out_vbf_ggf_dnn_full/]
 eval: True
