@@ -70,15 +70,30 @@ def oversample_dataset(X_dataset):
     return oversampled_dataset
 
 
+def get_sumw_per_dataset(weights_list, dataset_names):
+    """
+    Compute the sum of weights of each dataset. Entries of weights_list
+    belonging to the same dataset (e.g. multiple regions) are summed together.
+    """
+    sumw_per_dataset = {}
+    for w, name in zip(weights_list, dataset_names):
+        sumw_per_dataset[name] = sumw_per_dataset.get(name, 0.0) + np.sum(w)
+    return sumw_per_dataset
+
+
+def log_sumw_per_dataset(weights_list, dataset_names, step):
+    """Log the sum of weights of each dataset at a given step."""
+    for name, sumw in get_sumw_per_dataset(weights_list, dataset_names).items():
+        logger.info(f"sum of weights of dataset {name} {step}: {sumw}")
+
+
 def normalize_weights_per_dataset(weights_list, dataset_names):
     """
     Normalize the weights of each dataset so that sum(w) = 1 for each of them.
     Entries of weights_list belonging to the same dataset (e.g. multiple regions)
     are normalized together.
     """
-    sumw_per_dataset = {}
-    for w, name in zip(weights_list, dataset_names):
-        sumw_per_dataset[name] = sumw_per_dataset.get(name, 0.0) + np.sum(w)
+    sumw_per_dataset = get_sumw_per_dataset(weights_list, dataset_names)
 
     normalized_weights_list = []
     for w, name in zip(weights_list, dataset_names):
@@ -89,10 +104,6 @@ def normalize_weights_per_dataset(weights_list, dataset_names):
             )
         normalized_weights_list.append(w / sumw)
 
-    for name, sumw in sumw_per_dataset.items():
-        logger.info(
-            f"Normalizing weights of dataset {name} to sum 1 (sum of weights before normalization: {sumw})"
-        )
     return normalized_weights_list
 
 
@@ -228,11 +239,21 @@ def get_variables(
 
         if normalize_per_dataset:
             # the weights are the second to last row (before kl)
+            log_sumw_per_dataset(
+                [v[-2] for v in variables_array_list],
+                dataset_names,
+                "before normalization of each dataset to sum 1",
+            )
             normalized_weights = normalize_weights_per_dataset(
                 [v[-2] for v in variables_array_list], dataset_names
             )
             for v, w in zip(variables_array_list, normalized_weights):
                 v[-2] = w
+            log_sumw_per_dataset(
+                [v[-2] for v in variables_array_list],
+                dataset_names,
+                "after normalization of each dataset to sum 1",
+            )
 
         # concatenate along event axis
         variables_array = np.concatenate(variables_array_list, axis=1)
@@ -400,7 +421,20 @@ def get_variables(
             concat[key] = np.concatenate([var[key].value for var in vars_array], axis=0)
         vars_array = concat
         if normalize_per_dataset:
+            log_sumw_per_dataset(
+                weights,
+                dataset_names,
+                "before normalization of each dataset to sum 1",
+            )
             weights = normalize_weights_per_dataset(weights, dataset_names)
+            log_sumw_per_dataset(
+                weights,
+                dataset_names,
+                "after normalization of each dataset to sum 1",
+            )
+
+        # number of events of each entry, to split the weights per dataset when logging
+        split_indices = np.cumsum([len(w) for w in weights])[:-1]
 
         # Concatenate multiple weights
         weights = np.concatenate(weights, axis=0)
@@ -467,7 +501,17 @@ def get_variables(
         kl_values = np.expand_dims(kl_values, axis=0)
 
         # normalize the weights to have mean of 1
+        log_sumw_per_dataset(
+            np.split(weights[0], split_indices),
+            dataset_names,
+            "before normalization to mean 1",
+        )
         weights = weights / np.mean(weights)
+        log_sumw_per_dataset(
+            np.split(weights[0], split_indices),
+            dataset_names,
+            "after normalization to mean 1",
+        )
 
         variables_array = np.concatenate(
             [variables_dict[input] for input in input_variables], axis=1
