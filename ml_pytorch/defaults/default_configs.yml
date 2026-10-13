@@ -143,16 +143,36 @@ pin_memory: False
 gpus: '0'
 
 # ---------------------------------------------------------------------------
+# Padding
+# ---------------------------------------------------------------------------
+
+# Padded inputs (e.g. kinematics of missing jets) are handled by the
+# `MaskedBatchNorm1d` input layer of the model (see
+# models/DNN_multiclass_model.py). pad_fill_value and pad_indicators are used
+# ONLY by this layer: they are passed to get_model() only if the model's
+# get_model() accepts them (multi-class models), and are ignored otherwise
+# (e.g. models with a plain nn.BatchNorm1d). The whole padding treatment lives
+# inside the model, so the exported ONNX takes the raw padded inputs directly.
+
+# Value marking padded entries. Must match the PocketCoffea fill value.
+# Also used when loading the dataset to pad events with fewer objects than
+# requested. In MaskedBatchNorm1d, entries equal to this value are excluded
+# from the batch and running mean/variance, so they don't bias the
+# normalisation.
+pad_value: -999.0
+# Value assigned to padded entries after the normalisation, in normalised
+# units (0.0 = mean of the real values of that feature). Use "learn" to make
+# it a learnable parameter per feature (initialised to 0).
+pad_fill_value: 0.0
+# If True, append one 0/1 flag per input feature (1 = real value, 0 = padded),
+# so the first linear layer receives 2 * n_input_features inputs. Lets the
+# network distinguish a padded entry from a real one equal to pad_fill_value.
+pad_indicators: True
+
+# ---------------------------------------------------------------------------
 # Evaluation and outputs
 # ---------------------------------------------------------------------------
 
-# padded inputs (handled by MaskedBatchNorm1d inside the model)
-# value of the padded entries, must match the PocketCoffea fill value
-pad_value: -999.0
-# value (in normalised units) given to padded entries, or "learn"
-pad_fill_value: 0.0
-# append one 0/1 "is real value" input per feature
-pad_indicators: False
 # Evaluate the best model on the training and test datasets after the training.
 eval: True
 # Plot the histograms of the model score for signal and background (also per kl value).

@@ -171,6 +171,9 @@ A ready-to-edit multi-class example is provided at `configs/hh4b_sig_bkg_classif
 | `eval`, `roc`, `histos`, `history`, `onnx` | toggle the post-training outputs |
 | `gpus` | comma-separated GPU indices, or unset for CPU |
 | `seed` | seed for both event shuffling and weight initialisation |
+| `pad_value` | value marking padded entries (missing objects); must match the PocketCoffea fill value. Used to pad when loading the dataset and, in `MaskedBatchNorm1d`, to exclude padded entries from the normalisation statistics |
+| `pad_fill_value` | `MaskedBatchNorm1d` only: value (normalised units, 0 = mean of real values) assigned to padded entries after normalisation, or `"learn"` for a learnable per-feature value |
+| `pad_indicators` | `MaskedBatchNorm1d` only: append one 0/1 "is real" flag per feature (doubles the inputs to the first linear layer) |
 
 The default values used when a key is omitted are listed in `ml_pytorch/defaults/default_configs.yml`.
 
