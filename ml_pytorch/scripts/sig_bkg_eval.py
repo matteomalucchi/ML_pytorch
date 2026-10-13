@@ -13,7 +13,9 @@ from sklearn.calibration import calibration_curve
 from hist import Hist
 from utils_configs.plot.HEPPlotter import HEPPlotter
 
-LUMITEXT = "(13.6 TeV)"
+from ml_pytorch.utils.lumitext import ENERGY_TEXT, get_lumitext_from_dir
+
+LUMITEXT = ENERGY_TEXT
 
 # CMS colour palette of mplhep: the first colour is used for the background
 # and the second one for the signal, consistently in all the plotting scripts
@@ -399,6 +401,7 @@ def plot_sig_bkg_distributions(
     comet_logger=None,
     class_info=None,
     kl_bkg_str=None,
+    lumitext=LUMITEXT,
 ):
     # Dispatch to the multi-class variant when the output has more than one
     # score column (i.e. C >= 3 class probabilities are stored).
@@ -646,7 +649,7 @@ def plot_sig_bkg_distributions(
         for log in [False, True]:
             plotter = (
                 HEPPlotter("CMS")
-                .set_plot_config(figsize=[13, 13], lumitext=LUMITEXT, cmstext="Private")
+                .set_plot_config(figsize=[13, 13], lumitext=lumitext, cmstext="Private")
                 .set_output(f"{base}{'_log' if log else ''}")
                 .set_labels(
                     xlabel="DNN Class Score",
@@ -733,7 +736,7 @@ def plot_sig_bkg_distributions(
                 )
 
 
-def plot_roc_curve(score_lbl_tensor_test, dir, show, comet_logger=None, class_info=None, kl_bkg_str=None):
+def plot_roc_curve(score_lbl_tensor_test, dir, show, comet_logger=None, class_info=None, kl_bkg_str=None, lumitext=LUMITEXT):
     # Dispatch to multi-class ROCs when more than one score column is stored.
     n_score, label_col, weight_col, kl_col = get_layout(score_lbl_tensor_test)
     if n_score > 1:
@@ -746,7 +749,6 @@ def plot_roc_curve(score_lbl_tensor_test, dir, show, comet_logger=None, class_in
             kl_bkg_str=kl_bkg_str,
         )
         return
-
     sig_score_test, bkg_score_test = handle_arrays(score_lbl_tensor_test, 0)
     sig_lbl_test, bkg_lbl_test = handle_arrays(score_lbl_tensor_test, label_col)
 
@@ -841,7 +843,7 @@ def plot_roc_curve(score_lbl_tensor_test, dir, show, comet_logger=None, class_in
 
         plotter = (
             HEPPlotter("CMS")
-            .set_plot_config(lumitext=LUMITEXT)
+            .set_plot_config(lumitext=lumitext)
             .set_output(f"{dir}/roc_curve_kl_{kl_tag}")
             .set_labels(xlabel="True positive rate", ylabel="False positive rate")
             .set_data(series_dict, plot_type="graph")
@@ -890,6 +892,7 @@ def plot_kl_distributions(
     do_calibration=True,
     class_info=None,
     comet_logger=None,
+    lumitext=LUMITEXT,
 ):
     if rescale is None:
         rescale = []
@@ -946,6 +949,7 @@ def plot_kl_distributions(
                 comet_logger=comet_logger,
                 class_info=class_info,
                 kl_bkg_str=kl_bkg_str,
+                lumitext=lumitext,
             )
 
         if do_roc:
@@ -957,6 +961,7 @@ def plot_kl_distributions(
                 show,
                 comet_logger=comet_logger,
                 kl_bkg_str=kl_bkg_str,
+                lumitext=lumitext,
                 class_info=class_info,
             )
 
@@ -1269,6 +1274,8 @@ def main():
         rescale=args.rescale,
         signal_eff=args.signal_eff,
         get_max_significance=False,
+        # get the years from the config saved in the training directory
+        lumitext=get_lumitext_from_dir(args.input_dir),
         class_info=class_info,
     )
 
