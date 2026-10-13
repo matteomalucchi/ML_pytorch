@@ -2,6 +2,7 @@ from collections import OrderedDict
 
 dnn_input_variables = OrderedDict(
     {
+        "n_vbf_cand_jets": ["events", "nJetGoodVBFEnergyOrdered"],
         "vbf_cand_jets_pt_jet0": ["JetGoodVBFEnergyOrdered:0", "pt"],
         "vbf_cand_jets_eta_jet0": ["JetGoodVBFEnergyOrdered:0", "eta"],
         "vbf_cand_jets_phi_jet0": ["JetGoodVBFEnergyOrdered:0", "phi"],

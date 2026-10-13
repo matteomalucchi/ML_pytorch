@@ -1,4 +1,4 @@
-input_variables: bkg_morphing_dnn_boosted_bdt_inputs_50GeV
+input_variables: bkg_morphing_dnn_boosted_bdt_inputs_njets
 
 classes:
   data_A:
@@ -46,4 +46,4 @@ train_fraction: 0.75
 val_fraction: 0.20
 test_fraction: 0.05
 
-data_dirs: [/work/tharte/datasets/samples_vbf_boosted/other_group/full_2024_50GeV_lower_sideband]
+data_dirs: [/work/tharte/datasets/samples_vbf_boosted/other_group/full_2024_40GeV_lower_sideband]
