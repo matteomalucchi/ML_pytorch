@@ -395,6 +395,10 @@ def eval_model(model, loader, loss_fn, type_eval, device, best_epoch):
     avg_loss = tot_loss / len(loader)
     avg_accuracy = tot_correct / tot_num
 
+    # the outputs of single-node models are flattened in loop_one_batch
+    if all_scores.dim() == 1:
+        all_scores = all_scores.view(-1, 1)
+
     # Normalize raw logits into probabilities so that the saved scores live
     # in [0, 1] regardless of the model architecture.
     if torch.any(all_scores < 0) or torch.any(all_scores > 1):

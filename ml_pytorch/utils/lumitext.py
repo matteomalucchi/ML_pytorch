@@ -37,14 +37,22 @@ def get_years_text(datasets):
 
 
 def get_lumitext(cfg=None):
-    """Get the luminosity text of the plots from the signal and background
-    datasets defined in the config."""
+    """Get the luminosity text of the plots from the datasets defined in the
+    config: the datasets of every class for the multi-class layout
+    (``classes``), the signal and background datasets otherwise."""
     if cfg is None:
         return ENERGY_TEXT
 
+    classes = cfg.get("classes", None)
+    if classes:
+        dataset_values = [c.get("dataset", None) for c in classes.values()]
+    else:
+        dataset_values = [
+            cfg.get(key, None) for key in ["signal_dataset", "background_dataset"]
+        ]
+
     datasets = []
-    for key in ["signal_dataset", "background_dataset"]:
-        value = cfg.get(key, None)
+    for value in dataset_values:
         if value is None:
             continue
         if isinstance(value, str):

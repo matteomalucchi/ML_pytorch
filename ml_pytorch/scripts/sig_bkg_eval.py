@@ -131,6 +131,7 @@ def plot_calibration_curve(
     class_info=None,
     n_bins=10,
     kl_bkg_str=None,
+    lumitext=LUMITEXT,
 ):
     """Plot the calibration curves (reliability diagrams) of the classifier.
 
@@ -188,7 +189,7 @@ def plot_calibration_curve(
 
         plotter = (
             HEPPlotter("CMS")
-            .set_plot_config(figsize=[13, 13], lumitext=LUMITEXT, cmstext="Private")
+            .set_plot_config(figsize=[13, 13], lumitext=lumitext, cmstext="Private")
             .set_output(f"{dir}/{base}")
             .set_labels(
                 xlabel=xlabel,
@@ -241,7 +242,7 @@ def plot_calibration_curve(
                 brier_score = brier_score_loss(reduced_labels, reduced_scores)
 
                 name = _class_label(class_info, out_idx, fallback=f"class {out_idx}")
-                name_ref = _class_label(class_info, ref_idx, fallback=f"class {out_idx}")
+                name_ref = _class_label(class_info, ref_idx, fallback=f"class {ref_idx}")
                 base = f"calibration_curve_class_{out_idx}_vs_{ref_idx}"
                 xlabel = f"Mean predicted probability: {name}"
                 print(f"Brier score loss ({name}): {brier_score:.4f}")
@@ -259,7 +260,7 @@ def plot_calibration_curve(
 
                 plotter = (
                     HEPPlotter("CMS")
-                    .set_plot_config(figsize=[13, 13], lumitext=LUMITEXT, cmstext="Private")
+                    .set_plot_config(figsize=[13, 13], lumitext=lumitext, cmstext="Private")
                     .set_output(f"{dir}/{base}")
                     .set_labels(
                         xlabel=xlabel,
@@ -414,6 +415,8 @@ def plot_sig_bkg_distributions(
             show,
             class_info,
             comet_logger=comet_logger,
+            kl_bkg_str=kl_bkg_str,
+            lumitext=lumitext,
         )
         return
 
@@ -736,7 +739,15 @@ def plot_sig_bkg_distributions(
                 )
 
 
-def plot_roc_curve(score_lbl_tensor_test, dir, show, comet_logger=None, class_info=None, kl_bkg_str=None, lumitext=LUMITEXT):
+def plot_roc_curve(
+    score_lbl_tensor_test,
+    dir,
+    show,
+    comet_logger=None,
+    class_info=None,
+    kl_bkg_str=None,
+    lumitext=LUMITEXT,
+):
     # Dispatch to multi-class ROCs when more than one score column is stored.
     n_score, label_col, weight_col, kl_col = get_layout(score_lbl_tensor_test)
     if n_score > 1:
@@ -747,8 +758,10 @@ def plot_roc_curve(score_lbl_tensor_test, dir, show, comet_logger=None, class_in
             class_info,
             comet_logger=comet_logger,
             kl_bkg_str=kl_bkg_str,
+            lumitext=lumitext,
         )
         return
+
     sig_score_test, bkg_score_test = handle_arrays(score_lbl_tensor_test, 0)
     sig_lbl_test, bkg_lbl_test = handle_arrays(score_lbl_tensor_test, label_col)
 
@@ -975,6 +988,7 @@ def plot_kl_distributions(
                 comet_logger=comet_logger,
                 class_info=class_info,
                 kl_bkg_str=kl_bkg_str,
+                lumitext=lumitext,
             )
 
 
@@ -985,9 +999,13 @@ def plot_multiclass_distributions(
     show,
     class_info=None,
     comet_logger=None,
+    kl_bkg_str=None,
+    lumitext=LUMITEXT,
 ):
     """Plot, for each output node, the distribution of its score split by true
     class, using :class:`HEPPlotter` so the style matches the binary plots.
+    As in the binary case, the training and test distributions of each true
+    class are compared with a KS and a chi2 test to check the overtraining.
     Produces ``score_distribution_class_<i>{,_log}.{png,pdf,svg}`` per output."""
     n_score, label_col, weight_col, _ = get_layout(score_lbl_tensor_test)
     train_labels = score_lbl_tensor_train[:, label_col].astype(int)
@@ -1013,6 +1031,8 @@ def plot_multiclass_distributions(
         test_scores = score_lbl_tensor_test[:, out_idx]
 
         series_dict = {}
+        # overtraining tests (KS and chi2 between training and test) of each class
+        annotations = []
         for j, true_c in enumerate(true_classes):
             color = CMS_COLORS[j % len(CMS_COLORS)]
             tr_mask = train_labels == true_c
@@ -1021,23 +1041,44 @@ def plot_multiclass_distributions(
                 continue
 
             label = _class_label(class_info, true_c, fallback=f"true class {true_c}")
+            hist_train = normalized_hist(train_scores[tr_mask], train_weights[tr_mask])
+            hist_test = normalized_hist(test_scores[te_mask], test_weights[te_mask])
             series_dict[f"{label} (training)"] = {
-                "data": normalized_hist(
-                    train_scores[tr_mask], train_weights[tr_mask]
-                ),
+                "data": hist_train,
                 "style": {"color": color, "histtype": "step"},
             }
             series_dict[f"{label} (test)"] = {
-                "data": normalized_hist(test_scores[te_mask], test_weights[te_mask]),
+                "data": hist_test,
                 "style": {"color": color, "histtype": "errorbar"},
             }
+
+            if tr_mask.sum() == 0 or te_mask.sum() == 0:
+                continue
+            _, p_value = stats.ks_2samp(train_scores[tr_mask], test_scores[te_mask])
+            chi2, pvalue_chi2 = chi_square(hist_test, hist_train)
+            print(
+                f"Output node {node_name}, true class {label}: "
+                f"KS p-value = {p_value:.3f}, "
+                f"chi2/ndof = {chi2:.3f}, p-value = {pvalue_chi2:.3f}"
+            )
+            annotations.append(
+                {
+                    "s": f"KS p-value = {p_value:.2f}, "
+                    + r"$\chi^2$/ndof= {:.1f},".format(chi2)
+                    + f"  p-value= {pvalue_chi2:.2f}",
+                    "color": color,
+                }
+            )
+
+        if kl_bkg_str:
+            annotations.append({"s": rf"bkg $\kappa_\lambda$ = {kl_bkg_str}"})
 
         base = f"{dir}/score_distribution_class_{out_idx}"
         for log in [False, True]:
             plotter = (
                 HEPPlotter("CMS")
                 .set_plot_config(
-                    figsize=[13, 13], lumitext=LUMITEXT, cmstext="Private"
+                    figsize=[13, 13], lumitext=lumitext, cmstext="Private"
                 )
                 .set_output(f"{base}{'_log' if log else ''}")
                 .set_labels(
@@ -1046,14 +1087,25 @@ def plot_multiclass_distributions(
                 )
                 .set_data(series_dict, plot_type="1d")
                 .set_options(
-                    legend_loc="upper center",
-                    legend_font_size=20,
+                    legend_loc="upper left",
+                    legend_font_size=18,
                     split_legend=False,
                     grid=True,
                     y_log=log,
                     ylim_bottom_value=1e-4 if log else 0.0,
+                    # leave room for the legend and the annotations
+                    ylim_top_factor=3 if log else 2.2,
                 )
             )
+            for i, annotation in enumerate(annotations):
+                plotter.add_annotation(
+                    x=0.98,
+                    y=0.95 - 0.045 * i,
+                    fontsize=18,
+                    ha="right",
+                    va="center",
+                    **annotation,
+                )
             if show:
                 plotter.show()
             plotter.run()
@@ -1073,6 +1125,7 @@ def plot_multiclass_roc_curves(
     class_info=None,
     comet_logger=None,
     kl_bkg_str=None,
+    lumitext=LUMITEXT,
 ):
     """Plot ROC curves for the multi-class output with :class:`HEPPlotter`:
 
@@ -1096,7 +1149,7 @@ def plot_multiclass_roc_curves(
             return
         plotter = (
             HEPPlotter("CMS")
-            .set_plot_config(lumitext=LUMITEXT)
+            .set_plot_config(lumitext=lumitext)
             .set_output(f"{dir}/{output_base}")
             .set_labels(xlabel="True positive rate", ylabel="False positive rate")
             .set_data(series_dict, plot_type="graph")
@@ -1246,8 +1299,11 @@ def main():
         class_info = None
     # resolve background kl values to plot
     try:
-        bkg_mask = score_lbl_tensor_train[:, 1] == 0
-        kl_bkg_unique_values = list(np.unique(score_lbl_tensor_train[bkg_mask, 3]))
+        _, label_col, _, kl_col = get_layout(score_lbl_tensor_train)
+        bkg_mask = score_lbl_tensor_train[:, label_col] == 0
+        kl_bkg_unique_values = list(
+            np.unique(score_lbl_tensor_train[bkg_mask, kl_col])
+        )
     except IndexError:
         kl_bkg_unique_values = [9999.0]
 
@@ -1277,10 +1333,6 @@ def main():
         # get the years from the config saved in the training directory
         lumitext=get_lumitext_from_dir(args.input_dir),
         class_info=class_info,
-    )
-
-    plot_roc_curve(
-        score_lbl_tensor_test, args.input_dir, args.show, class_info=class_info
     )
 
 

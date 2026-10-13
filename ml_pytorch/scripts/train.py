@@ -69,10 +69,6 @@ def main():
         from ml_pytorch.scripts.sig_bkg_eval import (
             plot_kl_distributions,
         )
-    if cfg.roc:
-        from ml_pytorch.scripts.sig_bkg_eval import (
-            plot_roc_curve,
-        )
     if cfg.history:
         from ml_pytorch.scripts.plot_history import plot_history, plot_lr, read_from_txt
     if cfg.input_plots:
@@ -245,6 +241,7 @@ def main():
             log_scale=cfg.input_plots_log,
             comet_logger=comet_logger,
             lumitext=lumitext,
+            class_info=class_info,
         )
         logger.info(f"Input variable distributions saved in {input_plots_dir}")
 

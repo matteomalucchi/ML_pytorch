@@ -29,6 +29,8 @@ oversample_split: True
 ML_model: DNN_multiclass_model
 
 data_format: coffea
+# columns stored under the "nominal" variation
+novars: False
 
 batch_size: 256
 epochs: 100
