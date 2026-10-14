@@ -23,6 +23,7 @@ from ml_pytorch.utils.tools import (
     export_onnx,
     get_model_parameters_number,
     save_pytorch_model,
+    set_seed,
     train_val_one_epoch,
 )
 
@@ -217,6 +218,10 @@ def main():
         comet_logger.set_name(f"{name_configuration}_s{cfg.seed}")
     else:
         comet_logger = None
+
+    # seed all the random number generators before loading the data and
+    # building the model
+    set_seed(cfg.seed, cfg.deterministic)
 
     # Load data
     (

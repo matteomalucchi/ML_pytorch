@@ -1,5 +1,7 @@
 import torch
+import numpy as np
 import os
+import random
 import time
 import logging
 
@@ -11,6 +13,27 @@ DEBUG = False
 def get_model_parameters_number(model):
     params_num = sum(p.numel() for p in model.parameters() if p.requires_grad)
     return params_num
+
+
+def set_seed(seed, deterministic=False):
+    """Seed the python, numpy and torch (CPU and GPU) random number generators.
+
+    If deterministic is True, only deterministic algorithms are used, so that
+    trainings with the same seed are reproducible also on GPU.
+    """
+    seed = int(seed)
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)  # seeds also all the GPUs
+
+    if deterministic:
+        # needed by cuBLAS for deterministic results, must be set before the
+        # first CUDA call
+        os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+        torch.use_deterministic_algorithms(True)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+    logger.info(f"Random seed set to {seed} (deterministic algorithms: {deterministic})")
 
 
 def loop_one_batch(

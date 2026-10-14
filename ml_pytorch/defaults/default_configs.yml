@@ -117,9 +117,16 @@ undersample: False
 # Name of the model module in ml_pytorch/models/ (must define get_model).
 ML_model: DNN_model
 
-# Seed for the event shuffling and the train/val/test split (numpy and the
-# torch generator of random_split; the torch global seed is not set).
+# Seed of the random number generators (python, numpy and torch, also on
+# GPU): it fixes the event shuffling, the train/val/test split, the weight
+# initialisation and the dropout. On CPU two trainings with the same seed are
+# identical, on GPU they can still slightly differ unless deterministic is True.
 seed: 100
+# Use only deterministic algorithms (torch.use_deterministic_algorithms and
+# cuDNN in deterministic mode), so that trainings with the same seed are
+# identical also on GPU. It can make the training slower, and with multiple
+# GPUs (DataParallel) the results can still differ.
+deterministic: False
 
 batch_size: 512
 # Maximum number of training epochs.

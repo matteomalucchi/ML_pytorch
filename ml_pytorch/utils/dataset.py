@@ -199,6 +199,25 @@ def normalize_weights_per_dataset(weights_list, dataset_names):
     return normalized_weights_list
 
 
+def list_parquet_files(path):
+    """Sorted list of the files in a parquet directory (searched recursively).
+
+    As in pyarrow.dataset, the files and directories starting with "." or "_"
+    (e.g. _SUCCESS) are ignored.
+    """
+    if os.path.isfile(path):
+        return [path]
+    files = []
+    for root, dirs, filenames in os.walk(path):
+        dirs[:] = sorted(d for d in dirs if not d.startswith((".", "_")))
+        for name in sorted(filenames):
+            if not name.startswith((".", "_")):
+                files.append(os.path.join(root, name))
+    if not files:
+        raise FileNotFoundError(f"No parquet files found in {path}")
+    return files
+
+
 def get_variables(
     files,
     parquet_files,
@@ -264,7 +283,9 @@ def get_variables(
             matching_coffea = matching_coffea[0]
 
             # load the flat varibles
-            dataset = ds.dataset(file_name, format="parquet")
+            # the files are passed explicitly in a fixed order, so that the
+            # events are always loaded in the same order
+            dataset = ds.dataset(list_parquet_files(file_name), format="parquet")
             logger.debug(f"input_variables {input_variables}")
 
             # load the corresponding .coffea file to get the sum of genweights
@@ -697,7 +718,7 @@ def _find_class_files(cfg, class_def):
 
     if cfg.data_format == "root":
         for x in cfg.data_dirs:
-            files = os.listdir(x)
+            files = sorted(os.listdir(x))
             for file in files:
                 for sample in class_def["samples"]:
                     if sample in file and "SR" in file:
@@ -706,7 +727,7 @@ def _find_class_files(cfg, class_def):
         for direct in cfg.data_dirs:
             if not os.path.isdir(direct):
                 raise FileNotFoundError(f"Data directory not found: {direct}")
-            for file in os.listdir(direct):
+            for file in sorted(os.listdir(direct)):
                 if file.endswith(".coffea"):
                     if any(d in file for d in class_def["datasets"]):
                         coffea_files.append(os.path.join(direct, file))
@@ -722,7 +743,10 @@ def _find_class_files(cfg, class_def):
                     raise FileNotFoundError(
                         f"Local path not found on this node: {parquet_dirs_path}"
                     )
-                for entry in os.scandir(parquet_dirs_path):
+                # sorted, so that the files are always loaded in the same order
+                for entry in sorted(
+                    os.scandir(parquet_dirs_path), key=lambda e: e.name
+                ):
                     logger.debug(f"Looking for files in {entry.path}")
                     if entry.name in class_def["datasets"]:
                         for region in class_def["regions"]:
