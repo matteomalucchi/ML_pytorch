@@ -577,7 +577,7 @@ def main():
                     train_test_fractions[1],
                     **plot_kwargs,
                 )
-            except Exception as e:
+            except ValueError as e:
                 # e.g. no background events with kl = 1
                 logger.warning(
                     f"Plotting for background kl = 1 failed ({type(e).__name__}: {e}). "
