@@ -2,6 +2,7 @@ import datetime
 import importlib
 import importlib.util
 import os
+import shutil
 import sys
 import time
 
@@ -65,7 +66,7 @@ def main():
         if val is not None:
             cfg[key] = val
 
-    if cfg.histos:
+    if cfg.histos or cfg.roc:
         from ml_pytorch.scripts.sig_bkg_eval import (
             plot_kl_distributions,
         )
@@ -560,18 +561,39 @@ def main():
 
         # plot the signal and background distributions
         if cfg.histos or cfg.roc:
-            plot_kl_distributions(
-                score_lbl_array_train,
-                score_lbl_array_test,
-                main_dir,
-                ["all", 1.0],
-                train_test_fractions[1],
+            plot_kwargs = dict(
                 do_histos=cfg.histos,
                 do_roc=cfg.roc,
                 comet_logger=comet_logger,
                 class_info=class_info,
                 lumitext=lumitext,
             )
+            try:
+                plot_kl_distributions(
+                    score_lbl_array_train,
+                    score_lbl_array_test,
+                    main_dir,
+                    ["all", 1.0],
+                    train_test_fractions[1],
+                    **plot_kwargs,
+                )
+            except Exception as e:
+                # e.g. no background events with kl = 1
+                logger.warning(
+                    f"Plotting for background kl = 1 failed ({type(e).__name__}: {e}). "
+                    "Plotting only for all the background kl values."
+                )
+                # remove the incomplete plots of the failed kl = 1 attempt
+                for prefix in ["sig_bkg", "roc", "calibration"]:
+                    shutil.rmtree(f"{main_dir}/{prefix}_bkgkl_1.00", ignore_errors=True)
+                plot_kl_distributions(
+                    score_lbl_array_train,
+                    score_lbl_array_test,
+                    main_dir,
+                    ["all"],
+                    train_test_fractions[1],
+                    **plot_kwargs,
+                )
 
     # remove ML_model_loaded.py
     # if cfg.load_model or cfg.eval_model:
