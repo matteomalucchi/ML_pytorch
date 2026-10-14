@@ -45,6 +45,14 @@ background_region: [4b_region]
 signal_dataset: [VBFHHto4B_CV_1_C2V_1_C3_1_2022_postEE]
 background_dataset: [GluGlutoHHto4B_kl-1p00_kt-1p00_c2-0p00__2022_postEE]
 
+# Multi-class layout. If set, it replaces the signal_*/background_* options
+# above: each entry defines one class (and one output node of the model) as
+#   <class name>: {sample: [...], region: [...], dataset: [...], lbl: <int>}
+# The classes are ordered by lbl. With more than two classes a model whose
+# get_model accepts num_classes is needed (e.g. DNN_multiclass_model).
+# See configs/hh4b_sig_bkg_classifier/example_DNN_config_multiclass.yml.
+classes: null
+
 # Directories containing the input files (.coffea files and, for parquet, the
 # config.json pointing to the parquet chunks).
 data_dirs: [/work/mmalucch/out_hh4b/out_vbf_ggf_dnn_full/]
@@ -141,6 +149,33 @@ pin_memory: False
 # Comma-separated list of GPU indices to use (e.g. '0' or '0,1'; more than one
 # GPU uses DataParallel), or 'cpu' to run on CPU.
 gpus: '0'
+
+# ---------------------------------------------------------------------------
+# Padding
+# ---------------------------------------------------------------------------
+
+# Padded inputs (e.g. kinematics of missing jets) are handled by the
+# `MaskedBatchNorm1d` input layer of the model (see
+# models/DNN_multiclass_model.py). pad_fill_value and pad_indicators are used
+# ONLY by this layer: they are passed to get_model() only if the model's
+# get_model() accepts them (multi-class models), and are ignored otherwise
+# (e.g. models with a plain nn.BatchNorm1d). The whole padding treatment lives
+# inside the model, so the exported ONNX takes the raw padded inputs directly.
+
+# Value marking padded entries. Must match the PocketCoffea fill value.
+# Also used when loading the dataset to pad events with fewer objects than
+# requested. In MaskedBatchNorm1d, entries equal to this value are excluded
+# from the batch and running mean/variance, so they don't bias the
+# normalisation.
+pad_value: -999.0
+# Value assigned to padded entries after the normalisation, in normalised
+# units (0.0 = mean of the real values of that feature). Use "learn" to make
+# it a learnable parameter per feature (initialised to 0).
+pad_fill_value: 0.0
+# If True, append one 0/1 flag per input feature (1 = real value, 0 = padded),
+# so the first linear layer receives 2 * n_input_features inputs. Lets the
+# network distinguish a padded entry from a real one equal to pad_fill_value.
+pad_indicators: True
 
 # ---------------------------------------------------------------------------
 # Evaluation and outputs
