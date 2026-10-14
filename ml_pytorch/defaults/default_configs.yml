@@ -60,10 +60,16 @@ data_dirs: [/work/mmalucch/out_hh4b/out_vbf_ggf_dnn_full/]
 # Format of the input data: coffea or parquet (root is not supported anymore).
 data_format: coffea
 
-# Only for data_format coffea: if True the columns in the .coffea files are
-# stored directly under the region, if False they are stored under the
-# "nominal" variation (columns[sample][dataset][region]["nominal"]).
-novars: True
+# If True, the inputs are saved without systematic variations, if False only
+# the "nominal" variation is read:
+#   coffea : the columns are stored directly under the region (True) or under
+#            the "nominal" variation (False), i.e.
+#            columns[sample][dataset][region]["nominal"]
+#   parquet: the chunks are read directly from <dataset>/<region>/ (True; no
+#            variation subdirectory is expected) or only from
+#            <dataset>/<region>/nominal/ (False; the other variations are
+#            skipped)
+novars: False
 
 # ---------------------------------------------------------------------------
 # Train / validation / test split

@@ -726,7 +726,17 @@ def _find_class_files(cfg, class_def):
                     logger.debug(f"Looking for files in {entry.path}")
                     if entry.name in class_def["datasets"]:
                         for region in class_def["regions"]:
-                            parquet_files.append(entry.path + "/" + region)
+                            region_path = entry.path + "/" + region
+                            # with variations saved, read only the nominal one
+                            if not cfg.novars:
+                                region_path += "/nominal"
+                                if not os.path.isdir(region_path):
+                                    raise FileNotFoundError(
+                                        f"Nominal variation not found: {region_path}. "
+                                        "Set novars: True if the parquet files are "
+                                        "saved without variations."
+                                    )
+                            parquet_files.append(region_path)
     else:
         raise ValueError(f"Data format {cfg.data_format} not supported")
 
