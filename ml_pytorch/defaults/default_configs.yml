@@ -178,8 +178,10 @@ gpus: '0'
 # Value marking padded (missing) entries of the inputs. Must match the
 # PocketCoffea fill value. It is used:
 #   - when loading the dataset: the objects requested with "<var>:<position>"
-#     that an event does not have, and any None value of the inputs, are
-#     set to this value;
+#     that an event does not have, the missing objects of a whole jagged
+#     collection used as input (coffea only, padded to the maximum number of
+#     objects per event), and any None value of the inputs, are set to this
+#     value;
 #   - when creating a missing <collection>_N input from the parquet files:
 #     the objects equal to this value (or None) are not counted;
 #   - in MaskedBatchNorm1d: the entries equal to this value are excluded from

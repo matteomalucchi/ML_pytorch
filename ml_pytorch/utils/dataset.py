@@ -644,7 +644,8 @@ def get_variables(
             if ":" in k:
                 variable_name, pos = k.split(":")
                 pos = int(pos)
-                number_per_event = ak.Array(vars_array[f"{collection}_N"])
+                number_per_event = np.asarray(vars_array[f"{collection}_N"], dtype=np.int64)
+                # events with fewer objects than requested are padded with pad_value
                 ragged = ak.fill_none(ak.pad_none(ak.unflatten(vars_array[variable_name], number_per_event), pos + 1, axis=1), pad_value, axis=1)
                 sliced = ragged[:, pos]
                 variables_dict[k] = ak.to_numpy(sliced).reshape(-1,1)
@@ -680,25 +681,28 @@ def get_variables(
                 #     ),
                 # )
             elif f"{collection}_N" in vars_array.keys() and k.split("_")[1] != "N":
-                number_per_event = tuple(vars_array[f"{collection}_N"])
-                if ak.all(number_per_event == number_per_event[0]):
-                    variables_dict[k] = ak.to_numpy(
-                        ak.unflatten(vars_array[k], number_per_event)
-                    )
-                else:
+                # whole collection: one column per object, padded to the
+                # maximum number of objects per event, the missing objects
+                # are set to pad_value
+                number_per_event = np.asarray(vars_array[f"{collection}_N"], dtype=np.int64)
+                max_number = int(np.max(number_per_event)) if len(number_per_event) else 0
+                if np.any(number_per_event != max_number):
                     logger.warning(
-                        f"number of {collection} per event is not the same for all events, \n padding collection to 5 ..."
+                        f"number of {collection} per event is not the same for all "
+                        f"events: padding {k} to the maximum number {max_number} "
+                        f"with {pad_value}"
                     )
-                    variables_dict[k] = ak.to_numpy(
-                        ak.fill_none(
-                            ak.pad_none(
-                                ak.unflatten(vars_array[k], number_per_event),
-                                5,
-                                clip=True,
-                            ),
-                            pad_value,
-                        )
+                variables_dict[k] = ak.to_numpy(
+                    ak.fill_none(
+                        ak.pad_none(
+                            ak.unflatten(vars_array[k], number_per_event),
+                            max_number,
+                            axis=1,
+                        ),
+                        pad_value,
+                        axis=1,
                     )
+                ).reshape(len(number_per_event), max_number)
             else:
                 variables_dict[k] = ak.to_numpy(ak.unflatten(vars_array[k], 1))
 
@@ -869,6 +873,15 @@ def load_data(cfg, seed):
             cfg.pad_value,
             cfg.normalize_weights_per_dataset,
         )
+        if X_per_class and X_class[0].shape[0] != X_per_class[0][0].shape[0]:
+            raise ValueError(
+                f"Class {c['name']} has {X_class[0].shape[0] - 1} input features "
+                f"but class {class_defs[0]['name']} has "
+                f"{X_per_class[0][0].shape[0] - 1}. This can happen when a whole "
+                "jagged collection is used as input with coffea files, since it "
+                "is padded to the maximum number of objects of each class: "
+                "select the objects explicitly as <variable>:<position>."
+            )
         X_per_class.append(X_class)
         n_per_class.append(n_class)
         logger.info(f"Number of events for class {c['name']}: {n_class}")
