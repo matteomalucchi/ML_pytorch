@@ -219,12 +219,13 @@ def list_parquet_files(path):
     return files
 
 
-def count_objects(array, schema, n_variable):
+def count_objects(array, schema, n_variable, pad_value):
     """Create the number of objects per event of a collection (<collection>_N)
     by counting the elements of one of its jagged fields (<collection>_<field>).
 
-    The None elements (objects padded to have the same number per event) are
-    not counted, so only the real objects are.
+    The padded objects (added to have the same number per event), which are
+    either None or equal to pad_value, are not counted, so only the real
+    objects are.
     """
     collection = n_variable[: -len("_N")]
     fields = [
@@ -241,9 +242,10 @@ def count_objects(array, schema, n_variable):
         )
     logger.warning(
         f"Input variable {n_variable} not found in the parquet files: creating it "
-        f"by counting the non-None elements of {fields[0]}"
+        f"by counting the elements of {fields[0]} that are not None or {pad_value}"
     )
-    is_real = ~ak.is_none(array[fields[0]], axis=1)
+    # the comparison is None for the None elements, which are then not counted
+    is_real = ak.fill_none(array[fields[0]] != pad_value, False)
     return ak.fill_none(ak.sum(is_real, axis=1), 0)
 
 
@@ -352,7 +354,7 @@ def get_variables(
 
             for k in missing_counts:
                 variables_array[k] = count_objects(
-                    jagged_variables_array, dataset.schema, k
+                    jagged_variables_array, dataset.schema, k, pad_value
                 )
 
             # add the wanted number of flattened features from the jagged variables to the feature array
