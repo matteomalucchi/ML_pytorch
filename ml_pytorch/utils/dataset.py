@@ -7,6 +7,7 @@ import logging
 import os
 from coffea.util import load
 import awkward as ak
+import pyarrow as pa
 import pyarrow.parquet as pq
 import pyarrow.dataset as ds
 import json
@@ -218,6 +219,34 @@ def list_parquet_files(path):
     return files
 
 
+def count_objects(array, schema, n_variable):
+    """Create the number of objects per event of a collection (<collection>_N)
+    by counting the elements of one of its jagged fields (<collection>_<field>).
+
+    The None elements (objects padded to have the same number per event) are
+    not counted, so only the real objects are.
+    """
+    collection = n_variable[: -len("_N")]
+    fields = [
+        f.name
+        for f in schema
+        if f.name.startswith(f"{collection}_")
+        and f.name != n_variable
+        and (pa.types.is_list(f.type) or pa.types.is_large_list(f.type))
+    ]
+    if not fields:
+        raise ValueError(
+            f"Input variable {n_variable} is not in the parquet files and no "
+            f"jagged field of the collection {collection} is available to create it"
+        )
+    logger.warning(
+        f"Input variable {n_variable} not found in the parquet files: creating it "
+        f"by counting the non-None elements of {fields[0]}"
+    )
+    is_real = ~ak.is_none(array[fields[0]], axis=1)
+    return ak.fill_none(ak.sum(is_real, axis=1), 0)
+
+
 def get_variables(
     files,
     parquet_files,
@@ -293,7 +322,16 @@ def get_variables(
             file = load(matching_coffea)
 
             vars = [x for x in input_variables if ":" not in x]
-            table = dataset.to_table(columns=vars)
+            # number of objects of a collection (<collection>_N) requested as
+            # input but not saved in the parquet files: created below
+            missing_counts = [
+                x
+                for x in vars
+                if x.endswith("_N") and x not in dataset.schema.names
+            ]
+            table = dataset.to_table(
+                columns=[x for x in vars if x not in missing_counts]
+            )
             variables_array = ak.from_arrow(table)
 
             # load the jagged variables and add them flattened to the variables array
@@ -312,16 +350,21 @@ def get_variables(
             jagged_variables_array = ak.from_arrow(table)
             logger.debug(f"jagged_variables {jagged_variables}")
 
+            for k in missing_counts:
+                variables_array[k] = count_objects(
+                    jagged_variables_array, dataset.schema, k
+                )
+
             # add the wanted number of flattened features from the jagged variables to the feature array
             # events with fewer objects than requested are padded with pad_value
+            # (slicing instead of ak.pad_none, which does not support the 32-bit
+            # list offsets of arrow in recent awkward versions)
             for k in jagged_variables:
-                padded = ak.fill_none(
-                    ak.pad_none(jagged_variables_array[k], max_pos + 1, axis=1),
-                    pad_value,
-                    axis=1,
-                )
                 for pos in range(max_pos + 1):
-                    variables_array[k + ":" + str(pos)] = padded[:, pos]
+                    variables_array[k + ":" + str(pos)] = ak.fill_none(
+                        ak.firsts(jagged_variables_array[k][:, pos : pos + 1]),
+                        pad_value,
+                    )
 
             # apply any preprocessing function to the variables
             for k in input_variables:
