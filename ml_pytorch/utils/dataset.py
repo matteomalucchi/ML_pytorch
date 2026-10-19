@@ -361,6 +361,9 @@ def get_variables(
             # list offsets of arrow in recent awkward versions)
             for k in jagged_variables:
                 for pos in range(max_pos + 1):
+                    # the range slice (not [:, pos]) gives an empty list for the
+                    # events with fewer objects, so firsts returns None, which
+                    # is then filled with pad_value (as for None-padded objects)
                     variables_array[k + ":" + str(pos)] = ak.fill_none(
                         ak.firsts(jagged_variables_array[k][:, pos : pos + 1]),
                         pad_value,
