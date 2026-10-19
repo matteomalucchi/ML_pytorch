@@ -394,11 +394,13 @@ def get_variables(
             variables_array["kl"] = np.full(len(variables_array), kl_val)
 
             # concatenate in a single numpy matrix of shape (num_variables, num_events)
+            # the None values of the inputs are padded with pad_value
             variables_array = np.array(
                 [
-                    ak.to_numpy(variables_array[f])
-                    for f in input_variables + ["weights", "kl"]
+                    ak.to_numpy(ak.fill_none(variables_array[f], pad_value))
+                    for f in input_variables
                 ]
+                + [ak.to_numpy(variables_array[f]) for f in ["weights", "kl"]]
             )
 
             logger.info(f"variables_array complete shape {variables_array.shape}")
@@ -688,10 +690,13 @@ def get_variables(
                         f"number of {collection} per event is not the same for all events, \n padding collection to 5 ..."
                     )
                     variables_dict[k] = ak.to_numpy(
-                        ak.pad_none(
-                            ak.unflatten(vars_array[k], number_per_event),
-                            5,
-                            clip=True,
+                        ak.fill_none(
+                            ak.pad_none(
+                                ak.unflatten(vars_array[k], number_per_event),
+                                5,
+                                clip=True,
+                            ),
+                            pad_value,
                         )
                     )
             else:

@@ -175,15 +175,28 @@ gpus: '0'
 # (e.g. models with a plain nn.BatchNorm1d). The whole padding treatment lives
 # inside the model, so the exported ONNX takes the raw padded inputs directly.
 
-# Value marking padded entries. Must match the PocketCoffea fill value.
-# Also used when loading the dataset to pad events with fewer objects than
-# requested. In MaskedBatchNorm1d, entries equal to this value are excluded
-# from the batch and running mean/variance, so they don't bias the
-# normalisation.
+# Value marking padded (missing) entries of the inputs. Must match the
+# PocketCoffea fill value. It is used:
+#   - when loading the dataset: the objects requested with "<var>:<position>"
+#     that an event does not have, and any None value of the inputs, are
+#     set to this value;
+#   - when creating a missing <collection>_N input from the parquet files:
+#     the objects equal to this value (or None) are not counted;
+#   - in MaskedBatchNorm1d: the entries equal to this value are excluded from
+#     the batch and running mean/variance, so they don't bias the
+#     normalisation, and are then replaced by pad_fill_value;
+#   - in the input variable plots: the entries equal to this value are not
+#     plotted (the plots use the default -999).
 pad_value: -999.0
-# Value assigned to padded entries after the normalisation, in normalised
-# units (0.0 = mean of the real values of that feature). Use "learn" to make
-# it a learnable parameter per feature (initialised to 0).
+# Value given to the padded entries at the output of MaskedBatchNorm1d, i.e.
+# in the same space as the normalised real values. The real values are
+# standardised ((x - mean) / std of the real values) and then multiplied and
+# shifted by the learnable weight and bias of the layer: at the start of the
+# training they have mean 0 and std 1, so 0.0 is where the mean of the real
+# values is mapped. It is a fixed number, though: it does not follow the
+# learned weight and bias, so during the training it is not the mean of the
+# normalised real values anymore. Use "learn" to make it a learnable parameter
+# per feature (initialised to 0).
 pad_fill_value: 0.0
 # If True, append one 0/1 flag per input feature (1 = real value, 0 = padded),
 # so the first linear layer receives 2 * n_input_features inputs. Lets the

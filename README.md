@@ -172,8 +172,8 @@ A ready-to-edit multi-class example is provided at `configs/hh4b_sig_bkg_classif
 | `gpus` | comma-separated GPU indices, or unset for CPU |
 | `seed` | seed for both event shuffling and weight initialisation (python, numpy and torch, also on GPU) |
 | `deterministic` | use only deterministic algorithms, so that trainings with the same seed are identical also on GPU (slower) |
-| `pad_value` | value marking padded entries (missing objects); must match the PocketCoffea fill value. Used to pad when loading the dataset and, in `MaskedBatchNorm1d`, to exclude padded entries from the normalisation statistics |
-| `pad_fill_value` | `MaskedBatchNorm1d` only: value (normalised units, 0 = mean of real values) assigned to padded entries after normalisation, or `"learn"` for a learnable per-feature value |
+| `pad_value` | value marking padded entries (missing objects); must match the PocketCoffea fill value. Used to pad the missing objects and the `None` values of the inputs when loading the dataset, to not count padded objects when creating a missing `<collection>_N` from parquet files and, in `MaskedBatchNorm1d`, to exclude padded entries from the normalisation statistics |
+| `pad_fill_value` | `MaskedBatchNorm1d` only: value assigned to padded entries at the output of the layer, or `"learn"` for a learnable per-feature value. The real values there are standardised and then scaled/shifted by the learnable weight and bias, so 0 corresponds to the mean of the real values only at initialisation; a fixed value does not follow the learned scale/shift |
 | `pad_indicators` | `MaskedBatchNorm1d` only: append one 0/1 "is real" flag per feature (doubles the inputs to the first linear layer) |
 
 The default values used when a key is omitted are listed in `ml_pytorch/defaults/default_configs.yml`.
