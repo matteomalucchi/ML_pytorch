@@ -40,7 +40,7 @@ NO_SLURM=false
 EXTRA_ARGS=()
 CONFIG_FILE=""
 OUT_DIR=""
-SLURM_TIME="8:30:00"
+SLURM_TIME="12:00:00"
 SLURM_MEM=4000
 SLURM_CPUS=4
 
@@ -146,6 +146,9 @@ build_submit_args() {
 # ─── Self-submission ──────────────────────────────────────────────────────────
 if [[ -z "${SLURM_JOB_ID:-}" && "$NO_SLURM" != true ]]; then
     SCRIPT_PATH="$(realpath "$0")"
+    # Inside a Slurm job $0 points to the spooled copy, so pass the real
+    # script directory through the environment (sbatch exports it by default).
+    export ML_TRAIN_SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
 
     SBATCH_RESOURCES=(
         --time="$SLURM_TIME"
@@ -194,8 +197,8 @@ if [[ -z "${SLURM_JOB_ID:-}" && "$NO_SLURM" != true ]]; then
 fi
 
 # ─── Comet ML credentials (looked up relative to script) ──────────────────────
-SCRIPT_DIR="$(dirname "$(realpath "$0")")"
-COMET_KEY_FILE="./comet_token.key"
+SCRIPT_DIR="${ML_TRAIN_SCRIPT_DIR:-$(dirname "$(realpath "$0")")}"
+COMET_KEY_FILE="${SCRIPT_DIR}/comet_token.key"
 USE_COMET=false
 API_UNAME=""
 API_KEY=""
