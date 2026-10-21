@@ -4,6 +4,10 @@ The histograms are normalized to unit area and are drawn with the `HEPPlotter`
 class of the AnalysisConfigs repository (as done in `sig_bkg_eval.py`),
 together with a signal/background ratio panel.
 
+For a multi-class training (more than two classes) one distribution per class
+is drawn instead, with the ratio of each class to the first one (lowest class
+index, e.g. the background).
+
 The plots are produced *before* the training starts and are saved in a
 subdirectory of the output directory (`input_variables` by default).
 
@@ -34,6 +38,8 @@ DEFAULT_BINS = 30
 DISCRETE_THRESHOLD = 15
 # percentiles used to define the plotting range (robust against outliers)
 RANGE_PERCENTILES = (0.1, 99.9)
+# padded entries (missing objects) are not plotted
+PAD_VALUE = -999.0
 
 # CMS colour palette of mplhep: the first colour is used for the background
 # and the second one for the signal, consistently in all the plotting scripts
@@ -129,10 +135,10 @@ def safe_file_name(variable):
     return variable
 
 
-def get_bin_edges(sig_values, bkg_values, bins=DEFAULT_BINS):
-    """Compute the bin edges common to signal and background."""
-    values = np.concatenate([sig_values, bkg_values])
-    values = values[np.isfinite(values)]
+def get_bin_edges(*values_list, bins=DEFAULT_BINS):
+    """Compute the bin edges common to all the samples (e.g. signal and background)."""
+    values = np.concatenate(values_list)
+    values = values[np.isfinite(values) & (values != PAD_VALUE)]
 
     if values.size == 0:
         return np.linspace(0.0, 1.0, bins + 1)
@@ -163,58 +169,46 @@ def get_bin_edges(sig_values, bkg_values, bins=DEFAULT_BINS):
     return np.linspace(low, high, bins + 1)
 
 
-def plot_single_variable(
+def plot_variable_samples(
     variable,
-    sig_values,
-    bkg_values,
-    sig_weights,
-    bkg_weights,
+    samples,
     dir,
     bins=DEFAULT_BINS,
     show=False,
     log_scale=False,
     lumitext=LUMITEXT,
-    sig_label="Signal",
-    bkg_label="Background",
+    ratio_label="Ratio",
     formats=("png", "pdf"),
     comet_logger=None,
 ):
-    """Plot the normalized signal and background distribution of one variable."""
-    bin_edges = get_bin_edges(sig_values, bkg_values, bins)
+    """Plot the normalized distributions of one variable for a list of samples.
+
+    Each sample is a dict with the keys `label`, `values`, `weights` and
+    `style` (HEPPlotter style; the sample with `"is_reference": True` is the
+    denominator of the ratio panel).
+    """
+    bin_edges = get_bin_edges(*[sample["values"] for sample in samples], bins=bins)
 
     def make_hist(values, weights):
         """Fill a hist.Hist, clipping the entries outside the range into the
         first/last bin so that none of them is lost in the normalization."""
         values = np.asarray(values, dtype=float)
         weights = np.asarray(weights, dtype=float)
-        mask = np.isfinite(values) & np.isfinite(weights)
+        mask = np.isfinite(values) & np.isfinite(weights) & (values != PAD_VALUE)
 
         h = Hist.new.Var(bin_edges, name="x", flow=False).Weight()
         h.fill(np.clip(values[mask], bin_edges[0], bin_edges[-1]), weight=weights[mask])
         return h
 
-    # the background is the reference: HEPPlotter normalizes the histograms,
-    # draws the signal/background ratio and the background uncertainty band
-    # around one, and takes the error bars from the histogram variances
+    # HEPPlotter normalizes the histograms, draws the ratio to the reference
+    # and the reference uncertainty band around one, and takes the error bars
+    # from the histogram variances
     series_dict = {
-        sig_label: {
-            "data": make_hist(sig_values, sig_weights),
-            "style": {
-                "histtype": "fill",
-                "color": SIG_COLOR,
-                "edgecolor": SIG_COLOR,
-                "facecolor": SIG_COLOR,
-                "alpha": 0.5,
-            },
-        },
-        bkg_label: {
-            "data": make_hist(bkg_values, bkg_weights),
-            "style": {
-                "histtype": "step",
-                "color": BKG_COLOR,
-                "is_reference": True,
-            },
-        },
+        sample["label"]: {
+            "data": make_hist(sample["values"], sample["weights"]),
+            "style": sample["style"],
+        }
+        for sample in samples
     }
 
     file_name = safe_file_name(variable)
@@ -231,7 +225,7 @@ def plot_single_variable(
             .set_labels(
                 xlabel=variable,
                 ylabel="Normalized counts",
-                ratio_label="Signal/Background",
+                ratio_label=ratio_label,
             )
             .set_data(series_dict, plot_type="1d")
             .set_options(
@@ -260,6 +254,71 @@ def plot_single_variable(
             )
 
 
+def plot_single_variable(
+    variable,
+    sig_values,
+    bkg_values,
+    sig_weights,
+    bkg_weights,
+    dir,
+    bins=DEFAULT_BINS,
+    show=False,
+    log_scale=False,
+    lumitext=LUMITEXT,
+    sig_label="Signal",
+    bkg_label="Background",
+    formats=("png", "pdf"),
+    comet_logger=None,
+):
+    """Plot the normalized signal and background distribution of one variable."""
+    # the background is the reference of the ratio
+    samples = [
+        {
+            "label": sig_label,
+            "values": sig_values,
+            "weights": sig_weights,
+            "style": {
+                "histtype": "fill",
+                "color": SIG_COLOR,
+                "edgecolor": SIG_COLOR,
+                "facecolor": SIG_COLOR,
+                "alpha": 0.5,
+            },
+        },
+        {
+            "label": bkg_label,
+            "values": bkg_values,
+            "weights": bkg_weights,
+            "style": {
+                "histtype": "step",
+                "color": BKG_COLOR,
+                "is_reference": True,
+            },
+        },
+    ]
+    plot_variable_samples(
+        variable,
+        samples,
+        dir,
+        bins=bins,
+        show=show,
+        log_scale=log_scale,
+        lumitext=lumitext,
+        ratio_label="Signal/Background",
+        formats=formats,
+        comet_logger=comet_logger,
+    )
+
+
+def class_names_from_info(class_info, class_indices):
+    """Name of each class index, taken from the class metadata of `load_data`
+    (list of dicts with `class_idx` and `name`) when available."""
+    names = {}
+    for c in class_info or []:
+        names[int(c["class_idx"])] = str(c["name"])
+    return {int(idx): names.get(int(idx), f"Class {int(idx)}") for idx in class_indices}
+
+
 def plot_input_variables(
     features,
     labels,
@@ -273,16 +332,20 @@ def plot_input_variables(
     formats=("png", "pdf"),
     comet_logger=None,
     lumitext=LUMITEXT,
+    class_info=None,
 ):
     """Plot the normalized distributions of all the input variables.
 
     Args:
         features: array of shape (n_events, n_variables) with the input variables.
-        labels: array of shape (n_events,), 1 for signal and 0 for background.
+        labels: array of shape (n_events,), 1 for signal and 0 for background
+            (class index for a multi-class training).
         weights: array of shape (n_events,) with the event weights.
         input_variables: list with the name of the input variables.
         output_dir: main output directory of the training.
         subdir: subdirectory of `output_dir` where the plots are saved.
+        class_info: class metadata returned by `load_data`. With more than two
+            classes, one distribution per class is drawn.
 
     Returns:
         The directory where the plots have been saved.
@@ -300,6 +363,29 @@ def plot_input_variables(
 
     plot_dir = os.path.join(output_dir, subdir) if subdir else output_dir
     os.makedirs(plot_dir, exist_ok=True)
+
+    class_indices = np.unique(labels).astype(int)
+    if class_info is not None:
+        class_indices = np.union1d(
+            class_indices, [int(c["class_idx"]) for c in class_info]
+        )
+    if len(class_indices) > 2:
+        plot_input_variables_multiclass(
+            features,
+            labels,
+            weights,
+            variable_names,
+            plot_dir,
+            class_names_from_info(class_info, class_indices),
+            bins=bins,
+            show=show,
+            log_scale=log_scale,
+            formats=formats,
+            comet_logger=comet_logger,
+            lumitext=lumitext,
+        )
+        logger.info("Input variable distributions saved in %s", plot_dir)
+        return plot_dir
 
     sig_mask = labels == 1
     bkg_mask = ~sig_mask
@@ -336,6 +422,67 @@ def plot_input_variables(
     return plot_dir
 
 
+def plot_input_variables_multiclass(
+    features,
+    labels,
+    weights,
+    variable_names,
+    plot_dir,
+    class_names,
+    bins=DEFAULT_BINS,
+    show=False,
+    log_scale=False,
+    formats=("png", "pdf"),
+    comet_logger=None,
+    lumitext=LUMITEXT,
+):
+    """Plot the normalized distribution of each input variable for every class.
+    The first class (lowest index) is the reference of the ratio panel."""
+    class_indices = sorted(class_names)
+    masks = {idx: labels == idx for idx in class_indices}
+
+    logger.info(
+        "Plotting %d input variables for the classes %s",
+        len(variable_names),
+        ", ".join(
+            f"{class_names[idx]} ({int(np.sum(masks[idx]))} events)"
+            for idx in class_indices
+        ),
+    )
+
+    ref_idx = class_indices[0]
+    for i, variable in enumerate(variable_names):
+        logger.debug("Plotting input variable %s", variable)
+        samples = []
+        for j, idx in enumerate(class_indices):
+            if not np.any(masks[idx]):
+                continue
+            color = CMS_COLORS[j % len(CMS_COLORS)]
+            style = {"histtype": "step", "color": color, "linewidth": 2}
+            if idx == ref_idx:
+                style["is_reference"] = True
+            samples.append(
+                {
+                    "label": class_names[idx],
+                    "values": features[masks[idx], i],
+                    "weights": weights[masks[idx]],
+                    "style": style,
+                }
+            )
+        plot_variable_samples(
+            variable,
+            samples,
+            plot_dir,
+            bins=bins,
+            show=show,
+            log_scale=log_scale,
+            lumitext=lumitext,
+            ratio_label=f"Class/{class_names[ref_idx]}",
+            formats=formats,
+            comet_logger=comet_logger,
+        )
+
+
 def plot_input_variables_from_loaders(
     loaders,
     input_variables,
@@ -347,6 +494,7 @@ def plot_input_variables_from_loaders(
     formats=("png", "pdf"),
     comet_logger=None,
     lumitext=LUMITEXT,
+    class_info=None,
 ):
     """Plot the input variables starting from a list of torch dataloaders."""
     features, labels, weights = arrays_from_loaders(loaders)
@@ -364,6 +512,7 @@ def plot_input_variables_from_loaders(
         formats=formats,
         comet_logger=comet_logger,
         lumitext=lumitext,
+        class_info=class_info,
     )
 
 
@@ -439,7 +588,9 @@ def main():
             cfg.run2, dnn_input_variables_file.dnn_input_variables
         )
 
-    training_loader, val_loader, test_loader, _, _ = load_data(cfg, cfg.seed)
+    training_loader, val_loader, test_loader, *_, class_info = load_data(
+        cfg, cfg.seed
+    )
 
     plot_input_variables_from_loaders(
         [training_loader, val_loader, test_loader],
@@ -450,6 +601,7 @@ def main():
         show=args.show,
         log_scale=args.log_scale,
         lumitext=get_lumitext(cfg),
+        class_info=class_info,
     )
 
 
