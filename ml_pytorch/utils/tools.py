@@ -417,7 +417,9 @@ def eval_model(model, loader, loss_fn, type_eval, device, best_epoch):
 
     all_labels = all_labels.view(-1, 1)
     all_weights = all_weights.view(-1, 1)
-    all_kl_values = all_kl_values.view(-1, 1)
+    # the kl values are stored together with the dataset index as [kl, dataset_idx]
+    all_dataset_idx = all_kl_values[:, 1].to(torch.int64)
+    all_kl_values = all_kl_values[:, 0].view(-1, 1)
 
     score_lbl_tensor = torch.cat(
         (all_scores, all_labels, all_weights, all_kl_values), 1
@@ -428,7 +430,7 @@ def eval_model(model, loader, loss_fn, type_eval, device, best_epoch):
     score_lbl_array = score_lbl_tensor.numpy()
     # score_lbl_array = score_lbl_tensor.cpu().detach().numpy()
 
-    return score_lbl_array, avg_loss, avg_accuracy
+    return score_lbl_array, all_dataset_idx.numpy(), avg_loss, avg_accuracy
 
 
 def export_onnx(model, model_name, batch_size, input_size, device, onnx_model_name):

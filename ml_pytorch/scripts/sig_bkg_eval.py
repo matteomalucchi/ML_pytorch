@@ -4,6 +4,7 @@ import matplotlib
 matplotlib.use("Agg")
 import argparse
 import itertools
+import re
 import numpy as np
 import mplhep as hep
 from scipy import stats
@@ -747,6 +748,7 @@ def plot_roc_curve(
     class_info=None,
     kl_bkg_str=None,
     lumitext=LUMITEXT,
+    dataset_idx_test=None,
 ):
     # Dispatch to multi-class ROCs when more than one score column is stored.
     n_score, label_col, weight_col, kl_col = get_layout(score_lbl_tensor_test)
@@ -760,6 +762,17 @@ def plot_roc_curve(
             kl_bkg_str=kl_bkg_str,
             lumitext=lumitext,
         )
+        if dataset_idx_test is not None:
+            plot_per_dataset_roc_curves(
+                score_lbl_tensor_test,
+                dataset_idx_test,
+                f"{dir}/per_dataset",
+                show,
+                class_info,
+                comet_logger=comet_logger,
+                kl_bkg_str=kl_bkg_str,
+                lumitext=lumitext,
+            )
         return
 
     sig_score_test, bkg_score_test = handle_arrays(score_lbl_tensor_test, 0)
@@ -906,6 +919,7 @@ def plot_kl_distributions(
     class_info=None,
     comet_logger=None,
     lumitext=LUMITEXT,
+    dataset_idx_test=None,
 ):
     if rescale is None:
         rescale = []
@@ -927,6 +941,7 @@ def plot_kl_distributions(
     for kl_bkg in kls_background_to_plot:
         kl_bkg_str = "all" if kl_bkg == "all" else f"{kl_bkg:.2f}"
 
+        test_dataset_idx = dataset_idx_test
         if kl_bkg == "all":
             train_data = score_lbl_train
             test_data = score_lbl_test
@@ -943,6 +958,8 @@ def plot_kl_distributions(
                     score_lbl_test[:, 3] == float(kl_bkg)
                 )
                 test_data = score_lbl_test[sig_test | bkg_test_kl]
+                if dataset_idx_test is not None:
+                    test_dataset_idx = dataset_idx_test[sig_test | bkg_test_kl]
             except IndexError:
                 train_data = score_lbl_train
                 test_data = score_lbl_test
@@ -976,6 +993,7 @@ def plot_kl_distributions(
                 kl_bkg_str=kl_bkg_str,
                 lumitext=lumitext,
                 class_info=class_info,
+                dataset_idx_test=test_dataset_idx,
             )
 
         if do_calibration:
@@ -1118,6 +1136,198 @@ def plot_multiclass_distributions(
                 )
 
 
+def _save_roc_plot(
+    series_dict,
+    dir,
+    output_base,
+    image_name,
+    show,
+    comet_logger=None,
+    lumitext=LUMITEXT,
+    annotation=None,
+):
+    """Draw the ROC curves of ``series_dict`` overlaid on a single figure."""
+    if not series_dict:
+        return
+    plotter = (
+        HEPPlotter("CMS")
+        .set_plot_config(lumitext=lumitext)
+        .set_output(f"{dir}/{output_base}")
+        .set_labels(xlabel="True positive rate", ylabel="False positive rate")
+        .set_data(series_dict, plot_type="graph")
+        .set_options(
+            y_log=True,
+            legend_loc="upper left",
+            legend_font_size="small",
+            split_legend=False,
+            grid=False,
+            set_ylim=False,
+        )
+    )
+    if annotation:
+        plotter.add_annotation(
+            x=0.98,
+            y=0.05,
+            s=annotation,
+            fontsize=16,
+            ha="right",
+            va="bottom",
+        )
+    if show:
+        plotter.show()
+    plotter.run()
+    if comet_logger:
+        comet_logger.log_image(f"{dir}/{output_base}.png", name=image_name)
+
+
+def _short_dataset_name(dataset):
+    """Compact name of a dataset, e.g.
+    ``VBFHHto4B_Par-CV-1-C2V-0-C3-1_TuneCP5_..._2024`` -> ``CV-1-C2V-0-C3-1``."""
+    name = dataset.split("_TuneCP5")[0]
+    if "_Par-" in name:
+        name = name.split("_Par-")[1]
+    return name
+
+
+def plot_per_dataset_roc_curves(
+    score_lbl_tensor_test,
+    dataset_idx_test,
+    dir,
+    show,
+    class_info,
+    comet_logger=None,
+    kl_bkg_str=None,
+    lumitext=LUMITEXT,
+):
+    """Plot the multi-class ROC curves separately for each dataset of the
+    classes made of several coupling points (e.g. the single VBF or ggF HH
+    samples), using the score of the node of their class.
+
+    The positive events are those of a single dataset of class ``c``, while
+    the negative ones are either all the events of the other classes (vs
+    rest) or those of a single other class ``b`` (vs ``b``). The events of
+    the other datasets of class ``c`` are not used.
+
+    Produces in ``dir``:
+
+    * ``roc_curve_<class>_<dataset>``: the ROCs of a dataset vs rest and vs
+      each other class.
+    * ``roc_curve_<class>_datasets_vs_<ref>``: the ROCs of all the datasets
+      of a class vs the same reference (rest or a single class).
+    """
+    if class_info is None or not all(
+        isinstance(c, dict) and "datasets" in c for c in class_info
+    ):
+        print("No dataset names in the class info: skipping the per-dataset ROCs.")
+        return
+
+    n_score, label_col, weight_col, kl_col = get_layout(score_lbl_tensor_test)
+    labels = score_lbl_tensor_test[:, label_col].astype(int)
+    abs_weights = abs(score_lbl_tensor_test[:, weight_col])
+    kl_values = score_lbl_tensor_test[:, kl_col]
+    dataset_idx_test = np.asarray(dataset_idx_test).astype(int)
+
+    os.makedirs(dir, exist_ok=True)
+    annotation = rf"bkg $\kappa_\lambda$ = {kl_bkg_str}" if kl_bkg_str else None
+    roc_info_dict = {}
+
+    def _roc(pos_mask, neg_mask, score_col):
+        mask = pos_mask | neg_mask
+        sub_labels = pos_mask[mask].astype(int)
+        if sub_labels.sum() == 0 or (1 - sub_labels).sum() == 0:
+            return None
+        scores = score_lbl_tensor_test[mask, score_col]
+        try:
+            fpr, tpr, _ = roc_curve(
+                sub_labels, scores, sample_weight=abs_weights[mask]
+            )
+            roc_auc = roc_auc_score(
+                sub_labels, scores, sample_weight=abs_weights[mask]
+            )
+        except ValueError as e:
+            print(f"Skipping ROC: {e}")
+            return None
+        return fpr, tpr, roc_auc
+
+    class_names = {int(c["class_idx"]): c["name"] for c in class_info}
+
+    for c in class_info:
+        c_idx = int(c["class_idx"])
+        class_mask = labels == c_idx
+        # split only the classes made of several coupling points (the kl
+        # column is 9999 for the datasets without a coupling, e.g. data or ttbar)
+        if (
+            len(c["datasets"]) < 2
+            or class_mask.sum() == 0
+            or np.all(kl_values[class_mask] == 9999.0)
+        ):
+            continue
+
+        # the references are the other classes inclusively, or one at a time
+        references = {"rest": ~class_mask}
+        for b_idx, b_name in class_names.items():
+            if b_idx != c_idx:
+                references[b_name] = labels == b_idx
+
+        overlay_series = {ref: {} for ref in references}
+        for d_idx, dataset in enumerate(c["datasets"]):
+            pos_mask = class_mask & (dataset_idx_test == d_idx)
+            if pos_mask.sum() == 0:
+                print(f"No test events for dataset {dataset}: skipping its ROCs.")
+                continue
+
+            short_name = _short_dataset_name(dataset)
+            tag = re.sub(r"[^A-Za-z0-9-]+", "_", short_name)
+            print(
+                f"Per-dataset ROC: class {c['name']}, dataset {short_name}, "
+                f"test events = {pos_mask.sum()}"
+            )
+
+            series = {}
+            for ref, neg_mask in references.items():
+                result = _roc(pos_mask, neg_mask, c_idx)
+                if result is None:
+                    continue
+                fpr, tpr, roc_auc = result
+                series[f"{short_name} vs {ref} (AUC = {roc_auc:.3f})"] = {
+                    "data": {"x": [tpr, None], "y": [fpr, None]},
+                    "style": {"linestyle": "-", "markersize": 0},
+                }
+                overlay_series[ref][f"{short_name} (AUC = {roc_auc:.3f})"] = {
+                    "data": {"x": [tpr, None], "y": [fpr, None]},
+                    "style": {"linestyle": "-", "markersize": 0},
+                }
+                roc_info_dict[f"tpr_{c['name']}_{tag}_vs_{ref}"] = tpr
+                roc_info_dict[f"fpr_{c['name']}_{tag}_vs_{ref}"] = fpr
+                roc_info_dict[f"auc_{c['name']}_{tag}_vs_{ref}"] = roc_auc
+
+            _save_roc_plot(
+                series,
+                dir,
+                f"roc_curve_{c['name']}_{tag}",
+                f"roc_curve_{c['name']}_{tag}",
+                show,
+                comet_logger=comet_logger,
+                lumitext=lumitext,
+                annotation=annotation,
+            )
+
+        for ref, series in overlay_series.items():
+            _save_roc_plot(
+                series,
+                dir,
+                f"roc_curve_{c['name']}_datasets_vs_{ref}",
+                f"roc_curve_{c['name']}_datasets_vs_{ref}",
+                show,
+                comet_logger=comet_logger,
+                lumitext=lumitext,
+                annotation=f"{c['name']} vs {ref}"
+                + (f"\n{annotation}" if annotation else ""),
+            )
+
+    np.savez(f"{dir}/tpr_fpr_per_dataset.npz", **roc_info_dict)
+
+
 def plot_multiclass_roc_curves(
     score_lbl_tensor_test,
     dir,
@@ -1145,37 +1355,16 @@ def plot_multiclass_roc_curves(
     roc_info_dict = {}
 
     def _make_roc_plot(series_dict, output_base, image_name):
-        if not series_dict:
-            return
-        plotter = (
-            HEPPlotter("CMS")
-            .set_plot_config(lumitext=lumitext)
-            .set_output(f"{dir}/{output_base}")
-            .set_labels(xlabel="True positive rate", ylabel="False positive rate")
-            .set_data(series_dict, plot_type="graph")
-            .set_options(
-                y_log=True,
-                legend_loc="upper left",
-                legend_font_size="small",
-                split_legend=False,
-                grid=False,
-                set_ylim=False,
-            )
+        _save_roc_plot(
+            series_dict,
+            dir,
+            output_base,
+            image_name,
+            show,
+            comet_logger=comet_logger,
+            lumitext=lumitext,
+            annotation=rf"bkg $\kappa_\lambda$ = {kl_bkg_str}" if kl_bkg_str else None,
         )
-        if kl_bkg_str:
-            plotter.add_annotation(
-                x=0.98,
-                y=0.05,
-                s=rf"bkg $\kappa_\lambda$ = {kl_bkg_str}",
-                fontsize=16,
-                ha="right",
-                va="bottom",
-            )
-        if show:
-            plotter.show()
-        plotter.run()
-        if comet_logger:
-            comet_logger.log_image(f"{dir}/{output_base}.png", name=image_name)
 
     # --- One-vs-rest ROCs (overlaid on a single figure) ---
     ovr_series = {}
@@ -1297,6 +1486,13 @@ def main():
         class_info = list(np.load(input_file, allow_pickle=True)["class_info"])
     except KeyError:
         class_info = None
+
+    # per-event dataset index, used for the per-dataset ROCs
+    try:
+        dataset_idx_test = np.load(input_file, allow_pickle=True)["dataset_idx_test"]
+    except KeyError:
+        dataset_idx_test = None
+
     # resolve background kl values to plot
     try:
         _, label_col, _, kl_col = get_layout(score_lbl_tensor_train)
@@ -1333,6 +1529,7 @@ def main():
         # get the years from the config saved in the training directory
         lumitext=get_lumitext_from_dir(args.input_dir),
         class_info=class_info,
+        dataset_idx_test=dataset_idx_test,
     )
 
 
