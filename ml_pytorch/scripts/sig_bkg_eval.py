@@ -24,6 +24,16 @@ CMS_COLORS = [cycle["color"] for cycle in hep.style.CMS["axes.prop_cycle"]]
 BKG_COLOR = CMS_COLORS[0]
 SIG_COLOR = CMS_COLORS[1]
 
+# Multi-class only: (signal, [backgrounds]) class names for which the
+# p(signal) / (p(signal) + sum_b p(b)) discriminant is plotted. The names are
+# matched with the class names of the config, ignoring the case and any
+# non-alphanumeric character. Classes not present in the training are skipped.
+SIG_OVER_BKG = [
+    ("ggF_SM", ["QCD", "TTbar"]),
+    ("VBF_SM", ["QCD", "TTbar"]),
+    ("VBF_k2V0", ["QCD", "TTbar"]),
+]
+
 
 def get_layout(score_lbl_tensor):
     """Return ``(num_score_cols, label_col, weight_col, kl_col)``.
@@ -920,6 +930,7 @@ def plot_kl_distributions(
     comet_logger=None,
     lumitext=LUMITEXT,
     dataset_idx_test=None,
+    sig_over_bkg=SIG_OVER_BKG,
 ):
     if rescale is None:
         rescale = []
@@ -981,6 +992,18 @@ def plot_kl_distributions(
                 kl_bkg_str=kl_bkg_str,
                 lumitext=lumitext,
             )
+            if n_score > 1 and sig_over_bkg:
+                plot_multiclass_sig_over_bkg(
+                    train_data,
+                    test_data,
+                    sig_bkg_out_dir,
+                    show,
+                    sig_over_bkg,
+                    class_info=class_info,
+                    comet_logger=comet_logger,
+                    kl_bkg_str=kl_bkg_str,
+                    lumitext=lumitext,
+                )
 
         if do_roc:
             roc_out_dir = f"{out_dir}/roc_bkgkl_{kl_bkg_str}"
@@ -1328,6 +1351,225 @@ def plot_per_dataset_roc_curves(
     np.savez(f"{dir}/tpr_fpr_per_dataset.npz", **roc_info_dict)
 
 
+def _normalize_class_name(name):
+    """Lowercase and keep only alphanumeric characters, so that e.g.
+    ``VBF_k2V0``, ``vbf-k2v0`` and ``VBF k2V=0`` all match each other."""
+    return "".join(ch for ch in str(name).lower() if ch.isalnum())
+
+
+def _find_class_idx(class_info, name):
+    """Return the ``class_idx`` of the class called ``name`` (matched with
+    :func:`_normalize_class_name`), or ``None`` if there is no such class."""
+    for c in class_info or []:
+        c_name = c["name"] if isinstance(c, dict) else c.name
+        if _normalize_class_name(c_name) == _normalize_class_name(name):
+            return int(c["class_idx"] if isinstance(c, dict) else c.class_idx)
+    return None
+
+
+def plot_multiclass_sig_over_bkg(
+    score_lbl_tensor_train,
+    score_lbl_tensor_test,
+    dir,
+    show,
+    sig_over_bkg,
+    class_info=None,
+    comet_logger=None,
+    kl_bkg_str=None,
+    lumitext=LUMITEXT,
+):
+    """For every ``(signal, [backgrounds])`` entry of ``sig_over_bkg`` build the
+    discriminant
+
+        D = p(signal) / (p(signal) + sum_b p(b))
+
+    from the softmax outputs, i.e. a monotonic transformation of
+    ``p(signal) / sum_b p(b)`` bounded in [0, 1]. Only the events whose true
+    class is the signal or one of the backgrounds are used. Produces
+
+    * ``sig_over_bkg_<signal>{,_log}``: the normalized distribution of D for
+      the signal and for each background, training vs test;
+    * ``roc_sig_over_bkg_<signal>``: the ROC of the signal vs the sum of the
+      backgrounds, using D as the score.
+    """
+    n_score, label_col, weight_col, _ = get_layout(score_lbl_tensor_test)
+
+    def normalized_hist(scores, weights):
+        h = Hist.new.Reg(30, 0, 1, name="score").Weight()
+        total = np.sum(weights)
+        h.fill(scores, weight=weights / total if total else weights)
+        return h
+
+    def discriminant(score_lbl_tensor, sig_idx, bkg_idxs):
+        sig = score_lbl_tensor[:, sig_idx]
+        bkg = score_lbl_tensor[:, bkg_idxs].sum(axis=1)
+        den = sig + bkg
+        return np.divide(sig, den, out=np.zeros_like(sig), where=den > 0)
+
+    available = [
+        c["name"] if isinstance(c, dict) else c.name for c in class_info or []
+    ]
+
+    for sig_name, bkg_names in sig_over_bkg:
+        sig_idx = _find_class_idx(class_info, sig_name)
+        bkg_idxs = [_find_class_idx(class_info, b) for b in bkg_names]
+        if sig_idx is None or None in bkg_idxs:
+            print(
+                f"Skipping {sig_name} / ({' + '.join(bkg_names)}) plot: "
+                f"class not found among {available}"
+            )
+            continue
+        if max([sig_idx] + bkg_idxs) >= n_score:
+            print(
+                f"Skipping {sig_name} / ({' + '.join(bkg_names)}) plot: "
+                f"class index out of range of the {n_score} output nodes"
+            )
+            continue
+
+        sig_label = _class_label(class_info, sig_idx)
+        bkg_label = " + ".join(_class_label(class_info, b) for b in bkg_idxs)
+        tag = _normalize_class_name(sig_name)
+        xlabel = f"{sig_name} / ({' + '.join(bkg_names)}) score"
+
+        d_train = discriminant(score_lbl_tensor_train, sig_idx, bkg_idxs)
+        d_test = discriminant(score_lbl_tensor_test, sig_idx, bkg_idxs)
+        train_labels = score_lbl_tensor_train[:, label_col].astype(int)
+        test_labels = score_lbl_tensor_test[:, label_col].astype(int)
+        train_weights = score_lbl_tensor_train[:, weight_col]
+        test_weights = score_lbl_tensor_test[:, weight_col]
+
+        # --- distributions of the discriminant, training vs test ---
+        series_dict = {}
+        annotations = []
+        for j, true_c in enumerate([sig_idx] + bkg_idxs):
+            color = CMS_COLORS[j % len(CMS_COLORS)]
+            tr_mask = train_labels == true_c
+            te_mask = test_labels == true_c
+            if tr_mask.sum() == 0 or te_mask.sum() == 0:
+                continue
+
+            label = _class_label(class_info, true_c)
+            hist_train = normalized_hist(d_train[tr_mask], train_weights[tr_mask])
+            hist_test = normalized_hist(d_test[te_mask], test_weights[te_mask])
+            series_dict[f"{label} (training)"] = {
+                "data": hist_train,
+                "style": {"color": color, "histtype": "step"},
+            }
+            series_dict[f"{label} (test)"] = {
+                "data": hist_test,
+                "style": {"color": color, "histtype": "errorbar"},
+            }
+
+            _, p_value = stats.ks_2samp(d_train[tr_mask], d_test[te_mask])
+            chi2, pvalue_chi2 = chi_square(hist_test, hist_train)
+            annotations.append(
+                {
+                    "s": f"KS p-value = {p_value:.2f}, "
+                    + r"$\chi^2$/ndof= {:.1f},".format(chi2)
+                    + f"  p-value= {pvalue_chi2:.2f}",
+                    "color": color,
+                }
+            )
+
+        if not series_dict:
+            print(f"Skipping {xlabel} plot: no events of these classes")
+            continue
+
+        if kl_bkg_str:
+            annotations.append({"s": rf"bkg $\kappa_\lambda$ = {kl_bkg_str}"})
+
+        base = f"{dir}/sig_over_bkg_{tag}"
+        for log in [False, True]:
+            plotter = (
+                HEPPlotter("CMS")
+                .set_plot_config(
+                    figsize=[13, 13], lumitext=lumitext, cmstext="Private"
+                )
+                .set_output(f"{base}{'_log' if log else ''}")
+                .set_labels(xlabel=xlabel, ylabel="Normalized counts")
+                .set_data(series_dict, plot_type="1d")
+                .set_options(
+                    legend_loc="upper left",
+                    legend_font_size=18,
+                    split_legend=False,
+                    grid=True,
+                    y_log=log,
+                    ylim_bottom_value=1e-4 if log else 0.0,
+                    # leave room for the legend and the annotations
+                    ylim_top_factor=3 if log else 2.2,
+                )
+            )
+            for i, annotation in enumerate(annotations):
+                plotter.add_annotation(
+                    x=0.98,
+                    y=0.95 - 0.045 * i,
+                    fontsize=18,
+                    ha="right",
+                    va="center",
+                    **annotation,
+                )
+            if show:
+                plotter.show()
+            plotter.run()
+
+            if comet_logger:
+                comet_logger.log_image(
+                    f"{base}{'_log' if log else ''}.png",
+                    name=f"sig_over_bkg_{tag}{'_log' if log else ''}",
+                )
+
+        # --- ROC of the signal vs the sum of the backgrounds ---
+        mask = np.isin(test_labels, [sig_idx] + bkg_idxs)
+        roc_labels = (test_labels[mask] == sig_idx).astype(int)
+        roc_weights = abs(test_weights[mask])
+        if roc_labels.sum() == 0 or (1 - roc_labels).sum() == 0:
+            continue
+        fpr, tpr, _ = roc_curve(roc_labels, d_test[mask], sample_weight=roc_weights)
+        roc_auc = roc_auc_score(roc_labels, d_test[mask], sample_weight=roc_weights)
+        print(f"{sig_label} vs {bkg_label}: AUC = {roc_auc:.3f}")
+
+        plotter = (
+            HEPPlotter("CMS")
+            .set_plot_config(lumitext=lumitext)
+            .set_output(f"{dir}/roc_sig_over_bkg_{tag}")
+            .set_labels(xlabel="True positive rate", ylabel="False positive rate")
+            .set_data(
+                {
+                    f"{sig_label} vs {bkg_label} (AUC = {roc_auc:.3f})": {
+                        "data": {"x": [tpr, None], "y": [fpr, None]},
+                        "style": {"linestyle": "-", "markersize": 0},
+                    }
+                },
+                plot_type="graph",
+            )
+            .set_options(
+                y_log=True,
+                legend_loc="upper left",
+                legend_font_size="small",
+                split_legend=False,
+                grid=False,
+                set_ylim=False,
+            )
+        )
+        if kl_bkg_str:
+            plotter.add_annotation(
+                x=0.98,
+                y=0.05,
+                s=rf"bkg $\kappa_\lambda$ = {kl_bkg_str}",
+                fontsize=16,
+                ha="right",
+                va="bottom",
+            )
+        if show:
+            plotter.show()
+        plotter.run()
+
+        if comet_logger:
+            comet_logger.log_image(
+                f"{dir}/roc_sig_over_bkg_{tag}.png", name=f"roc_sig_over_bkg_{tag}"
+            )
+
+
 def plot_multiclass_roc_curves(
     score_lbl_tensor_test,
     dir,
@@ -1461,6 +1703,14 @@ def main():
         default=["all", "1"],
         help="Background kl values to plot. Use 'all' for the inclusive plot, numbers for specific kl values, or 'full' to plot every available kl (default: all 1).",
     )
+    parser.add_argument(
+        "--sig-over-bkg",
+        nargs="+",
+        default=[f"{sig}={'+'.join(bkgs)}" for sig, bkgs in SIG_OVER_BKG],
+        help="Multi-class only: signal / (sum of backgrounds) discriminants to plot, "
+        "given as SIG=BKG1+BKG2 with the class names of the config "
+        "(default: %(default)s).",
+    )
 
     parser.print_help()
     args = parser.parse_args()
@@ -1530,6 +1780,10 @@ def main():
         lumitext=get_lumitext_from_dir(args.input_dir),
         class_info=class_info,
         dataset_idx_test=dataset_idx_test,
+        sig_over_bkg=[
+            (sig, bkgs.split("+"))
+            for sig, bkgs in (entry.split("=", 1) for entry in args.sig_over_bkg)
+        ],
     )
 
 
