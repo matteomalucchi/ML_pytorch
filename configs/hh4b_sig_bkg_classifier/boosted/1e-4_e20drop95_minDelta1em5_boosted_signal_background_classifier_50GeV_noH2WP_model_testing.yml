@@ -68,7 +68,7 @@ classes:
 
 
 run2: False
-oversample_split: True
+# oversample_split: True
 
 normalize_weights_per_dataset: True
 
