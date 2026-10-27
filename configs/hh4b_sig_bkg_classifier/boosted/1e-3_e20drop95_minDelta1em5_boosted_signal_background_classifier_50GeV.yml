@@ -3,7 +3,7 @@ input_variables: bkg_morphing_dnn_boosted_bdt_inputs_50GeV_wps
 classes:
   QCD:
     sample: [DATA_JetMET0_HH4bBoosted, DATA_JetMET1_HH4bBoosted]
-    region: [boosted_control_region_B]
+    region: [boosted_control_region_B_postW]
     dataset: [DATA_JetMET0_HH4bBoosted_2024_EraC, DATA_JetMET0_HH4bBoosted_2024_EraD, DATA_JetMET0_HH4bBoosted_2024_EraE, DATA_JetMET0_HH4bBoosted_2024_EraF, DATA_JetMET0_HH4bBoosted_2024_EraG, DATA_JetMET0_HH4bBoosted_2024_EraH, DATA_JetMET0_HH4bBoosted_2024_EraI, DATA_JetMET1_HH4bBoosted_2024_EraC, DATA_JetMET1_HH4bBoosted_2024_EraD, DATA_JetMET1_HH4bBoosted_2024_EraE, DATA_JetMET1_HH4bBoosted_2024_EraF, DATA_JetMET1_HH4bBoosted_2024_EraG, DATA_JetMET1_HH4bBoosted_2024_EraH, DATA_JetMET1_HH4bBoosted_2024_EraI,]
     lbl: 0
   TTbar:
