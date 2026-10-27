@@ -10,9 +10,12 @@ class MaskedBatchNorm1d(nn.Module):
     Entries equal to ``pad_value`` (e.g. the -999 PocketCoffea uses for missing
     jets) are excluded from the batch and running statistics, so the padding
     does not dominate the mean/variance. After the normalisation the padded
-    entries are replaced by ``pad_fill_value`` (in normalised units, 0 = mean of
-    the real values) or, with ``pad_fill_value="learn"``, by a learnable value
-    per feature. With ``pad_indicators`` one 0/1 flag per feature (1 = real
+    entries are replaced by ``pad_fill_value`` or, with
+    ``pad_fill_value="learn"``, by a learnable value per feature. The fill value
+    is set directly in the output space: the real values are standardised and
+    then scaled and shifted by the learnable weight and bias, so 0 is where the
+    mean of the real values is mapped only at initialisation (weight=1, bias=0);
+    a fixed fill value does not follow the learned weight and bias. With ``pad_indicators`` one 0/1 flag per feature (1 = real
     value) is appended, so the output has ``2 * num_features`` columns.
 
     Everything lives inside the model, so the exported ONNX takes the raw,

@@ -7,6 +7,7 @@ import logging
 import os
 from coffea.util import load
 import awkward as ak
+import pyarrow as pa
 import pyarrow.parquet as pq
 import pyarrow.dataset as ds
 import json
@@ -199,6 +200,55 @@ def normalize_weights_per_dataset(weights_list, dataset_names):
     return normalized_weights_list
 
 
+def list_parquet_files(path):
+    """Sorted list of the files in a parquet directory (searched recursively).
+
+    As in pyarrow.dataset, the files and directories starting with "." or "_"
+    (e.g. _SUCCESS) are ignored.
+    """
+    if os.path.isfile(path):
+        return [path]
+    files = []
+    for root, dirs, filenames in os.walk(path):
+        dirs[:] = sorted(d for d in dirs if not d.startswith((".", "_")))
+        for name in sorted(filenames):
+            if not name.startswith((".", "_")):
+                files.append(os.path.join(root, name))
+    if not files:
+        raise FileNotFoundError(f"No parquet files found in {path}")
+    return files
+
+
+def count_objects(array, schema, n_variable, pad_value):
+    """Create the number of objects per event of a collection (<collection>_N)
+    by counting the elements of one of its jagged fields (<collection>_<field>).
+
+    The padded objects (added to have the same number per event), which are
+    either None or equal to pad_value, are not counted, so only the real
+    objects are.
+    """
+    collection = n_variable[: -len("_N")]
+    fields = [
+        f.name
+        for f in schema
+        if f.name.startswith(f"{collection}_")
+        and f.name != n_variable
+        and (pa.types.is_list(f.type) or pa.types.is_large_list(f.type))
+    ]
+    if not fields:
+        raise ValueError(
+            f"Input variable {n_variable} is not in the parquet files and no "
+            f"jagged field of the collection {collection} is available to create it"
+        )
+    logger.warning(
+        f"Input variable {n_variable} not found in the parquet files: creating it "
+        f"by counting the elements of {fields[0]} that are not None or {pad_value}"
+    )
+    # the comparison is None for the None elements, which are then not counted
+    is_real = ak.fill_none(array[fields[0]] != pad_value, False)
+    return ak.fill_none(ak.sum(is_real, axis=1), 0)
+
+
 def get_variables(
     files,
     parquet_files,
@@ -268,7 +318,9 @@ def get_variables(
             matching_coffea = matching_coffea[0]
 
             # load the flat varibles
-            dataset = ds.dataset(file_name, format="parquet")
+            # the files are passed explicitly in a fixed order, so that the
+            # events are always loaded in the same order
+            dataset = ds.dataset(list_parquet_files(file_name), format="parquet")
             logger.debug(f"input_variables {input_variables}")
 
             # load the corresponding .coffea file to get the sum of genweights
@@ -276,7 +328,16 @@ def get_variables(
             file = load(matching_coffea)
 
             vars = [x for x in input_variables if ":" not in x]
-            table = dataset.to_table(columns=vars)
+            # number of objects of a collection (<collection>_N) requested as
+            # input but not saved in the parquet files: created below
+            missing_counts = [
+                x
+                for x in vars
+                if x.endswith("_N") and x not in dataset.schema.names
+            ]
+            table = dataset.to_table(
+                columns=[x for x in vars if x not in missing_counts]
+            )
             variables_array = ak.from_arrow(table)
 
             # load the jagged variables and add them flattened to the variables array
@@ -295,16 +356,24 @@ def get_variables(
             jagged_variables_array = ak.from_arrow(table)
             logger.debug(f"jagged_variables {jagged_variables}")
 
+            for k in missing_counts:
+                variables_array[k] = count_objects(
+                    jagged_variables_array, dataset.schema, k, pad_value
+                )
+
             # add the wanted number of flattened features from the jagged variables to the feature array
             # events with fewer objects than requested are padded with pad_value
+            # (slicing instead of ak.pad_none, which does not support the 32-bit
+            # list offsets of arrow in recent awkward versions)
             for k in jagged_variables:
-                padded = ak.fill_none(
-                    ak.pad_none(jagged_variables_array[k], max_pos + 1, axis=1),
-                    pad_value,
-                    axis=1,
-                )
                 for pos in range(max_pos + 1):
-                    variables_array[k + ":" + str(pos)] = padded[:, pos]
+                    # the range slice (not [:, pos]) gives an empty list for the
+                    # events with fewer objects, so firsts returns None, which
+                    # is then filled with pad_value (as for None-padded objects)
+                    variables_array[k + ":" + str(pos)] = ak.fill_none(
+                        ak.firsts(jagged_variables_array[k][:, pos : pos + 1]),
+                        pad_value,
+                    )
 
             # apply any preprocessing function to the variables
             for k in input_variables:
@@ -330,11 +399,14 @@ def get_variables(
             variables_array["dataset_idx"] = np.full(len(variables_array), dataset_idx)
 
             # concatenate in a single numpy matrix of shape (num_variables, num_events)
+            # the None values of the inputs are padded with pad_value
             variables_array = np.array(
                 [
-                    ak.to_numpy(variables_array[f])
+
+                    ak.to_numpy(ak.fill_none(variables_array[f], pad_value))
                     for f in input_variables + ["weights", "kl", "dataset_idx"]
                 ]
+                + [ak.to_numpy(variables_array[f]) for f in ["weights", "kl"]]
             )
 
             logger.info(f"variables_array complete shape {variables_array.shape}")
@@ -590,7 +662,8 @@ def get_variables(
             if ":" in k:
                 variable_name, pos = k.split(":")
                 pos = int(pos)
-                number_per_event = ak.Array(vars_array[f"{collection}_N"])
+                number_per_event = np.asarray(vars_array[f"{collection}_N"], dtype=np.int64)
+                # events with fewer objects than requested are padded with pad_value
                 ragged = ak.fill_none(ak.pad_none(ak.unflatten(vars_array[variable_name], number_per_event), pos + 1, axis=1), pad_value, axis=1)
                 sliced = ragged[:, pos]
                 variables_dict[k] = ak.to_numpy(sliced).reshape(-1,1)
@@ -626,22 +699,28 @@ def get_variables(
                 #     ),
                 # )
             elif f"{collection}_N" in vars_array.keys() and k.split("_")[1] != "N":
-                number_per_event = tuple(vars_array[f"{collection}_N"])
-                if ak.all(number_per_event == number_per_event[0]):
-                    variables_dict[k] = ak.to_numpy(
-                        ak.unflatten(vars_array[k], number_per_event)
-                    )
-                else:
+                # whole collection: one column per object, padded to the
+                # maximum number of objects per event, the missing objects
+                # are set to pad_value
+                number_per_event = np.asarray(vars_array[f"{collection}_N"], dtype=np.int64)
+                max_number = int(np.max(number_per_event)) if len(number_per_event) else 0
+                if np.any(number_per_event != max_number):
                     logger.warning(
-                        f"number of {collection} per event is not the same for all events, \n padding collection to 5 ..."
+                        f"number of {collection} per event is not the same for all "
+                        f"events: padding {k} to the maximum number {max_number} "
+                        f"with {pad_value}"
                     )
-                    variables_dict[k] = ak.to_numpy(
+                variables_dict[k] = ak.to_numpy(
+                    ak.fill_none(
                         ak.pad_none(
                             ak.unflatten(vars_array[k], number_per_event),
-                            5,
-                            clip=True,
-                        )
+                            max_number,
+                            axis=1,
+                        ),
+                        pad_value,
+                        axis=1,
                     )
+                ).reshape(len(number_per_event), max_number)
             else:
                 variables_dict[k] = ak.to_numpy(ak.unflatten(vars_array[k], 1))
 
@@ -718,7 +797,7 @@ def _find_class_files(cfg, class_def):
 
     if cfg.data_format == "root":
         for x in cfg.data_dirs:
-            files = os.listdir(x)
+            files = sorted(os.listdir(x))
             for file in files:
                 for sample in class_def["samples"]:
                     if sample in file and "SR" in file:
@@ -727,7 +806,7 @@ def _find_class_files(cfg, class_def):
         for direct in cfg.data_dirs:
             if not os.path.isdir(direct):
                 raise FileNotFoundError(f"Data directory not found: {direct}")
-            for file in os.listdir(direct):
+            for file in sorted(os.listdir(direct)):
                 if file.endswith(".coffea"):
                     if any(d in file for d in class_def["datasets"]):
                         coffea_files.append(os.path.join(direct, file))
@@ -743,7 +822,10 @@ def _find_class_files(cfg, class_def):
                     raise FileNotFoundError(
                         f"Local path not found on this node: {parquet_dirs_path}"
                     )
-                for entry in os.scandir(parquet_dirs_path):
+                # sorted, so that the files are always loaded in the same order
+                for entry in sorted(
+                    os.scandir(parquet_dirs_path), key=lambda e: e.name
+                ):
                     logger.debug(f"Looking for files in {entry.path}")
                     if entry.name in class_def["datasets"]:
                         for region in class_def["regions"]:
@@ -813,6 +895,15 @@ def load_data(cfg, seed):
             cfg.pad_value,
             cfg.normalize_weights_per_dataset,
         )
+        if X_per_class and X_class[0].shape[0] != X_per_class[0][0].shape[0]:
+            raise ValueError(
+                f"Class {c['name']} has {X_class[0].shape[0] - 1} input features "
+                f"but class {class_defs[0]['name']} has "
+                f"{X_per_class[0][0].shape[0] - 1}. This can happen when a whole "
+                "jagged collection is used as input with coffea files, since it "
+                "is padded to the maximum number of objects of each class: "
+                "select the objects explicitly as <variable>:<position>."
+            )
         X_per_class.append(X_class)
         n_per_class.append(n_class)
         logger.info(f"Number of events for class {c['name']}: {n_class}")
