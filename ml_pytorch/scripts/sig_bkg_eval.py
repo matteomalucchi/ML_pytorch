@@ -3,8 +3,6 @@ import matplotlib
 
 matplotlib.use("Agg")
 import argparse
-import itertools
-import re
 import numpy as np
 import mplhep as hep
 from scipy import stats
@@ -24,14 +22,17 @@ CMS_COLORS = [cycle["color"] for cycle in hep.style.CMS["axes.prop_cycle"]]
 BKG_COLOR = CMS_COLORS[0]
 SIG_COLOR = CMS_COLORS[1]
 
-# Multi-class only: (signal, [backgrounds]) class names for which the
-# p(signal) / (p(signal) + sum_b p(b)) discriminant is plotted. The names are
-# matched with the class names of the config, ignoring the case and any
-# non-alphanumeric character. Classes not present in the training are skipped.
+# Multi-class only: (name, signal class, signal dataset, [backgrounds]) for
+# which the p(signal) / (p(signal) + sum_b p(b)) discriminant is plotted, using
+# the output node of the signal class. Only the signal events of the given
+# dataset (matched with the short dataset name, see _short_dataset_name) are
+# used as signal, or all the events of the class if the dataset is None. The
+# class names are matched with the class names of the config, ignoring the case
+# and any non-alphanumeric character. Missing classes/datasets are skipped.
 SIG_OVER_BKG = [
-    ("ggF_SM", ["QCD", "TTbar"]),
-    ("VBF_SM", ["QCD", "TTbar"]),
-    ("VBF_k2V0", ["QCD", "TTbar"]),
+    ("ggF_SM", "GGF", "c2-0p00-kl-1p00-kt-1p00", ["QCD", "TTbar"]),
+    ("VBF_SM", "VBF", "CV-1-C2V-1-C3-1", ["QCD", "TTbar"]),
+    ("VBF_k2V0", "VBF", "CV-1-C2V-0-C3-1", ["QCD", "TTbar"]),
 ]
 
 
@@ -758,25 +759,28 @@ def plot_roc_curve(
     class_info=None,
     kl_bkg_str=None,
     lumitext=LUMITEXT,
+    sig_over_bkg=SIG_OVER_BKG,
     dataset_idx_test=None,
 ):
     # Dispatch to multi-class ROCs when more than one score column is stored.
     n_score, label_col, weight_col, kl_col = get_layout(score_lbl_tensor_test)
     if n_score > 1:
-        plot_multiclass_roc_curves(
+        plot_multiclass_sig_over_bkg_roc_curves(
             score_lbl_tensor_test,
             dir,
             show,
-            class_info,
+            sig_over_bkg,
+            class_info=class_info,
             comet_logger=comet_logger,
             kl_bkg_str=kl_bkg_str,
             lumitext=lumitext,
+            dataset_idx_test=dataset_idx_test,
         )
         if dataset_idx_test is not None:
             plot_per_dataset_roc_curves(
                 score_lbl_tensor_test,
                 dataset_idx_test,
-                f"{dir}/per_dataset",
+                dir,
                 show,
                 class_info,
                 comet_logger=comet_logger,
@@ -929,8 +933,9 @@ def plot_kl_distributions(
     class_info=None,
     comet_logger=None,
     lumitext=LUMITEXT,
-    dataset_idx_test=None,
     sig_over_bkg=SIG_OVER_BKG,
+    dataset_idx_train=None,
+    dataset_idx_test=None,
 ):
     if rescale is None:
         rescale = []
@@ -952,6 +957,7 @@ def plot_kl_distributions(
     for kl_bkg in kls_background_to_plot:
         kl_bkg_str = "all" if kl_bkg == "all" else f"{kl_bkg:.2f}"
 
+        train_dataset_idx = dataset_idx_train
         test_dataset_idx = dataset_idx_test
         if kl_bkg == "all":
             train_data = score_lbl_train
@@ -969,6 +975,8 @@ def plot_kl_distributions(
                     score_lbl_test[:, 3] == float(kl_bkg)
                 )
                 test_data = score_lbl_test[sig_test | bkg_test_kl]
+                if dataset_idx_train is not None:
+                    train_dataset_idx = dataset_idx_train[sig_train | bkg_train_kl]
                 if dataset_idx_test is not None:
                     test_dataset_idx = dataset_idx_test[sig_test | bkg_test_kl]
             except IndexError:
@@ -1003,6 +1011,8 @@ def plot_kl_distributions(
                     comet_logger=comet_logger,
                     kl_bkg_str=kl_bkg_str,
                     lumitext=lumitext,
+                    dataset_idx_train=train_dataset_idx,
+                    dataset_idx_test=test_dataset_idx,
                 )
 
         if do_roc:
@@ -1016,6 +1026,7 @@ def plot_kl_distributions(
                 kl_bkg_str=kl_bkg_str,
                 lumitext=lumitext,
                 class_info=class_info,
+                sig_over_bkg=sig_over_bkg,
                 dataset_idx_test=test_dataset_idx,
             )
 
@@ -1203,154 +1214,6 @@ def _save_roc_plot(
         comet_logger.log_image(f"{dir}/{output_base}.png", name=image_name)
 
 
-def _short_dataset_name(dataset):
-    """Compact name of a dataset, e.g.
-    ``VBFHHto4B_Par-CV-1-C2V-0-C3-1_TuneCP5_..._2024`` -> ``CV-1-C2V-0-C3-1``."""
-    name = dataset.split("_TuneCP5")[0]
-    if "_Par-" in name:
-        name = name.split("_Par-")[1]
-    return name
-
-
-def plot_per_dataset_roc_curves(
-    score_lbl_tensor_test,
-    dataset_idx_test,
-    dir,
-    show,
-    class_info,
-    comet_logger=None,
-    kl_bkg_str=None,
-    lumitext=LUMITEXT,
-):
-    """Plot the multi-class ROC curves separately for each dataset of the
-    classes made of several coupling points (e.g. the single VBF or ggF HH
-    samples), using the score of the node of their class.
-
-    The positive events are those of a single dataset of class ``c``, while
-    the negative ones are either all the events of the other classes (vs
-    rest) or those of a single other class ``b`` (vs ``b``). The events of
-    the other datasets of class ``c`` are not used.
-
-    Produces in ``dir``:
-
-    * ``roc_curve_<class>_<dataset>``: the ROCs of a dataset vs rest and vs
-      each other class.
-    * ``roc_curve_<class>_datasets_vs_<ref>``: the ROCs of all the datasets
-      of a class vs the same reference (rest or a single class).
-    """
-    if class_info is None or not all(
-        isinstance(c, dict) and "datasets" in c for c in class_info
-    ):
-        print("No dataset names in the class info: skipping the per-dataset ROCs.")
-        return
-
-    n_score, label_col, weight_col, kl_col = get_layout(score_lbl_tensor_test)
-    labels = score_lbl_tensor_test[:, label_col].astype(int)
-    abs_weights = abs(score_lbl_tensor_test[:, weight_col])
-    kl_values = score_lbl_tensor_test[:, kl_col]
-    dataset_idx_test = np.asarray(dataset_idx_test).astype(int)
-
-    os.makedirs(dir, exist_ok=True)
-    annotation = rf"bkg $\kappa_\lambda$ = {kl_bkg_str}" if kl_bkg_str else None
-    roc_info_dict = {}
-
-    def _roc(pos_mask, neg_mask, score_col):
-        mask = pos_mask | neg_mask
-        sub_labels = pos_mask[mask].astype(int)
-        if sub_labels.sum() == 0 or (1 - sub_labels).sum() == 0:
-            return None
-        scores = score_lbl_tensor_test[mask, score_col]
-        try:
-            fpr, tpr, _ = roc_curve(
-                sub_labels, scores, sample_weight=abs_weights[mask]
-            )
-            roc_auc = roc_auc_score(
-                sub_labels, scores, sample_weight=abs_weights[mask]
-            )
-        except ValueError as e:
-            print(f"Skipping ROC: {e}")
-            return None
-        return fpr, tpr, roc_auc
-
-    class_names = {int(c["class_idx"]): c["name"] for c in class_info}
-
-    for c in class_info:
-        c_idx = int(c["class_idx"])
-        class_mask = labels == c_idx
-        # split only the classes made of several coupling points (the kl
-        # column is 9999 for the datasets without a coupling, e.g. data or ttbar)
-        if (
-            len(c["datasets"]) < 2
-            or class_mask.sum() == 0
-            or np.all(kl_values[class_mask] == 9999.0)
-        ):
-            continue
-
-        # the references are the other classes inclusively, or one at a time
-        references = {"rest": ~class_mask}
-        for b_idx, b_name in class_names.items():
-            if b_idx != c_idx:
-                references[b_name] = labels == b_idx
-
-        overlay_series = {ref: {} for ref in references}
-        for d_idx, dataset in enumerate(c["datasets"]):
-            pos_mask = class_mask & (dataset_idx_test == d_idx)
-            if pos_mask.sum() == 0:
-                print(f"No test events for dataset {dataset}: skipping its ROCs.")
-                continue
-
-            short_name = _short_dataset_name(dataset)
-            tag = re.sub(r"[^A-Za-z0-9-]+", "_", short_name)
-            print(
-                f"Per-dataset ROC: class {c['name']}, dataset {short_name}, "
-                f"test events = {pos_mask.sum()}"
-            )
-
-            series = {}
-            for ref, neg_mask in references.items():
-                result = _roc(pos_mask, neg_mask, c_idx)
-                if result is None:
-                    continue
-                fpr, tpr, roc_auc = result
-                series[f"{short_name} vs {ref} (AUC = {roc_auc:.3f})"] = {
-                    "data": {"x": [tpr, None], "y": [fpr, None]},
-                    "style": {"linestyle": "-", "markersize": 0},
-                }
-                overlay_series[ref][f"{short_name} (AUC = {roc_auc:.3f})"] = {
-                    "data": {"x": [tpr, None], "y": [fpr, None]},
-                    "style": {"linestyle": "-", "markersize": 0},
-                }
-                roc_info_dict[f"tpr_{c['name']}_{tag}_vs_{ref}"] = tpr
-                roc_info_dict[f"fpr_{c['name']}_{tag}_vs_{ref}"] = fpr
-                roc_info_dict[f"auc_{c['name']}_{tag}_vs_{ref}"] = roc_auc
-
-            _save_roc_plot(
-                series,
-                dir,
-                f"roc_curve_{c['name']}_{tag}",
-                f"roc_curve_{c['name']}_{tag}",
-                show,
-                comet_logger=comet_logger,
-                lumitext=lumitext,
-                annotation=annotation,
-            )
-
-        for ref, series in overlay_series.items():
-            _save_roc_plot(
-                series,
-                dir,
-                f"roc_curve_{c['name']}_datasets_vs_{ref}",
-                f"roc_curve_{c['name']}_datasets_vs_{ref}",
-                show,
-                comet_logger=comet_logger,
-                lumitext=lumitext,
-                annotation=f"{c['name']} vs {ref}"
-                + (f"\n{annotation}" if annotation else ""),
-            )
-
-    np.savez(f"{dir}/tpr_fpr_per_dataset.npz", **roc_info_dict)
-
-
 def _normalize_class_name(name):
     """Lowercase and keep only alphanumeric characters, so that e.g.
     ``VBF_k2V0``, ``vbf-k2v0`` and ``VBF k2V=0`` all match each other."""
@@ -1367,6 +1230,231 @@ def _find_class_idx(class_info, name):
     return None
 
 
+def _sig_over_bkg_discriminant(score_lbl_tensor, sig_idx, bkg_idxs):
+    """D = p(signal) / (p(signal) + sum_b p(b)) from the softmax outputs."""
+    sig = score_lbl_tensor[:, sig_idx]
+    bkg = score_lbl_tensor[:, bkg_idxs].sum(axis=1)
+    den = sig + bkg
+    return np.divide(sig, den, out=np.zeros_like(sig), where=den > 0)
+
+
+def _short_dataset_name(dataset):
+    """Compact name of a dataset, e.g.
+    ``VBFHHto4B_Par-CV-1-C2V-0-C3-1_TuneCP5_..._2024`` -> ``CV-1-C2V-0-C3-1``."""
+    name = dataset.split("_TuneCP5")[0]
+    if "_Par-" in name:
+        name = name.split("_Par-")[1]
+    return name
+
+
+def _find_dataset_idx(class_info, class_idx, dataset):
+    """Return the index of ``dataset`` (matched with the short dataset name)
+    within the datasets of class ``class_idx``, or ``None`` if not found."""
+    for c in class_info or []:
+        if not isinstance(c, dict) or int(c["class_idx"]) != class_idx:
+            continue
+        for d_idx, d in enumerate(c.get("datasets", [])):
+            if _short_dataset_name(d) == dataset:
+                return d_idx
+    return None
+
+
+def _resolve_sig_over_bkg(sig_over_bkg, class_info, n_score, dataset_idx=None):
+    """Yield ``(name, bkg_names, sig_idx, bkg_idxs, sig_dataset_idx)`` for every
+    entry of ``sig_over_bkg`` whose classes (and signal dataset, if given)
+    exist and are within the output nodes. ``sig_dataset_idx`` is ``None``
+    when the whole signal class is used."""
+    available = [
+        c["name"] if isinstance(c, dict) else c.name for c in class_info or []
+    ]
+    for name, sig_class, sig_dataset, bkg_names in sig_over_bkg:
+        what = f"{name} / ({name} + {' + '.join(bkg_names)})"
+        sig_idx = _find_class_idx(class_info, sig_class)
+        bkg_idxs = [_find_class_idx(class_info, b) for b in bkg_names]
+        if sig_idx is None or None in bkg_idxs:
+            print(f"Skipping {what} plot: class not found among {available}")
+            continue
+        if max([sig_idx] + bkg_idxs) >= n_score:
+            print(
+                f"Skipping {what} plot: class index out of range of the "
+                f"{n_score} output nodes"
+            )
+            continue
+        sig_dataset_idx = None
+        if sig_dataset:
+            if dataset_idx is None:
+                print(f"Skipping {what} plot: no per-event dataset index")
+                continue
+            sig_dataset_idx = _find_dataset_idx(class_info, sig_idx, sig_dataset)
+            if sig_dataset_idx is None:
+                print(
+                    f"Skipping {what} plot: dataset {sig_dataset} not found "
+                    f"in class {sig_class}"
+                )
+                continue
+        yield name, bkg_names, sig_idx, bkg_idxs, sig_dataset_idx
+
+
+def _sig_over_bkg_masks(labels, dataset_idx, sig_idx, bkg_idxs, sig_dataset_idx):
+    """Return the ``(signal, background)`` event masks of a sig_over_bkg entry:
+    the events of the signal class (only those of ``sig_dataset_idx`` if not
+    ``None``) and those of the background classes."""
+    sig_mask = labels == sig_idx
+    if sig_dataset_idx is not None:
+        sig_mask &= np.asarray(dataset_idx).astype(int) == sig_dataset_idx
+    return sig_mask, np.isin(labels, bkg_idxs)
+
+
+def plot_per_dataset_roc_curves(
+    score_lbl_tensor_test,
+    dataset_idx_test,
+    dir,
+    show,
+    class_info,
+    comet_logger=None,
+    kl_bkg_str=None,
+    lumitext=LUMITEXT,
+):
+    """For each class made of several coupling points (e.g. the VBF or ggF HH
+    samples), plot the ROC of each of its datasets vs all the events of the
+    other classes, using the score of the node of the class. The events of
+    the other datasets of the same class are not used.
+
+    Produces ``roc_curve_<class>_datasets_vs_rest`` in ``dir``.
+    """
+    if class_info is None or not all(
+        isinstance(c, dict) and "datasets" in c for c in class_info
+    ):
+        print("No dataset names in the class info: skipping the per-dataset ROCs.")
+        return
+
+    n_score, label_col, weight_col, kl_col = get_layout(score_lbl_tensor_test)
+    labels = score_lbl_tensor_test[:, label_col].astype(int)
+    abs_weights = abs(score_lbl_tensor_test[:, weight_col])
+    kl_values = score_lbl_tensor_test[:, kl_col]
+    dataset_idx_test = np.asarray(dataset_idx_test).astype(int)
+    annotation = rf"bkg $\kappa_\lambda$ = {kl_bkg_str}" if kl_bkg_str else None
+    roc_info_dict = {}
+
+    for c in class_info:
+        c_idx = int(c["class_idx"])
+        class_mask = labels == c_idx
+        # split only the classes made of several coupling points (the kl
+        # column is 9999 for the datasets without a coupling, e.g. data or ttbar)
+        if (
+            c_idx >= n_score
+            or len(c["datasets"]) < 2
+            or class_mask.sum() == 0
+            or np.all(kl_values[class_mask] == 9999.0)
+        ):
+            continue
+
+        series = {}
+        for d_idx, dataset in enumerate(c["datasets"]):
+            pos_mask = class_mask & (dataset_idx_test == d_idx)
+            mask = pos_mask | ~class_mask
+            sub_labels = pos_mask[mask].astype(int)
+            if sub_labels.sum() == 0 or (1 - sub_labels).sum() == 0:
+                print(f"No test events for dataset {dataset}: skipping its ROC.")
+                continue
+            scores = score_lbl_tensor_test[mask, c_idx]
+            fpr, tpr, _ = roc_curve(sub_labels, scores, sample_weight=abs_weights[mask])
+            roc_auc = roc_auc_score(
+                sub_labels, scores, sample_weight=abs_weights[mask]
+            )
+
+            short_name = _short_dataset_name(dataset)
+            print(f"{c['name']} {short_name} vs rest: AUC = {roc_auc:.3f}")
+            series[f"{short_name} (AUC = {roc_auc:.3f})"] = {
+                "data": {"x": [tpr, None], "y": [fpr, None]},
+                "style": {"linestyle": "-", "markersize": 0},
+            }
+            roc_info_dict[f"tpr_{c['name']}_{short_name}"] = tpr
+            roc_info_dict[f"fpr_{c['name']}_{short_name}"] = fpr
+            roc_info_dict[f"auc_{c['name']}_{short_name}"] = roc_auc
+
+        _save_roc_plot(
+            series,
+            dir,
+            f"roc_curve_{c['name']}_datasets_vs_rest",
+            f"roc_curve_{c['name']}_datasets_vs_rest",
+            show,
+            comet_logger=comet_logger,
+            lumitext=lumitext,
+            annotation=f"{c['name']} vs rest"
+            + (f"\n{annotation}" if annotation else ""),
+        )
+
+    np.savez(f"{dir}/tpr_fpr_per_dataset.npz", **roc_info_dict)
+
+
+def plot_multiclass_sig_over_bkg_roc_curves(
+    score_lbl_tensor_test,
+    dir,
+    show,
+    sig_over_bkg,
+    class_info=None,
+    comet_logger=None,
+    kl_bkg_str=None,
+    lumitext=LUMITEXT,
+    dataset_idx_test=None,
+):
+    """For every entry of ``sig_over_bkg`` plot the ROC of the signal vs the
+    sum of the backgrounds, using the discriminant
+    D = p(signal) / (p(signal) + sum_b p(b)) as the score. Only the test events
+    of the signal (dataset) or of one of the backgrounds are used.
+    Produces ``roc_sig_over_bkg_<name>`` per entry."""
+    n_score, label_col, weight_col, _ = get_layout(score_lbl_tensor_test)
+    labels = score_lbl_tensor_test[:, label_col].astype(int)
+    abs_weights = abs(score_lbl_tensor_test[:, weight_col])
+    annotation = rf"bkg $\kappa_\lambda$ = {kl_bkg_str}" if kl_bkg_str else None
+    roc_info_dict = {}
+
+    for sig_name, bkg_names, sig_idx, bkg_idxs, sig_d_idx in _resolve_sig_over_bkg(
+        sig_over_bkg, class_info, n_score, dataset_idx_test
+    ):
+        sig_mask, bkg_mask = _sig_over_bkg_masks(
+            labels, dataset_idx_test, sig_idx, bkg_idxs, sig_d_idx
+        )
+        mask = sig_mask | bkg_mask
+        roc_labels = sig_mask[mask].astype(int)
+        if roc_labels.sum() == 0 or (1 - roc_labels).sum() == 0:
+            print(f"Skipping {sig_name} ROC: no signal or background test events")
+            continue
+        d_test = _sig_over_bkg_discriminant(
+            score_lbl_tensor_test[mask], sig_idx, bkg_idxs
+        )
+        fpr, tpr, _ = roc_curve(roc_labels, d_test, sample_weight=abs_weights[mask])
+        roc_auc = roc_auc_score(roc_labels, d_test, sample_weight=abs_weights[mask])
+
+        sig_label = sig_name
+        bkg_label = " + ".join(_class_label(class_info, b) for b in bkg_idxs)
+        print(f"{sig_label} vs {bkg_label}: AUC = {roc_auc:.3f}")
+
+        tag = _normalize_class_name(sig_name)
+        roc_info_dict[f"tpr_{tag}"] = tpr
+        roc_info_dict[f"fpr_{tag}"] = fpr
+        roc_info_dict[f"auc_{tag}"] = roc_auc
+
+        _save_roc_plot(
+            {
+                f"{sig_label} vs {bkg_label} (AUC = {roc_auc:.3f})": {
+                    "data": {"x": [tpr, None], "y": [fpr, None]},
+                    "style": {"linestyle": "-", "markersize": 0},
+                }
+            },
+            dir,
+            f"roc_sig_over_bkg_{tag}",
+            f"roc_sig_over_bkg_{tag}",
+            show,
+            comet_logger=comet_logger,
+            lumitext=lumitext,
+            annotation=annotation,
+        )
+
+    np.savez(f"{dir}/tpr_fpr_sig_over_bkg.npz", **roc_info_dict)
+
+
 def plot_multiclass_sig_over_bkg(
     score_lbl_tensor_train,
     score_lbl_tensor_test,
@@ -1377,20 +1465,19 @@ def plot_multiclass_sig_over_bkg(
     comet_logger=None,
     kl_bkg_str=None,
     lumitext=LUMITEXT,
+    dataset_idx_train=None,
+    dataset_idx_test=None,
 ):
-    """For every ``(signal, [backgrounds])`` entry of ``sig_over_bkg`` build the
-    discriminant
+    """For every entry of ``sig_over_bkg`` build the discriminant
 
         D = p(signal) / (p(signal) + sum_b p(b))
 
     from the softmax outputs, i.e. a monotonic transformation of
-    ``p(signal) / sum_b p(b)`` bounded in [0, 1]. Only the events whose true
-    class is the signal or one of the backgrounds are used. Produces
-
-    * ``sig_over_bkg_<signal>{,_log}``: the normalized distribution of D for
-      the signal and for each background, training vs test;
-    * ``roc_sig_over_bkg_<signal>``: the ROC of the signal vs the sum of the
-      backgrounds, using D as the score.
+    ``p(signal) / sum_b p(b)`` bounded in [0, 1]. Only the events of the
+    signal (dataset) or of one of the backgrounds are used. Produces
+    ``sig_over_bkg_<name>{,_log}``: the normalized distribution of D for the
+    signal and for each background, training vs test. The corresponding ROCs
+    are drawn by :func:`plot_multiclass_sig_over_bkg_roc_curves`.
     """
     n_score, label_col, weight_col, _ = get_layout(score_lbl_tensor_test)
 
@@ -1400,55 +1487,42 @@ def plot_multiclass_sig_over_bkg(
         h.fill(scores, weight=weights / total if total else weights)
         return h
 
-    def discriminant(score_lbl_tensor, sig_idx, bkg_idxs):
-        sig = score_lbl_tensor[:, sig_idx]
-        bkg = score_lbl_tensor[:, bkg_idxs].sum(axis=1)
-        den = sig + bkg
-        return np.divide(sig, den, out=np.zeros_like(sig), where=den > 0)
+    train_labels = score_lbl_tensor_train[:, label_col].astype(int)
+    test_labels = score_lbl_tensor_test[:, label_col].astype(int)
+    train_weights = score_lbl_tensor_train[:, weight_col]
+    test_weights = score_lbl_tensor_test[:, weight_col]
+    has_dataset_idx = dataset_idx_train is not None and dataset_idx_test is not None
 
-    available = [
-        c["name"] if isinstance(c, dict) else c.name for c in class_info or []
-    ]
-
-    for sig_name, bkg_names in sig_over_bkg:
-        sig_idx = _find_class_idx(class_info, sig_name)
-        bkg_idxs = [_find_class_idx(class_info, b) for b in bkg_names]
-        if sig_idx is None or None in bkg_idxs:
-            print(
-                f"Skipping {sig_name} / ({' + '.join(bkg_names)}) plot: "
-                f"class not found among {available}"
-            )
-            continue
-        if max([sig_idx] + bkg_idxs) >= n_score:
-            print(
-                f"Skipping {sig_name} / ({' + '.join(bkg_names)}) plot: "
-                f"class index out of range of the {n_score} output nodes"
-            )
-            continue
-
-        sig_label = _class_label(class_info, sig_idx)
-        bkg_label = " + ".join(_class_label(class_info, b) for b in bkg_idxs)
+    for sig_name, bkg_names, sig_idx, bkg_idxs, sig_d_idx in _resolve_sig_over_bkg(
+        sig_over_bkg,
+        class_info,
+        n_score,
+        dataset_idx_test if has_dataset_idx else None,
+    ):
         tag = _normalize_class_name(sig_name)
-        xlabel = f"{sig_name} / ({' + '.join(bkg_names)}) score"
+        xlabel = f"{sig_name} / ({' + '.join([sig_name] + bkg_names)}) score"
 
-        d_train = discriminant(score_lbl_tensor_train, sig_idx, bkg_idxs)
-        d_test = discriminant(score_lbl_tensor_test, sig_idx, bkg_idxs)
-        train_labels = score_lbl_tensor_train[:, label_col].astype(int)
-        test_labels = score_lbl_tensor_test[:, label_col].astype(int)
-        train_weights = score_lbl_tensor_train[:, weight_col]
-        test_weights = score_lbl_tensor_test[:, weight_col]
+        d_train = _sig_over_bkg_discriminant(score_lbl_tensor_train, sig_idx, bkg_idxs)
+        d_test = _sig_over_bkg_discriminant(score_lbl_tensor_test, sig_idx, bkg_idxs)
+        sig_train, _ = _sig_over_bkg_masks(
+            train_labels, dataset_idx_train, sig_idx, bkg_idxs, sig_d_idx
+        )
+        sig_test, _ = _sig_over_bkg_masks(
+            test_labels, dataset_idx_test, sig_idx, bkg_idxs, sig_d_idx
+        )
+        components = [(sig_name, sig_train, sig_test)] + [
+            (_class_label(class_info, b), train_labels == b, test_labels == b)
+            for b in bkg_idxs
+        ]
 
         # --- distributions of the discriminant, training vs test ---
         series_dict = {}
         annotations = []
-        for j, true_c in enumerate([sig_idx] + bkg_idxs):
+        for j, (label, tr_mask, te_mask) in enumerate(components):
             color = CMS_COLORS[j % len(CMS_COLORS)]
-            tr_mask = train_labels == true_c
-            te_mask = test_labels == true_c
             if tr_mask.sum() == 0 or te_mask.sum() == 0:
                 continue
 
-            label = _class_label(class_info, true_c)
             hist_train = normalized_hist(d_train[tr_mask], train_weights[tr_mask])
             hist_test = normalized_hist(d_test[te_mask], test_weights[te_mask])
             series_dict[f"{label} (training)"] = {
@@ -1518,159 +1592,6 @@ def plot_multiclass_sig_over_bkg(
                     name=f"sig_over_bkg_{tag}{'_log' if log else ''}",
                 )
 
-        # --- ROC of the signal vs the sum of the backgrounds ---
-        mask = np.isin(test_labels, [sig_idx] + bkg_idxs)
-        roc_labels = (test_labels[mask] == sig_idx).astype(int)
-        roc_weights = abs(test_weights[mask])
-        if roc_labels.sum() == 0 or (1 - roc_labels).sum() == 0:
-            continue
-        fpr, tpr, _ = roc_curve(roc_labels, d_test[mask], sample_weight=roc_weights)
-        roc_auc = roc_auc_score(roc_labels, d_test[mask], sample_weight=roc_weights)
-        print(f"{sig_label} vs {bkg_label}: AUC = {roc_auc:.3f}")
-
-        plotter = (
-            HEPPlotter("CMS")
-            .set_plot_config(lumitext=lumitext)
-            .set_output(f"{dir}/roc_sig_over_bkg_{tag}")
-            .set_labels(xlabel="True positive rate", ylabel="False positive rate")
-            .set_data(
-                {
-                    f"{sig_label} vs {bkg_label} (AUC = {roc_auc:.3f})": {
-                        "data": {"x": [tpr, None], "y": [fpr, None]},
-                        "style": {"linestyle": "-", "markersize": 0},
-                    }
-                },
-                plot_type="graph",
-            )
-            .set_options(
-                y_log=True,
-                legend_loc="upper left",
-                legend_font_size="small",
-                split_legend=False,
-                grid=False,
-                set_ylim=False,
-            )
-        )
-        if kl_bkg_str:
-            plotter.add_annotation(
-                x=0.98,
-                y=0.05,
-                s=rf"bkg $\kappa_\lambda$ = {kl_bkg_str}",
-                fontsize=16,
-                ha="right",
-                va="bottom",
-            )
-        if show:
-            plotter.show()
-        plotter.run()
-
-        if comet_logger:
-            comet_logger.log_image(
-                f"{dir}/roc_sig_over_bkg_{tag}.png", name=f"roc_sig_over_bkg_{tag}"
-            )
-
-
-def plot_multiclass_roc_curves(
-    score_lbl_tensor_test,
-    dir,
-    show,
-    class_info=None,
-    comet_logger=None,
-    kl_bkg_str=None,
-    lumitext=LUMITEXT,
-):
-    """Plot ROC curves for the multi-class output with :class:`HEPPlotter`:
-
-    * One-vs-rest ROC for every output node (signal=node i, background=all
-      events whose true class != i, using score of node i).
-    * One-vs-one ROC for every ordered pair of classes (positive class A vs
-      negative class B, considering only events whose true class is A or B
-      and using score of node A).
-    """
-    n_score, label_col, weight_col, _ = get_layout(score_lbl_tensor_test)
-    labels = score_lbl_tensor_test[:, label_col].astype(int)
-    weights = score_lbl_tensor_test[:, weight_col]
-
-    true_classes = sorted(np.unique(labels).tolist())
-    print(f"Multi-class ROC: output nodes = {n_score}, true classes = {true_classes}")
-
-    roc_info_dict = {}
-
-    def _make_roc_plot(series_dict, output_base, image_name):
-        _save_roc_plot(
-            series_dict,
-            dir,
-            output_base,
-            image_name,
-            show,
-            comet_logger=comet_logger,
-            lumitext=lumitext,
-            annotation=rf"bkg $\kappa_\lambda$ = {kl_bkg_str}" if kl_bkg_str else None,
-        )
-
-    # --- One-vs-rest ROCs (overlaid on a single figure) ---
-    ovr_series = {}
-    for out_idx in range(n_score):
-        scores = score_lbl_tensor_test[:, out_idx]
-        ovr_labels = (labels == out_idx).astype(int)
-        if ovr_labels.sum() == 0 or (1 - ovr_labels).sum() == 0:
-            continue
-
-        try:
-            fpr, tpr, _ = roc_curve(ovr_labels, scores, sample_weight=abs(weights))
-            roc_auc = roc_auc_score(ovr_labels, scores, sample_weight=abs(weights))
-        except ValueError as e:
-            print(f"Skipping one-vs-rest ROC for class {out_idx}: {e}")
-            continue
-
-        name = _class_label(class_info, out_idx, fallback=f"class {out_idx}")
-        ovr_series[f"{name} vs rest (AUC = {roc_auc:.3f})"] = {
-            "data": {"x": [tpr, None], "y": [fpr, None]},
-            "style": {"linestyle": "-", "markersize": 0},
-        }
-        roc_info_dict[f"ovr_tpr_class_{out_idx}"] = tpr
-        roc_info_dict[f"ovr_fpr_class_{out_idx}"] = fpr
-        roc_info_dict[f"ovr_auc_class_{out_idx}"] = roc_auc
-
-    _make_roc_plot(ovr_series, "roc_curve_one_vs_rest", "roc_curve_one_vs_rest")
-
-    # --- One-vs-one pairwise ROCs (overlaid) ---
-    ovo_series = {}
-    for a, b in itertools.combinations(range(n_score), 2):
-        mask = (labels == a) | (labels == b)
-        if mask.sum() == 0:
-            continue
-        scores_a = score_lbl_tensor_test[mask, a]
-        sub_labels = (labels[mask] == a).astype(int)
-        sub_weights = weights[mask]
-        if sub_labels.sum() == 0 or (1 - sub_labels).sum() == 0:
-            continue
-
-        try:
-            fpr, tpr, _ = roc_curve(
-                sub_labels, scores_a, sample_weight=abs(sub_weights)
-            )
-            roc_auc = roc_auc_score(
-                sub_labels, scores_a, sample_weight=abs(sub_weights)
-            )
-        except ValueError as e:
-            print(f"Skipping pair {a} vs {b} ROC: {e}")
-            continue
-
-        a_name = _class_label(class_info, a, fallback=f"class {a}")
-        b_name = _class_label(class_info, b, fallback=f"class {b}")
-        ovo_series[f"{a_name} vs {b_name} (AUC = {roc_auc:.3f})"] = {
-            "data": {"x": [tpr, None], "y": [fpr, None]},
-            "style": {"linestyle": "-", "markersize": 0},
-        }
-        roc_info_dict[f"ovo_tpr_{a}_vs_{b}"] = tpr
-        roc_info_dict[f"ovo_fpr_{a}_vs_{b}"] = fpr
-        roc_info_dict[f"ovo_auc_{a}_vs_{b}"] = roc_auc
-
-    _make_roc_plot(ovo_series, "roc_curve_one_vs_one", "roc_curve_one_vs_one")
-
-    np.savez(f"{dir}/tpr_fpr_multiclass.npz", **roc_info_dict)
-
 
 def main():
     # parse the arguments
@@ -1706,10 +1627,14 @@ def main():
     parser.add_argument(
         "--sig-over-bkg",
         nargs="+",
-        default=[f"{sig}={'+'.join(bkgs)}" for sig, bkgs in SIG_OVER_BKG],
-        help="Multi-class only: signal / (sum of backgrounds) discriminants to plot, "
-        "given as SIG=BKG1+BKG2 with the class names of the config "
-        "(default: %(default)s).",
+        default=[
+            f"{name}={sig_class}{':' + dataset if dataset else ''}={'+'.join(bkgs)}"
+            for name, sig_class, dataset, bkgs in SIG_OVER_BKG
+        ],
+        help="Multi-class only: signal / (signal + sum of backgrounds) "
+        "discriminants to plot, given as NAME=CLASS[:DATASET]=BKG1+BKG2 with the "
+        "class names of the config and the short name of a dataset of the "
+        "signal class (default: %(default)s).",
     )
 
     parser.print_help()
@@ -1739,9 +1664,16 @@ def main():
 
     # per-event dataset index, used for the per-dataset ROCs
     try:
+        dataset_idx_train = np.load(input_file, allow_pickle=True)["dataset_idx_train"]
         dataset_idx_test = np.load(input_file, allow_pickle=True)["dataset_idx_test"]
     except KeyError:
-        dataset_idx_test = None
+        dataset_idx_train = dataset_idx_test = None
+
+    sig_over_bkg = []
+    for entry in args.sig_over_bkg:
+        name, sig_spec, bkgs = entry.split("=", 2)
+        sig_class, _, dataset = sig_spec.partition(":")
+        sig_over_bkg.append((name, sig_class, dataset or None, bkgs.split("+")))
 
     # resolve background kl values to plot
     try:
@@ -1779,11 +1711,9 @@ def main():
         # get the years from the config saved in the training directory
         lumitext=get_lumitext_from_dir(args.input_dir),
         class_info=class_info,
+        sig_over_bkg=sig_over_bkg,
+        dataset_idx_train=dataset_idx_train,
         dataset_idx_test=dataset_idx_test,
-        sig_over_bkg=[
-            (sig, bkgs.split("+"))
-            for sig, bkgs in (entry.split("=", 1) for entry in args.sig_over_bkg)
-        ],
     )
 
 

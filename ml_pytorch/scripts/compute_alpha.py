@@ -8,9 +8,11 @@ because the classifier is trained with all classes balanced to equal total
 weight, so each ttbar output node is normalised as if ttbar were 100% of the
 data. alpha_R scales it back to its physical size:
     alpha_R = (ttbar MC yield in R) / (data yield in R).
-Pass the numerator-region row (boosted_control_region_C) to convert_to_onnx.py
-as --alpha and the denominator-region row (boosted_control_sideband_region_D)
-as --alpha-den.
+Pass the numerator-region row to convert_to_onnx.py as --alpha and the
+denominator-region row as --alpha-den. For the morphing along TXbb (default),
+the numerator is boosted_signal_sideband_region_C and the denominator
+boosted_control_sideband_region_A; for the morphing along the mass, the
+numerator is boosted_control_region_B.
 
 Usage:
     python compute_alpha.py <coffea_output_dir>

@@ -579,6 +579,7 @@ def main():
                 comet_logger=comet_logger,
                 class_info=class_info,
                 lumitext=lumitext,
+                dataset_idx_train=dataset_idx_train,
                 dataset_idx_test=dataset_idx_test,
             )
             try:

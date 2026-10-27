@@ -3,7 +3,7 @@
 #SBATCH --job-name=sig_bg_classifier
 #SBATCH --cpus-per-task=4
 #SBATCH --mem-per-cpu=4000
-#SBATCH --time=2:30:00
+#SBATCH --time=5:00:00
 #SBATCH -p gpu
 #SBATCH --gres=gpu:1
 
