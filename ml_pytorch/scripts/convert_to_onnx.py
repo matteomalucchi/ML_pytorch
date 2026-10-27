@@ -80,7 +80,7 @@ parser.add_argument(
     help=(
         "Multiclass only. Same as --alpha but for the denominator region: the "
         "ttbar-to-data yield ratio (N_ttbar / N_data) in the denominator region "
-        "(boosted_control_sideband_region_D). Scales the ttbar node r_3 before "
+        "(e.g. boosted_control_sideband_region_A). Scales the ttbar node r_3 before "
         "it is subtracted from the data node r_1, giving "
         "w = relu(r_0 - alpha * r_2) / relu(r_1 - alpha_den * r_3). 0.0 "
         "(default) disables the denominator subtraction and gives w = "
@@ -320,8 +320,8 @@ def get_multiclass_ratio_model_tensor_onnx(onnx_model, b, alpha, alpha_den):
 
     Output-node convention (class_idx order, i.e. sorted by ``lbl``)::
 
-        r_0 = p(data,  numerator region)    e.g. boosted_control_region_C
-        r_1 = p(data,  denominator region)  e.g. boosted_control_sideband_region_D
+        r_0 = p(data,  numerator region)    e.g. boosted_signal_sideband_region_C
+        r_1 = p(data,  denominator region)  e.g. boosted_control_sideband_region_A
         r_2 = p(ttbar, numerator region)
         r_3 = p(ttbar, denominator region)
 

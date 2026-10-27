@@ -519,7 +519,12 @@ def main():
 
         eval_epoch = loaded_epoch if cfg.eval_model else best_epoch
         logger.info("Training dataset\n")
-        score_lbl_array_train, loss_eval_train, accuracy_eval_train = eval_model(
+        (
+            score_lbl_array_train,
+            dataset_idx_train,
+            loss_eval_train,
+            accuracy_eval_train,
+        ) = eval_model(
             model,
             training_loader,
             loss_fn,
@@ -530,7 +535,12 @@ def main():
 
         logger.info("\n")
         logger.info("Test dataset")
-        score_lbl_array_test, loss_eval_test, accuracy_eval_test = eval_model(
+        (
+            score_lbl_array_test,
+            dataset_idx_test,
+            loss_eval_test,
+            accuracy_eval_test,
+        ) = eval_model(
             model,
             test_loader,
             loss_fn,
@@ -559,6 +569,8 @@ def main():
                 f"{main_dir}/score_lbl_array.npz",
                 score_lbl_array_train=score_lbl_array_train,
                 score_lbl_array_test=score_lbl_array_test,
+                dataset_idx_train=dataset_idx_train,
+                dataset_idx_test=dataset_idx_test,
                 train_test_fractions=train_test_fractions,
                 num_classes=np.array(num_classes),
                 class_info=np.array(class_info, dtype=object),
@@ -572,6 +584,8 @@ def main():
                 comet_logger=comet_logger,
                 class_info=class_info,
                 lumitext=lumitext,
+                dataset_idx_train=dataset_idx_train,
+                dataset_idx_test=dataset_idx_test,
             )
             try:
                 plot_kl_distributions(

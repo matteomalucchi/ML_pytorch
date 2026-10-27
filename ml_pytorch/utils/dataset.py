@@ -104,7 +104,7 @@ def oversample_dataset(X_dataset, is_binary):
         X_fts_sig_oversampled  = X_fts_sig.repeat((oversample_factor, 1))[:num_events_bkg]
         X_lbl_sig_oversampled  = X_lbl_sig.repeat(oversample_factor)[:num_events_bkg]
         X_clsw_sig_oversampled = X_clsw_sig.repeat((oversample_factor, 1))[:num_events_bkg]
-        X_k_sig_oversampled    = X_k_sig.repeat(oversample_factor)[:num_events_bkg]
+        X_k_sig_oversampled    = X_k_sig.repeat((oversample_factor, 1))[:num_events_bkg]
 
         logger.info(f"Number of background events: {num_events_bkg}")
         logger.info(f"Number of signal events before oversampling: {num_events_sig}")
@@ -139,7 +139,7 @@ def oversample_dataset(X_dataset, is_binary):
                 X_fts_c  = X_fts_c.repeat((oversample_factor, 1))[:n_max]
                 X_lbl_c  = X_lbl_c.repeat(oversample_factor)[:n_max]
                 X_clsw_c = X_clsw_c.repeat((oversample_factor, 1))[:n_max]
-                X_k_c    = X_k_c.repeat(oversample_factor)[:n_max]
+                X_k_c    = X_k_c.repeat((oversample_factor, 1))[:n_max]
             else:
                 logger.info(f"Class {c}: no oversampling needed ({n} events)")
 
@@ -305,6 +305,10 @@ def get_variables(
 
             logger.info(f"kl value found in dataset {matching_dataset} is {kl_val}")
 
+            # index of the dataset in the class dataset list, to split the
+            # evaluation per dataset (the kl value alone is not unique)
+            dataset_idx = dataset_list.index(matching_dataset)
+
             # here i select the corresponding .coffea file as well
             matching_coffea = [cf for cf in files if matching_dataset in cf]
             if len(matching_coffea) != 1:
@@ -392,13 +396,15 @@ def get_variables(
 
             # add the kl value
             variables_array["kl"] = np.full(len(variables_array), kl_val)
+            variables_array["dataset_idx"] = np.full(len(variables_array), dataset_idx)
 
             # concatenate in a single numpy matrix of shape (num_variables, num_events)
             # the None values of the inputs are padded with pad_value
             variables_array = np.array(
                 [
+
                     ak.to_numpy(ak.fill_none(variables_array[f], pad_value))
-                    for f in input_variables
+                    for f in input_variables + ["weights", "kl", "dataset_idx"]
                 ]
                 + [ak.to_numpy(variables_array[f]) for f in ["weights", "kl"]]
             )
@@ -411,19 +417,19 @@ def get_variables(
             raise ValueError("No parquet data loaded")
 
         if normalize_per_dataset:
-            # the weights are the second to last row (before kl)
+            # the weights are the third to last row (before kl and dataset_idx)
             log_sumw_per_dataset(
-                [v[-2] for v in variables_array_list],
+                [v[-3] for v in variables_array_list],
                 dataset_names,
                 "before normalization of each dataset to sum 1",
             )
             normalized_weights = normalize_weights_per_dataset(
-                [v[-2] for v in variables_array_list], dataset_names
+                [v[-3] for v in variables_array_list], dataset_names
             )
             for v, w in zip(variables_array_list, normalized_weights):
-                v[-2] = w
+                v[-3] = w
             log_sumw_per_dataset(
-                [v[-2] for v in variables_array_list],
+                [v[-3] for v in variables_array_list],
                 dataset_names,
                 "after normalization of each dataset to sum 1",
             )
@@ -439,8 +445,8 @@ def get_variables(
         # training loss. Without this, classes with tiny physical weights
         # (ttbar, ~weight/sum_genweights) contribute almost nothing to the
         # loss and are never learned.
-        # weights is the second-to-last row: input_variables + ["weights", "kl"]
-        variables_array[-2] = variables_array[-2] / np.mean(variables_array[-2])
+        # weights is the third-to-last row: input_variables + ["weights", "kl", "dataset_idx"]
+        variables_array[-3] = variables_array[-3] / np.mean(variables_array[-3])
 
         logger.info(f"variables_array complete shape {variables_array.shape}")
 
@@ -449,6 +455,7 @@ def get_variables(
         weights = []
         dataset_names = []
         kl_values = []
+        dataset_idx_values = []
         variables_dict = {}
         for i, file_name in enumerate(files):
             logger.info(f"Loading file {file_name}")
@@ -578,6 +585,14 @@ def get_variables(
                                                 f"sum_genweights: {file['sum_genweights'][dataset]}"
                                             )
                                     dataset_names.append(dataset)
+                                    # index of the dataset in the class dataset list, to
+                                    # split the evaluation per dataset
+                                    dataset_idx_values.append(
+                                        np.full(
+                                            len(weights[-1]),
+                                            dataset_list.index(dataset),
+                                        )
+                                    )
                                     logger.info(f"weight: {weights[-1]}")
 
         if len(vars_array) < 1:
@@ -625,6 +640,9 @@ def get_variables(
 
         # Concatenate multiple kl values
         kl_values = np.concatenate(kl_values, axis=0)
+
+        # Concatenate multiple dataset indices
+        dataset_idx_values = np.concatenate(dataset_idx_values, axis=0)
 
         for k in input_variables:
             logger.info(k)
@@ -708,6 +726,7 @@ def get_variables(
 
         weights = np.expand_dims(weights, axis=0)
         kl_values = np.expand_dims(kl_values, axis=0)
+        dataset_idx_values = np.expand_dims(dataset_idx_values, axis=0)
 
         # normalize the weights to have mean of 1
         log_sumw_per_dataset(
@@ -729,7 +748,9 @@ def get_variables(
 
         logger.info(f"variables_array {variables_array.shape}")
         logger.info(f"weights {weights.shape}")
-        variables_array = np.concatenate([variables_array, weights, kl_values], axis=0)
+        variables_array = np.concatenate(
+            [variables_array, weights, kl_values, dataset_idx_values], axis=0
+        )
         logger.info(f"variables_array complete {variables_array.shape}")
 
     # concatenate all the variables into a single torch tensor
@@ -760,9 +781,10 @@ def get_variables(
     idx = np.random.permutation(tot_lenght)
     variables = variables[:, idx]
 
-    # get the kl and remove it from the variables
-    kl_values = variables[-1].unsqueeze(0)
-    variables = variables[:-1]
+    # get the kl and the dataset index and remove them from the variables.
+    # They are kept together as a (2, num_events) tensor of [kl, dataset_idx]
+    kl_values = variables[-2:]
+    variables = variables[:-2]
 
     X = (variables, flag_tensor, kl_values)
     return X, tot_lenght
@@ -986,7 +1008,8 @@ def load_data(cfg, seed):
     X_fts = torch.cat([X[0] for X in X_per_class], dim=1).transpose(1, 0)
     X_lbl = torch.cat([X[1] for X in X_per_class], dim=1).transpose(1, 0).flatten()
     X_clsw = torch.cat(clsw_tensors, dim=1).transpose(1, 0)
-    X_k = torch.cat([X[2] for X in X_per_class], dim=1).transpose(1, 0).flatten()
+    # (num_events, 2) tensor of [kl, dataset_idx]
+    X_k = torch.cat([X[2] for X in X_per_class], dim=1).transpose(1, 0)
 
     logger.info(f"X_fts shape: {X_fts.shape}")
     logger.info(f"X_lbl shape: {X_lbl.shape}")
@@ -1074,7 +1097,12 @@ def load_data(cfg, seed):
     input_size = X_fts.size(1) - 1
 
     class_info = [
-        {"name": c["name"], "lbl": c["lbl"], "class_idx": c["class_idx"]}
+        {
+            "name": c["name"],
+            "lbl": c["lbl"],
+            "class_idx": c["class_idx"],
+            "datasets": list(c["datasets"]),
+        }
         for c in class_defs
     ]
 
