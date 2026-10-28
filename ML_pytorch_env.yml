@@ -2,10 +2,10 @@ name: ML_pytorch
 channels:
   - conda-forge
 dependencies:
-  - python>=3.9
+  - python==3.11
   - pip
   - pytorch>=2.0
   - pytorch-gpu
-  - numpy>=1.23
-  - scipy
+  - numpy>=2.0.0
+  - scipy>=1.10
   - scikit-learn
