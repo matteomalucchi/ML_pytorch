@@ -189,6 +189,33 @@ parser.add_argument(
     help="Save numpy arrays of the output scores",
     action="store_true",
 )
+parser.add_argument(
+    "-k",
+    "--k-folds",
+    default=None,
+    help="Number of folds of the k-fold training (0 or 1 to disable)",
+    type=int,
+)
+parser.add_argument(
+    "-f",
+    "--fold",
+    default=None,
+    help="Train only this fold of the k-fold training (default: all the folds)",
+    type=int,
+)
+parser.add_argument(
+    "--kfold-split",
+    default=None,
+    choices=["random", "event"],
+    help="How to assign the events to the folds: random or by event number (event %% k_folds)",
+    type=str,
+)
+parser.add_argument(
+    "--onnx-ratio",
+    default=None,
+    help="K-fold: build also the ONNX model of the average of the ratios of the outputs of the folds (reweighting)",
+    action="store_true",
+)
 
 # parser.print_help()
 args = parser.parse_args()

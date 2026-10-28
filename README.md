@@ -171,6 +171,7 @@ A ready-to-edit multi-class example is provided at `configs/hh4b_sig_bkg_classif
 | `eval`, `roc`, `histos`, `history`, `onnx` | toggle the post-training outputs |
 | `gpus` | comma-separated GPU indices, or unset for CPU |
 | `seed` | seed for both event shuffling and weight initialisation (python, numpy and torch, also on GPU) |
+| `k_folds`, `fold`, `kfold_split`, `kfold_event_column`, `onnx_ratio` | k-fold training, see [K-fold training](#k-fold-training) |
 | `deterministic` | use only deterministic algorithms, so that trainings with the same seed are identical also on GPU (slower) |
 | `pad_value` | value marking padded entries (missing objects); must match the PocketCoffea fill value. Used to pad the missing objects and the `None` values of the inputs when loading the dataset, to not count padded objects when creating a missing `<collection>_N` from parquet files and, in `MaskedBatchNorm1d`, to exclude padded entries from the normalisation statistics |
 | `pad_fill_value` | `MaskedBatchNorm1d` only: value assigned to padded entries at the output of the layer, or `"learn"` for a learnable per-feature value. The real values there are standardised and then scaled/shifted by the learnable weight and bias, so 0 corresponds to the mean of the real values only at initialisation; a fixed value does not follow the learned scale/shift |
@@ -288,6 +289,12 @@ ml_train [OPTIONS]
   -s, --seed STR               Seed for shuffling and weight initialisation
   -g, --gpus STR               GPU indices, comma-separated (e.g. "0,1")
 
+K-fold training (see K-fold training)
+  -k, --k-folds INT            Number of folds (0 or 1: no k-folding)
+  -f, --fold INT               Train only this fold (default: all the folds, then merge)
+  --kfold-split {random,event} Assign the folds randomly or by event number % k_folds
+  --onnx-ratio                 Also build the average-of-ratios k-fold ONNX model
+
 Evaluation / output
   -ev, --eval                  Evaluate the model on the test set (no training)
   -em, --eval-model PATH       Path to an existing model to evaluate instead of training
@@ -335,6 +342,51 @@ ml_train -c configs/example_DNN_config_ggF_VBF.yml \
 
 `-ev` skips all training epochs; `-em` points to the saved state-dict (`.pt` file). The config file is still required to reconstruct the model architecture and locate the test data.
 
+## K-fold training
+
+With `k_folds: K` (K ≥ 2, or `-k K`) the events are split into K folds and K models are trained: the model of fold `k` is **tested on fold `k`** and trained/validated on all the other events. Every event therefore gets an unbiased (out-of-fold) score, and the K models can be combined into a single ONNX model.
+
+```yaml
+k_folds: 5
+kfold_split: random          # or: event
+kfold_event_column: event    # used with kfold_split: event
+onnx_ratio: False            # also build the average-of-ratios ONNX (reweighting)
+train_fraction: 0.8          # the non-test events are split into training and
+val_fraction: 0.2            # validation with the ratio train : val
+```
+
+* **Splitting.** With `kfold_split: random` the events are assigned randomly to the folds, after the seeded shuffle. With `kfold_split: event` the fold of an event is `event % K`, computed from the `kfold_event_column` column (it must be saved in the input files). With `K = 2` this is the even/odd split. `test_fraction` is not used; the sum of the three fractions is still the fraction of the events read from the files.
+* **Seeds.** The event shuffle and the folds depend only on `seed`, so they are identical for all the folds (and for folds trained in separate jobs). The weight initialisation and dropout of fold `k` use the seed `seed * K + k`, so every fold starts from different weights.
+* **Oversampling.** `oversample_split` and `split_oversample` both oversample **after** the split into folds, separately in the training and validation datasets. Copies of an event can never be in both the training and the test datasets. The test fold is never oversampled, so each event gets exactly one out-of-fold score; the test events get the class-balancing weights instead. `undersample` drops events before the split, as usual.
+
+### Running
+
+```bash
+# all the folds one after the other, then merged
+ml_train -c configs/hh4b_sig_bkg_classifier/example_DNN_config_kfold.yml -k 5 -o out/kfold
+
+# a single fold (e.g. in a separate job), then merge the folds
+ml_train -c config.yml -k 5 --fold 3 -o out/kfold/fold_3
+ml_kfold_merge -i out/kfold -c config.yml -k 5 [--ratio]
+
+# Slurm: the folds in parallel (here on 1 node) and merged at the end
+./jobs/run_training.sh -c /full/path/config.yml -o /full/path/out/kfold -k 5 [--ratio] [-p NODES]
+```
+
+All the folds use the same `seed`. `--load-model`/`--eval-model` work for one fold at a time (with `--fold`).
+
+### Outputs
+
+* `fold_<k>/`: a normal training output for each fold, including `score_lbl_array.npz`. Here the test scores are the scores of the events of fold `k`, with no event dropped.
+* `kfold/kfold_summary.yml`: best epoch and validation/test loss and accuracy of each fold, with their mean and standard deviation.
+* `kfold/score_lbl_array_oof.npz`: the out-of-fold scores of all the events (`score_lbl_array_test`, plus `fold_test` with the fold of each event), and the training scores of all the folds. The histograms and ROC curves of these scores are saved in `kfold/`.
+* `kfold_onnx/folds/model_fold<k>.onnx`: the best model of each fold.
+* `kfold_onnx/average_model_kfold.onnx`: the average of the outputs of the K models (input `args_0`, output `avg_score`). Use it for events that were not used in the training.
+* `kfold_onnx/average_ratio_model_kfold.onnx` (`onnx_ratio: True` or `--ratio`): the average over the folds of the ratio of the outputs (`p/(1-p)` for one output node, `p1/p0` for two), output `avg_w`, for the background reweighting. Equivalent to `ml_onnx -ar` on the fold models. For the 4-node multiclass morphing, use `ml_onnx -ar -mc -i kfold_onnx/folds` instead.
+* `kfold_onnx/event_fold_model_kfold.onnx` (and `event_fold_ratio_model_kfold.onnx` with the ratio), only with `kfold_split: event`. It takes two inputs: `args_0`, the input variables `(N, n_features)` float32, and `event`, the event number `(N,)` int64. Each event is evaluated with the model of fold `event % K`, which is the model that was **not** trained on it. Use it for the events that were used in the training (e.g. the training regions).
+
+The combined models are checked against the per-fold models with onnxruntime when they are built. To use the per-fold models by hand with `K = 2`, apply `model_fold0.onnx` to the **even** events and `model_fold1.onnx` to the **odd** events.
+
 ## Training on a cluster with Slurm
 
 ### Generic training script (recommended)
@@ -353,6 +405,8 @@ Optional:
   -p, --nodes INT         Number of parallel Slurm nodes/array jobs (default: 1)
   -s, --init-seed INT     Starting random seed (default: 0)
   --ratio                 Average-ratio ONNX aggregation (ml_onnx -ar), e.g. for bkg reweighting
+  -k, --k-folds INT       K-fold training: one training per fold (same seed), in OUTDIR/fold_<k>,
+                          merged with ml_kfold_merge (see K-fold training)
   --load-last             Resume from latest checkpoint
   --no-slurm              Run directly without Slurm (for local testing)
   -- EXTRA                Extra arguments forwarded to ml_train

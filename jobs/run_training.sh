@@ -22,6 +22,8 @@
 #   -p, --nodes INT         Number of parallel Slurm nodes/array jobs (default: 1)
 #   -s, --init-seed INT     Starting random seed (default: 0)
 #   --ratio                 Use average-ratio ONNX aggregation (ml_onnx -ar)
+#   -k, --k-folds INT       K-fold training: train the K folds (one job each,
+#                           same seed) and merge them with ml_kfold_merge
 #   --load-last             Resume from latest checkpoint instead of restarting
 #   --time HH:MM:SS         Slurm wall-clock time limit (default: 8:30:00)
 #   --mem-per-cpu MB        Slurm memory per CPU in MB (default: 4000)
@@ -34,6 +36,7 @@ N_TRAININGS=1
 NODES=1
 INIT_SEED=0
 RATIO=false
+K_FOLDS=0
 LOAD_LAST=false
 MODE="train"
 NO_SLURM=false
@@ -58,6 +61,9 @@ Optional:
   -p, --nodes INT         Number of parallel Slurm nodes/array jobs (default: 1)
   -s, --init-seed INT     Starting random seed (default: 0)
   --ratio                 Average-ratio ONNX aggregation (ml_onnx -ar)
+  -k, --k-folds INT       K-fold training: train the K folds in parallel (same
+                          seed, outputs in OUTDIR/fold_<k>) and merge them with
+                          ml_kfold_merge (not combinable with -n > 1)
   --load-last             Resume from latest checkpoint
   --time HH:MM:SS         Slurm wall-clock time limit (default: 8:30:00)
   --mem-per-cpu MB        Slurm memory per CPU in MB (default: 4000)
@@ -75,6 +81,9 @@ Examples:
   # 5 trainings on 1 node, just convert (no ratio)
   $0 -c /full/path/DNN_config.yml -o /full/path/out -n 5
 
+  # 5-fold training, the 5 folds in parallel on 1 node, with ratio ONNX models
+  $0 -c /full/path/DNN_config.yml -o /full/path/out -k 5 --ratio
+
   # Local test
   $0 -c /full/path/DNN_config.yml -o /full/path/out --no-slurm
 EOF
@@ -90,6 +99,7 @@ while [[ $# -gt 0 ]]; do
         -p|--nodes)        NODES="$2"; shift 2 ;;
         -s|--init-seed)    INIT_SEED="$2"; shift 2 ;;
         --ratio)           RATIO=true; shift ;;
+        -k|--k-folds)      K_FOLDS="$2"; shift 2 ;;
         --load-last)       LOAD_LAST=true; shift ;;
         --time)            SLURM_TIME="$2"; shift 2 ;;
         --mem-per-cpu)     SLURM_MEM="$2"; shift 2 ;;
@@ -113,6 +123,15 @@ if [[ ! -f "$CONFIG_FILE" ]]; then
     exit 1
 fi
 
+# K-fold training: one training per fold, all with the same seed
+if [[ "$K_FOLDS" -ge 2 ]]; then
+    if [[ "$N_TRAININGS" -gt 1 && "$N_TRAININGS" -ne "$K_FOLDS" ]]; then
+        echo "Error: --k-folds cannot be combined with --n-trainings > 1."
+        exit 1
+    fi
+    N_TRAININGS="$K_FOLDS"
+fi
+
 # With --no-slurm, collapse to a single-node run
 [[ "$NO_SLURM" == true ]] && NODES=1
 
@@ -120,7 +139,14 @@ TRAININGS_PER_NODE=$(( (N_TRAININGS + NODES - 1) / NODES ))
 
 
 # ─── Helper: canonical run directory for a given seed ────────────────────────
-run_path() { printf "%s/run%02d" "$OUT_DIR" "$1"; }
+# (with --k-folds the index is the fold: OUT_DIR/fold_<seed - INIT_SEED>)
+run_path() {
+    if [[ "$K_FOLDS" -ge 2 ]]; then
+        printf "%s/fold_%d" "$OUT_DIR" "$(( $1 - INIT_SEED ))"
+    else
+        printf "%s/run%02d" "$OUT_DIR" "$1"
+    fi
+}
 
 # ─── Build NUL-delimited arg list for self-submission ─────────────────────────
 # Uses NUL delimiter so paths with spaces are handled correctly.
@@ -132,6 +158,7 @@ build_submit_args() {
         --n-trainings "$N_TRAININGS"
         --nodes "$NODES"
         --init-seed "$INIT_SEED"
+        --k-folds "$K_FOLDS"
         --time "$SLURM_TIME"
         --mem-per-cpu "$SLURM_MEM"
         --cpus "$SLURM_CPUS"
@@ -249,7 +276,11 @@ run_one_training() {
         "${load_model_args[@]}"
     )
     [[ "$LOAD_LAST" != true ]] && train_args+=(--overwrite)
-    [[ "$N_TRAININGS" -gt 1 ]] && train_args+=(-s "$seed")
+    if [[ "$K_FOLDS" -ge 2 ]]; then
+        train_args+=(-s "$INIT_SEED" --k-folds "$K_FOLDS" --fold "$(( seed - INIT_SEED ))")
+    elif [[ "$N_TRAININGS" -gt 1 ]]; then
+        train_args+=(-s "$seed")
+    fi
     [[ ${#EXTRA_ARGS[@]} -gt 0 ]] && train_args+=("${EXTRA_ARGS[@]}")
 
     local comet_args=()
@@ -267,6 +298,17 @@ run_one_training() {
 
 # ─── Post-processing: collect best models + ONNX aggregation ──────────────────
 run_postproc() {
+    if [[ "$K_FOLDS" -ge 2 ]]; then
+        # out-of-fold scores, summary of the folds and combined ONNX models
+        # the config of the folds is read from OUT_DIR/fold_0, with the ml_train
+        # options used for the trainings
+        local merge_args=(-i "$OUT_DIR" -k "$K_FOLDS")
+        [[ "$RATIO" == true ]] && merge_args+=(--ratio)
+        echo "Merging the ${K_FOLDS} folds in ${OUT_DIR}..."
+        ml_kfold_merge "${merge_args[@]}"
+        return
+    fi
+
     local best_models_dir="${OUT_DIR}/best_models"
     mkdir -p "$best_models_dir"
 
@@ -304,6 +346,7 @@ echo "  Trainings:  ${N_TRAININGS} (init seed: ${INIT_SEED})"
 echo "  Nodes:      ${NODES}"
 echo "  Mode:       ${MODE}"
 echo "  Ratio:      ${RATIO}"
+[[ "$K_FOLDS" -ge 2 ]] && echo "  K-folds:    ${K_FOLDS}"
 [[ -n "${SLURM_ARRAY_TASK_ID:-}" ]] && echo "  Array task: ${SLURM_ARRAY_TASK_ID}"
 
 mkdir -p "$OUT_DIR"

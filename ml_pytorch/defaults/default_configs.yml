@@ -82,6 +82,40 @@ val_fraction: 0.25
 test_fraction: 0.25
 
 # ---------------------------------------------------------------------------
+# K-fold training
+# ---------------------------------------------------------------------------
+# With k_folds >= 2 the events are split into k_folds folds: the model of fold
+# k is tested on the events of fold k and trained/validated on all the other
+# events, which are split into training and validation with the ratio
+# train_fraction : val_fraction (test_fraction is not used, the sum of the
+# three fractions is still the fraction of the events that is read). In this
+# way every event gets an unbiased (out-of-fold) score. The event shuffling
+# and the folds are fixed by seed (the same for all the folds), while the
+# weight initialisation of fold k uses the seed seed * k_folds + k.
+# The outputs of each fold go to <output_dir>/fold_<k>, the combined
+# out-of-fold results to <output_dir>/kfold and the ONNX models (per fold and
+# combined) to <output_dir>/kfold_onnx. 0 or 1 disables the k-folding.
+k_folds: 0
+# Fold to train (0 ... k_folds - 1). If null, all the folds are trained one
+# after the other and then merged (see also jobs/run_training.sh --k-folds to
+# train them in parallel and ml_kfold_merge to merge them).
+fold: null
+# How the events are assigned to the folds:
+#   random: randomly, after the (seeded) shuffling of the events
+#   event : fold = event number % k_folds, using the kfold_event_column column
+#           (e.g. with k_folds 2 the even and odd events). The model of fold k
+#           has not seen the events with event % k_folds == k, so it is the
+#           one to apply to them; a combined ONNX model taking the event
+#           number as second input does this automatically.
+kfold_split: random
+# Column with the event number, used with kfold_split: event.
+kfold_event_column: event
+# Build also the ONNX models of the average of the ratio of the outputs of
+# the folds (p / (1 - p) for 1 output node, p1 / p0 for 2), used for the
+# background reweighting.
+onnx_ratio: False
+
+# ---------------------------------------------------------------------------
 # Event weights and class balancing
 # ---------------------------------------------------------------------------
 # The event weights are first divided by the sum of genweights of their
@@ -102,6 +136,12 @@ normalize_weights_per_dataset: False
 # them is used, the class weights above are set to 1.
 # oversample_split: replicate the signal events to match the number of
 #   background events before the train/val/test split.
+#   With k_folds >= 2, oversample_split and split_oversample are equivalent:
+#   the oversampling is done after the split into folds, separately in the
+#   training and validation datasets, so that copies of an event never end up
+#   both in the training and test datasets. The test fold is never
+#   oversampled (every event gets one out-of-fold score): its events get the
+#   class weights above instead.
 oversample_split: False
 # split_oversample: replicate the signal events to match the number of
 #   background events separately in the train, val and test datasets

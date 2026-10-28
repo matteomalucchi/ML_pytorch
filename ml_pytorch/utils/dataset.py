@@ -249,6 +249,29 @@ def count_objects(array, schema, n_variable, pad_value):
     return ak.fill_none(ak.sum(is_real, axis=1), 0)
 
 
+def get_fold_id(columns, event_column, k_folds, num_events):
+    """k-fold index ``event % k_folds`` of each event, computed from the
+    ``event_column`` column of ``columns``, or -1 for all the events if
+    ``event_column`` is None. The modulo is computed on the int64 event
+    numbers, which are not exactly representable as float32."""
+    if event_column is None:
+        return np.full(num_events, -1, dtype=np.int64)
+    available = columns.fields if isinstance(columns, ak.Array) else list(columns.keys())
+    if event_column not in available:
+        raise ValueError(
+            f"Column {event_column} (kfold_event_column) needed for kfold_split "
+            f"event not found in the input files. Available columns: {available}"
+        )
+    events = columns[event_column]
+    events = np.asarray(ak.to_numpy(events) if isinstance(events, ak.Array) else events)
+    if len(events) != num_events:
+        raise ValueError(
+            f"Column {event_column} has {len(events)} entries but there are "
+            f"{num_events} events"
+        )
+    return events.astype(np.int64) % k_folds
+
+
 def get_variables(
     files,
     parquet_files,
@@ -263,11 +286,16 @@ def get_variables(
     novars=False,
     pad_value=-999.0,
     normalize_per_dataset=False,
+    event_column=None,
+    k_folds=0,
 ):
     """Load the input features and weights for a single class.
 
     ``class_label`` is the integer used as the per-event target (typically the
     internal class index 0..C-1).
+
+    If ``event_column`` is given, the k-fold index ``event % k_folds`` of each
+    event is computed from that column, otherwise it is set to -1.
     """
     if data_format == "root":
         raise ValueError("Not updated for root format!")
@@ -397,6 +425,9 @@ def get_variables(
             # add the kl value
             variables_array["kl"] = np.full(len(variables_array), kl_val)
             variables_array["dataset_idx"] = np.full(len(variables_array), dataset_idx)
+            variables_array["fold_id"] = get_fold_id(
+                jagged_variables_array, event_column, k_folds, len(variables_array)
+            )
 
             # concatenate in a single numpy matrix of shape (num_variables, num_events)
             # the None values of the inputs are padded with pad_value
@@ -404,9 +435,12 @@ def get_variables(
                 [
 
                     ak.to_numpy(ak.fill_none(variables_array[f], pad_value))
-                    for f in input_variables + ["weights", "kl", "dataset_idx"]
+                        for f in input_variables
                 ]
-                + [ak.to_numpy(variables_array[f]) for f in ["weights", "kl"]]
+                + [
+                    ak.to_numpy(variables_array[f])
+                    for f in ["weights", "kl", "dataset_idx", "fold_id"]
+                ]
             )
 
             logger.info(f"variables_array complete shape {variables_array.shape}")
@@ -417,19 +451,20 @@ def get_variables(
             raise ValueError("No parquet data loaded")
 
         if normalize_per_dataset:
-            # the weights are the third to last row (before kl and dataset_idx)
+            # the weights are the fourth to last row (before kl, dataset_idx
+            # and fold_id)
             log_sumw_per_dataset(
-                [v[-3] for v in variables_array_list],
+                [v[-4] for v in variables_array_list],
                 dataset_names,
                 "before normalization of each dataset to sum 1",
             )
             normalized_weights = normalize_weights_per_dataset(
-                [v[-3] for v in variables_array_list], dataset_names
+                [v[-4] for v in variables_array_list], dataset_names
             )
             for v, w in zip(variables_array_list, normalized_weights):
-                v[-3] = w
+                v[-4] = w
             log_sumw_per_dataset(
-                [v[-3] for v in variables_array_list],
+                [v[-4] for v in variables_array_list],
                 dataset_names,
                 "after normalization of each dataset to sum 1",
             )
@@ -445,8 +480,8 @@ def get_variables(
         # training loss. Without this, classes with tiny physical weights
         # (ttbar, ~weight/sum_genweights) contribute almost nothing to the
         # loss and are never learned.
-        # weights is the third-to-last row: input_variables + ["weights", "kl", "dataset_idx"]
-        variables_array[-3] = variables_array[-3] / np.mean(variables_array[-3])
+        # weights is the fourth-to-last row: input_variables + ["weights", "kl", "dataset_idx", "fold_id"]
+        variables_array[-4] = variables_array[-4] / np.mean(variables_array[-4])
 
         logger.info(f"variables_array complete shape {variables_array.shape}")
 
@@ -644,6 +679,10 @@ def get_variables(
         # Concatenate multiple dataset indices
         dataset_idx_values = np.concatenate(dataset_idx_values, axis=0)
 
+        fold_id_values = get_fold_id(
+            vars_array, event_column, k_folds, len(weights)
+        )
+
         for k in input_variables:
             logger.info(k)
             # unflatten all the jet variables
@@ -727,6 +766,7 @@ def get_variables(
         weights = np.expand_dims(weights, axis=0)
         kl_values = np.expand_dims(kl_values, axis=0)
         dataset_idx_values = np.expand_dims(dataset_idx_values, axis=0)
+        fold_id_values = np.expand_dims(fold_id_values, axis=0)
 
         # normalize the weights to have mean of 1
         log_sumw_per_dataset(
@@ -749,7 +789,8 @@ def get_variables(
         logger.info(f"variables_array {variables_array.shape}")
         logger.info(f"weights {weights.shape}")
         variables_array = np.concatenate(
-            [variables_array, weights, kl_values, dataset_idx_values], axis=0
+            [variables_array, weights, kl_values, dataset_idx_values, fold_id_values],
+            axis=0,
         )
         logger.info(f"variables_array complete {variables_array.shape}")
 
@@ -781,10 +822,11 @@ def get_variables(
     idx = np.random.permutation(tot_lenght)
     variables = variables[:, idx]
 
-    # get the kl and the dataset index and remove them from the variables.
-    # They are kept together as a (2, num_events) tensor of [kl, dataset_idx]
-    kl_values = variables[-2:]
-    variables = variables[:-2]
+    # get the kl, the dataset index and the k-fold index and remove them from
+    # the variables. They are kept together as a (3, num_events) tensor of
+    # [kl, dataset_idx, fold_id]
+    kl_values = variables[-3:]
+    variables = variables[:-3]
 
     X = (variables, flag_tensor, kl_values)
     return X, tot_lenght
@@ -857,6 +899,17 @@ def load_data(cfg, seed):
 
     assert total_fraction_of_events <= 1.0, "Fractions must sum to less than 1.0"
 
+    k_folds = cfg.k_folds or 0
+    kfold = k_folds >= 2
+    if kfold:
+        check_kfold_cfg(cfg)
+        logger.info(
+            f"K-fold training: fold {cfg.fold} of {k_folds}, split {cfg.kfold_split}"
+        )
+    event_column = (
+        cfg.kfold_event_column if kfold and cfg.kfold_split == "event" else None
+    )
+
     logger.debug("Variables: %s", cfg.input_variables)
 
     class_defs = parse_classes(cfg)
@@ -894,6 +947,8 @@ def load_data(cfg, seed):
             cfg.novars,
             cfg.pad_value,
             cfg.normalize_weights_per_dataset,
+            event_column,
+            k_folds,
         )
         if X_per_class and X_class[0].shape[0] != X_per_class[0][0].shape[0]:
             raise ValueError(
@@ -937,7 +992,10 @@ def load_data(cfg, seed):
             f"Number of background events after undersampling {X_per_class[0][0].shape[1]}"
         )
 
-    if cfg.oversample_split:
+    # with the k-folding the oversampling is always done after the split into
+    # folds (see split_kfold), otherwise copies of the same event would end up
+    # both in the training and test datasets
+    if cfg.oversample_split and not kfold:
         if is_binary:
             X_bkg = X_per_class[0]
             X_sig = X_per_class[1]
@@ -986,8 +1044,9 @@ def load_data(cfg, seed):
             f"Class {c['name']} (idx={c['class_idx']}): n_events={n}, sum_weights={sumw}"
         )
 
+    balance_weights = [n_total / (num_classes * sw) for sw in sumw_per_class]
     if not cfg.oversample_split and not cfg.split_oversample and not cfg.undersample:
-        class_weights = [n_total / (num_classes * sw) for sw in sumw_per_class]
+        class_weights = balance_weights
     else:
         class_weights = [1.0 for _ in range(num_classes)]
 
@@ -1008,8 +1067,17 @@ def load_data(cfg, seed):
     X_fts = torch.cat([X[0] for X in X_per_class], dim=1).transpose(1, 0)
     X_lbl = torch.cat([X[1] for X in X_per_class], dim=1).transpose(1, 0).flatten()
     X_clsw = torch.cat(clsw_tensors, dim=1).transpose(1, 0)
-    # (num_events, 2) tensor of [kl, dataset_idx]
+    # (num_events, 3) tensor of [kl, dataset_idx, fold_id]
     X_k = torch.cat([X[2] for X in X_per_class], dim=1).transpose(1, 0)
+    # (num_events, 1) tensor of the class weights that balance the classes,
+    # used for the (never oversampled) test fold of the k-fold training
+    X_clsw_bal = torch.cat(
+        [
+            torch.full((1, X[0].shape[1]), w, dtype=torch.float32)
+            for X, w in zip(X_per_class, balance_weights)
+        ],
+        dim=1,
+    ).transpose(1, 0)
 
     logger.info(f"X_fts shape: {X_fts.shape}")
     logger.info(f"X_lbl shape: {X_lbl.shape}")
@@ -1024,6 +1092,24 @@ def load_data(cfg, seed):
     X_lbl = X_lbl[idx]
     X_clsw = X_clsw[idx]
     X_k = X_k[idx]
+    X_clsw_bal = X_clsw_bal[idx]
+
+    if kfold:
+        train_dataset, val_dataset, test_dataset = split_kfold(
+            X_fts, X_lbl, X_clsw, X_clsw_bal, X_k, cfg, seed, is_binary
+        )
+        return make_loaders(
+            cfg,
+            train_dataset,
+            val_dataset,
+            test_dataset,
+            batch_size,
+            X_fts.size(1) - 1,
+            num_classes,
+            class_defs,
+            # every event of the test fold must get a score
+            drop_last_test=False,
+        )
 
     train_size = math.floor(tot_num_events * cfg.train_fraction)
     val_size = math.floor(tot_num_events * cfg.val_fraction)
@@ -1057,6 +1143,32 @@ def load_data(cfg, seed):
         val_dataset = oversample_dataset(val_dataset, is_binary)
         test_dataset = oversample_dataset(test_dataset, is_binary)
 
+    # remove 1 because of the weights
+    input_size = X_fts.size(1) - 1
+
+    return make_loaders(
+        cfg,
+        train_dataset,
+        val_dataset,
+        test_dataset,
+        batch_size,
+        input_size,
+        num_classes,
+        class_defs,
+    )
+
+
+def make_loaders(
+    cfg,
+    train_dataset,
+    val_dataset,
+    test_dataset,
+    batch_size,
+    input_size,
+    num_classes,
+    class_defs,
+    drop_last_test=True,
+):
     training_loader = None
     val_loader = None
     test_loader = None
@@ -1088,13 +1200,10 @@ def load_data(cfg, seed):
             batch_size=batch_size,
             shuffle=False,
             num_workers=cfg.num_workers,
-            drop_last=True,
+            drop_last=drop_last_test,
             pin_memory=cfg.pin_memory,
         )
         logger.info("Test loader size: %d", len(test_loader))
-
-    # remove 1 because of the weights
-    input_size = X_fts.size(1) - 1
 
     class_info = [
         {
@@ -1115,6 +1224,85 @@ def load_data(cfg, seed):
         num_classes,
         class_info,
     )
+
+
+def check_kfold_cfg(cfg):
+    if cfg.fold is None or not 0 <= cfg.fold < cfg.k_folds:
+        raise ValueError(
+            f"fold must be between 0 and k_folds - 1 = {cfg.k_folds - 1}, got {cfg.fold}"
+        )
+    if cfg.kfold_split not in ["random", "event"]:
+        raise ValueError(
+            f"kfold_split must be random or event, got {cfg.kfold_split}"
+        )
+    if cfg.train_fraction <= 0 or cfg.val_fraction <= 0:
+        raise ValueError(
+            "train_fraction and val_fraction must be positive with the k-folding"
+        )
+
+
+def split_kfold(X_fts, X_lbl, X_clsw, X_clsw_bal, X_k, cfg, seed, is_binary):
+    """Split the (already shuffled) events for the fold ``cfg.fold`` of the
+    k-fold training.
+
+    The test dataset are the events of the fold, the other events are split
+    into training and validation with the ratio train_fraction : val_fraction.
+    The test events get the class weights that balance the classes and are
+    never oversampled, the training and validation datasets are oversampled
+    separately if oversample_split or split_oversample is set.
+    """
+    k_folds = cfg.k_folds
+    fold = cfg.fold
+    tot_num_events = X_fts.shape[0]
+
+    if cfg.kfold_split == "event":
+        fold_id = X_k[:, 2].to(torch.int64)
+    else:
+        # the events are already shuffled with the seed, so this is a random
+        # assignment that is the same for all the folds
+        fold_id = torch.arange(tot_num_events) % k_folds
+        X_k = X_k.clone()
+        X_k[:, 2] = fold_id.to(X_k.dtype)
+
+    for k in range(k_folds):
+        logger.info(f"Fold {k}: {int((fold_id == k).sum())} events")
+
+    test_idx = torch.nonzero(fold_id == fold).flatten()
+    other_idx = torch.nonzero(fold_id != fold).flatten()
+
+    gen = torch.Generator()
+    gen.manual_seed(int(seed))
+    other_idx = other_idx[torch.randperm(len(other_idx), generator=gen)]
+    train_size = round(
+        len(other_idx) * cfg.train_fraction / (cfg.train_fraction + cfg.val_fraction)
+    )
+    train_idx = other_idx[:train_size]
+    val_idx = other_idx[train_size:]
+
+    logger.info(f"Total size: {tot_num_events}")
+    logger.info(f"Training size: {len(train_idx)}")
+    logger.info(f"Validation size: {len(val_idx)}")
+    logger.info(f"Test size (fold {fold}): {len(test_idx)}")
+
+    train_dataset = torch.utils.data.TensorDataset(
+        X_fts[train_idx], X_lbl[train_idx], X_clsw[train_idx], X_k[train_idx]
+    )
+    val_dataset = torch.utils.data.TensorDataset(
+        X_fts[val_idx], X_lbl[val_idx], X_clsw[val_idx], X_k[val_idx]
+    )
+    test_dataset = torch.utils.data.TensorDataset(
+        X_fts[test_idx], X_lbl[test_idx], X_clsw_bal[test_idx], X_k[test_idx]
+    )
+
+    if cfg.oversample_split or cfg.split_oversample:
+        logger.info(
+            "Performing oversampling after the split into folds, separately "
+            "in the training and validation datasets (not in the test fold)"
+        )
+        train_dataset = oversample_dataset(train_dataset, is_binary)
+        val_dataset = oversample_dataset(val_dataset, is_binary)
+
+    return train_dataset, val_dataset, test_dataset
 
 
 def root_to_local(path_or_url: str):
