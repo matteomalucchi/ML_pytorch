@@ -1,5 +1,7 @@
 import torch
+import numpy as np
 import os
+import random
 import time
 import logging
 
@@ -11,6 +13,27 @@ DEBUG = False
 def get_model_parameters_number(model):
     params_num = sum(p.numel() for p in model.parameters() if p.requires_grad)
     return params_num
+
+
+def set_seed(seed, deterministic=False):
+    """Seed the python, numpy and torch (CPU and GPU) random number generators.
+
+    If deterministic is True, only deterministic algorithms are used, so that
+    trainings with the same seed are reproducible also on GPU.
+    """
+    seed = int(seed)
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)  # seeds also all the GPUs
+
+    if deterministic:
+        # needed by cuBLAS for deterministic results, must be set before the
+        # first CUDA call
+        os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+        torch.use_deterministic_algorithms(True)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+    logger.info(f"Random seed set to {seed} (deterministic algorithms: {deterministic})")
 
 
 def loop_one_batch(
@@ -39,7 +62,7 @@ def loop_one_batch(
     type_eval,
 ):
     inputs, labels, class_weights, kl_values = data
-    
+
     inputs = inputs.to(device, non_blocking=True)
     labels = labels.to(device, non_blocking=True)
     class_weights = class_weights.to(device, non_blocking=True)
@@ -47,7 +70,7 @@ def loop_one_batch(
 
     event_weights = inputs[:, -1]
     inputs = inputs[:, :-1]
-    weights = event_weights * class_weights.flatten()
+    weights = (event_weights * class_weights.flatten()).clamp(min=0)
 
     # compute the outputs of the model
     outputs = model(inputs)
@@ -57,8 +80,8 @@ def loop_one_batch(
         y_pred = torch.round(outputs)
 
     else:
-        y_pred = outputs.argmax(dim=1)
         labels = labels.type(dtype=torch.long)
+        y_pred = outputs.argmax(dim=1)
 
     # Compute the accuracy
     correct = ((y_pred == labels) * weights).sum().item()
@@ -395,30 +418,42 @@ def eval_model(model, loader, loss_fn, type_eval, device, best_epoch):
     avg_loss = tot_loss / len(loader)
     avg_accuracy = tot_correct / tot_num
 
-    if torch.any(all_scores < 0) or torch.any(all_scores > 1):
-        if all_scores.shape[1] == 2:
-            all_scores = torch.nn.functional.softmax(all_scores, dim=1)
-        elif all_scores.shape[1] == 1:
-            all_scores = torch.nn.functional.sigmoid(all_scores)
-    if all_scores.shape[1] == 2:
-        all_scores = all_scores[:, -1]
-    elif all_scores.shape[1] > 2:
-        raise ValueError("The number of output nodes is not 1 or 2")
+    # the outputs of single-node models are flattened in loop_one_batch
+    if all_scores.dim() == 1:
+        all_scores = all_scores.view(-1, 1)
 
-    # concatenate all scores and labels
-    all_scores = all_scores.view(-1, 1)
+    # Normalize raw logits into probabilities so that the saved scores live
+    # in [0, 1] regardless of the model architecture.
+    if torch.any(all_scores < 0) or torch.any(all_scores > 1):
+        if all_scores.shape[1] == 1:
+            all_scores = torch.nn.functional.sigmoid(all_scores)
+        else:
+            all_scores = torch.nn.functional.softmax(all_scores, dim=1)
+
+    # For backward compatibility with the binary sig/bkg case (1 or 2 output
+    # nodes) we collapse to a single column containing the signal probability.
+    # For genuine multi-class outputs (>=3) we keep all class probabilities.
+    if all_scores.shape[1] == 2:
+        all_scores = all_scores[:, -1].view(-1, 1)
+    elif all_scores.shape[1] == 1:
+        all_scores = all_scores.view(-1, 1)
+
     all_labels = all_labels.view(-1, 1)
     all_weights = all_weights.view(-1, 1)
-    all_kl_values = all_kl_values.view(-1, 1)
+    # the kl values are stored together with the dataset index as [kl, dataset_idx]
+    all_dataset_idx = all_kl_values[:, 1].to(torch.int64)
+    all_kl_values = all_kl_values[:, 0].view(-1, 1)
 
-    score_lbl_tensor = torch.cat((all_scores, all_labels, all_weights, all_kl_values), 1)
+    score_lbl_tensor = torch.cat(
+        (all_scores, all_labels, all_weights, all_kl_values), 1
+    )
     logger.info(f"score_lbl_tensor shape: {score_lbl_tensor.shape}")
 
     # detach the tensor from the graph and convert to numpy array
     score_lbl_array = score_lbl_tensor.numpy()
     # score_lbl_array = score_lbl_tensor.cpu().detach().numpy()
 
-    return score_lbl_array, avg_loss, avg_accuracy
+    return score_lbl_array, all_dataset_idx.numpy(), avg_loss, avg_accuracy
 
 
 def export_onnx(model, model_name, batch_size, input_size, device, onnx_model_name):
@@ -426,6 +461,8 @@ def export_onnx(model, model_name, batch_size, input_size, device, onnx_model_na
     logger.info(f"Exporting model to ONNX format at {model_dir}/{onnx_model_name}.onnx")
     if hasattr(model, "export_model"):
         model = model.export_model(model)
+    # export with the running statistics of the (masked) batch norm
+    model.eval()
 
     # Export the model to ONNX format
     dummy_input = torch.zeros(batch_size, input_size, device=device)

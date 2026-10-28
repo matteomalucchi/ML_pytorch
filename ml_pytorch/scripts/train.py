@@ -2,6 +2,7 @@ import datetime
 import importlib
 import importlib.util
 import os
+import shutil
 import sys
 import time
 
@@ -22,6 +23,7 @@ from ml_pytorch.utils.tools import (
     export_onnx,
     get_model_parameters_number,
     save_pytorch_model,
+    set_seed,
     train_val_one_epoch,
 )
 
@@ -65,7 +67,7 @@ def main():
         if val is not None:
             cfg[key] = val
 
-    if cfg.histos:
+    if cfg.histos or cfg.roc:
         from ml_pytorch.scripts.sig_bkg_eval import (
             plot_kl_distributions,
         )
@@ -93,12 +95,9 @@ def main():
     lumitext = get_lumitext(cfg)
 
     name = main_dir.rstrip("/").split("/")[-1]  # actually run number
-    name_configuration = os.path.basename(cfg_file_name).rsplit(".", 1)[
-        0
-    ]  # split once from right side at . and take first part (should remove ending of file)
-    type_configuration = cfg_file_name.split("/")[
-        -2
-    ]  # Should give name of type by choice of in which folder the config file is saved. Watch out, if we have subfolders.
+    name_configuration = os.path.basename(cfg_file_name).rsplit('.', 1)[0]  # split once from right side at . and take first part (should remove ending of file)
+    if args.comet_token:
+        type_configuration = cfg_file_name.split("/")[-2] if "hh4b" in cfg_file_name.split("/")[-2] else cfg_file_name.split("/")[-3]  # Should give name of type by choice of in which folder the config file is saved. Watch out, if we have subfolders.
 
     best_vloss = 1_000_000.0
     best_vaccuracy = 0.0
@@ -220,6 +219,10 @@ def main():
     else:
         comet_logger = None
 
+    # seed all the random number generators before loading the data and
+    # building the model
+    set_seed(cfg.seed, cfg.deterministic)
+
     # Load data
     (
         training_loader,
@@ -227,6 +230,8 @@ def main():
         test_loader,
         input_size,
         batch_size,
+        num_classes,
+        class_info,
     ) = load_data(cfg, cfg.seed)
 
     # plot the input variable distributions of signal and background before training
@@ -242,6 +247,7 @@ def main():
             log_scale=cfg.input_plots_log,
             comet_logger=comet_logger,
             lumitext=lumitext,
+            class_info=class_info,
         )
         logger.info(f"Input variable distributions saved in {input_plots_dir}")
 
@@ -263,10 +269,38 @@ def main():
         logger=logger, patience=patience, min_delta=min_delta, eval_param=eval_param
     )
 
-    # Get model
-    model, loss_fn, optimizer, scheduler = ML_model.get_model(
-        input_size, device, cfg.learning_rate, cfg.learning_rate_schedule, n_epochs
-    )
+    # Get model. Multi-class capable models accept ``num_classes`` as an
+    # extra parameter; legacy binary models keep the original signature so
+    # we dispatch based on the function signature.
+    import inspect as _inspect
+
+    get_model_sig = _inspect.signature(ML_model.get_model)
+    if "num_classes" in get_model_sig.parameters:
+        pad_kwargs = {
+            k: cfg[k]
+            for k in ["pad_value", "pad_fill_value", "pad_indicators"]
+            if k in get_model_sig.parameters
+        }
+        model, loss_fn, optimizer, scheduler = ML_model.get_model(
+            input_size,
+            num_classes,
+            device,
+            cfg.learning_rate,
+            cfg.learning_rate_schedule,
+            n_epochs,
+            **pad_kwargs,
+        )
+    else:
+        if num_classes > 2:
+            raise ValueError(
+                f"Model {cfg.ML_model} does not support multi-class "
+                f"classification (num_classes={num_classes}). "
+                "Use a model whose get_model accepts a num_classes argument "
+                "(e.g. DNN_multiclass_model)."
+            )
+        model, loss_fn, optimizer, scheduler = ML_model.get_model(
+            input_size, device, cfg.learning_rate, cfg.learning_rate_schedule, n_epochs
+        )
     num_parameters = get_model_parameters_number(model)
 
     logger.info(f"Number of parameters: {num_parameters}")
@@ -485,7 +519,12 @@ def main():
 
         eval_epoch = loaded_epoch if cfg.eval_model else best_epoch
         logger.info("Training dataset\n")
-        score_lbl_array_train, loss_eval_train, accuracy_eval_train = eval_model(
+        (
+            score_lbl_array_train,
+            dataset_idx_train,
+            loss_eval_train,
+            accuracy_eval_train,
+        ) = eval_model(
             model,
             training_loader,
             loss_fn,
@@ -496,7 +535,12 @@ def main():
 
         logger.info("\n")
         logger.info("Test dataset")
-        score_lbl_array_test, loss_eval_test, accuracy_eval_test = eval_model(
+        (
+            score_lbl_array_test,
+            dataset_idx_test,
+            loss_eval_test,
+            accuracy_eval_test,
+        ) = eval_model(
             model,
             test_loader,
             loss_fn,
@@ -525,22 +569,50 @@ def main():
                 f"{main_dir}/score_lbl_array.npz",
                 score_lbl_array_train=score_lbl_array_train,
                 score_lbl_array_test=score_lbl_array_test,
+                dataset_idx_train=dataset_idx_train,
+                dataset_idx_test=dataset_idx_test,
                 train_test_fractions=train_test_fractions,
+                num_classes=np.array(num_classes),
+                class_info=np.array(class_info, dtype=object),
             )
 
         # plot the signal and background distributions
         if cfg.histos or cfg.roc:
-            plot_kl_distributions(
-                score_lbl_array_train,
-                score_lbl_array_test,
-                main_dir,
-                ["all", 1.0],
-                train_test_fractions[1],
+            plot_kwargs = dict(
                 do_histos=cfg.histos,
                 do_roc=cfg.roc,
                 comet_logger=comet_logger,
+                class_info=class_info,
                 lumitext=lumitext,
+                dataset_idx_train=dataset_idx_train,
+                dataset_idx_test=dataset_idx_test,
             )
+            try:
+                plot_kl_distributions(
+                    score_lbl_array_train,
+                    score_lbl_array_test,
+                    main_dir,
+                    ["all", 1.0],
+                    train_test_fractions[1],
+                    **plot_kwargs,
+                )
+            except ValueError as e:
+                # e.g. no background events with kl = 1
+                logger.warning(
+                    f"Plotting for background kl = 1 failed ({type(e).__name__}: {e}). "
+                    "Plotting only for all the background kl values."
+                )
+                # remove the incomplete plots of the failed kl = 1 attempt
+                for prefix in ["sig_bkg", "roc", "calibration"]:
+                    shutil.rmtree(f"{main_dir}/{prefix}_bkgkl_1.00", ignore_errors=True)
+                plot_kl_distributions(
+                    score_lbl_array_train,
+                    score_lbl_array_test,
+                    main_dir,
+                    ["all"],
+                    train_test_fractions[1],
+                    **plot_kwargs,
+                )
 
     # remove ML_model_loaded.py
     # if cfg.load_model or cfg.eval_model:

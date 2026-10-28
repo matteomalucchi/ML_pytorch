@@ -5,6 +5,8 @@ Repository with basic machine learning algorithms implemented in PyTorch.
 The coffea files used as inputs are based on the output of [PocketCoffea](https://github.com/PocketCoffea/PocketCoffea/tree/main). In particular, the framework was developed based on the output of the
 [AnalysisConfigs](https://github.com/matteomalucchi/AnalysisConfigs) repository, which is a collection of analysis configurations for the PocketCoffea framework.
 
+The framework supports both **binary classification** (signal vs background) and **multi-class classification** with an arbitrary number of classes — see [Configuration files](#configuration-files) below.
+
 ## Installation
 
 To create the micromamba environment, you can use the following command:
@@ -55,6 +57,220 @@ To execute an example training, evaluate the model on the test set, plot the his
 ```bash
 ml_train  -c configs/example_DNN_config_ggF_VBF.yml
 ```
+
+## Repository layout
+
+```
+ml_pytorch/
+├── defaults/                # default config, input-variable lists, preprocessing fns
+│   ├── default_configs.yml
+│   └── sig_bkg_dnn_input_variables.py, ...
+├── models/                  # DNN architectures (importable by name from configs)
+│   ├── DNN_model.py                       # binary, 1-node sigmoid + BCELoss
+│   ├── DNN_softmax_reweight_model.py      # binary, 2-node softmax + CrossEntropy
+│   ├── DNN_sigmoid_reweight_model.py      # binary, sigmoid w/ batchnorm + dropout
+│   └── DNN_multiclass_model.py            # multi-class, num_classes-node softmax
+├── scripts/                 # console entry points (train, sig_bkg_eval, plot_history, ...)
+└── utils/                   # dataset loader, training loop, learning-rate schedules
+configs/                     # YAML configuration files grouped by use case
+```
+
+## Configuration files
+
+Configurations are YAML files consumed by `ml_train`. Examples live under `configs/`. The framework supports **two layouts** for declaring training samples; the dataset loader auto-detects which is in use.
+
+### Binary (legacy) layout
+
+Use this when you have exactly two classes (signal vs background):
+
+```yaml
+signal_sample:    [GluGlutoHHto4B_spanet_skimmed]
+signal_dataset:   [GluGlutoHHto4B_spanet_kl-1p00_kt-1p00_c2-0p00_2022_postEE]
+signal_region:    [4b_signal_region]
+
+background_sample:  [DATA_JetMET_JMENano_E_skimmed, DATA_JetMET_JMENano_F_skimmed]
+background_dataset: [DATA_JetMET_JMENano_E_2022_postEE_EraE, DATA_JetMET_JMENano_F_2022_postEE_EraF]
+background_region:  [2b_signal_region_postW]
+
+input_variables: sig_bkg_dnn_input_variables   # module name in ml_pytorch/defaults/
+ML_model: DNN_softmax_reweight_model           # module name in ml_pytorch/models/
+data_format: coffea                            # one of: coffea, parquet, root
+data_dirs: [/path/to/coffea/output/]
+
+batch_size: 512
+epochs: 50
+learning_rate: 1e-3
+learning_rate_schedule: e5_drop75              # see ml_pytorch/utils/learning_rate_schedules.py
+
+train_fraction: 0.7
+val_fraction: 0.2
+test_fraction: 0.1
+
+early_stopping: True
+patience: 5
+min_delta: 1e-5
+eval_param: "loss"                             # or "acc"
+```
+
+Internally background is mapped to class index `0` and signal to class index `1`, matching the previous behaviour of all existing configs and saved models.
+
+### Multi-class layout
+
+For three or more classes, replace the `signal_*` / `background_*` blocks with a `classes` mapping. Each entry becomes one output node:
+
+```yaml
+input_variables: sig_bkg_dnn_input_variables
+ML_model: DNN_multiclass_model
+data_format: coffea
+data_dirs: [/path/to/coffea/output/]
+
+classes:
+  background:
+    sample:  [DATA_JetMET_JMENano_E_skimmed, DATA_JetMET_JMENano_F_skimmed, DATA_JetMET_JMENano_G_skimmed]
+    region:  [2b_signal_region_postW]
+    dataset: [DATA_JetMET_JMENano_E_2022_postEE_EraE, DATA_JetMET_JMENano_F_2022_postEE_EraF, DATA_JetMET_JMENano_G_2022_postEE_EraG]
+    lbl: 0
+  ggF_HH:
+    sample:  [GluGlutoHHto4B_spanet_skimmed]
+    region:  [4b_signal_region]
+    dataset: [GluGlutoHHto4B_spanet_kl-1p00_kt-1p00_c2-0p00_2022_postEE]
+    lbl: 1
+  VBF_HH:
+    sample:  [VBF_HHto4B]
+    region:  [4b_signal_region]
+    dataset: [VBFHHto4B_CV_1_C2V_1_C3_1_2022_postEE]
+    lbl: 2
+
+batch_size: 512
+epochs: 50
+learning_rate: 1e-3
+learning_rate_schedule: e5_drop75
+train_fraction: 0.7
+val_fraction: 0.2
+test_fraction: 0.1
+```
+
+Notes on the `classes` block:
+
+* Each class needs `sample`, `region`, `dataset` (same semantics as the legacy keys) and a `lbl` integer.
+* Classes are ordered by ascending `lbl`, and that order becomes the **internal class index** (`0..C-1`) used both as the `CrossEntropyLoss` target and as the value stored in the saved score arrays. The user-provided `lbl` is kept as a label/identifier and shown in plot legends (`"className (lbl=...)"`).
+* `num_classes` is derived from the size of the block, so adding a class is purely a config change provided the model accepts a `num_classes` argument (see below).
+* `undersample`, `oversample_split` and `split_oversample` are signal-vs-background concepts and are only supported when there are exactly two classes.
+
+A ready-to-edit multi-class example is provided at `configs/hh4b_sig_bkg_classifier/example_DNN_config_multiclass.yml`.
+
+### Other useful config keys
+
+| key | meaning |
+|---|---|
+| `input_variables` | either a list of branch names or the name of a module in `ml_pytorch/defaults/` providing a `dnn_input_variables` `OrderedDict` |
+| `preprocess_variables_functions` | mapping `{var: [func_name, [args...]]}` resolved against `ml_pytorch/defaults/preprocess_variables_functions.py` |
+| `data_format` | `coffea`, `parquet`, or `root` |
+| `data_dirs` | list of directories containing the input files (`.coffea` files / parquet config) |
+| `oversample_split`, `split_oversample`, `undersample` | binary-only class balancing strategies |
+| `eval`, `roc`, `histos`, `history`, `onnx` | toggle the post-training outputs |
+| `gpus` | comma-separated GPU indices, or unset for CPU |
+| `seed` | seed for both event shuffling and weight initialisation (python, numpy and torch, also on GPU) |
+| `deterministic` | use only deterministic algorithms, so that trainings with the same seed are identical also on GPU (slower) |
+| `pad_value` | value marking padded entries (missing objects); must match the PocketCoffea fill value. Used to pad the missing objects and the `None` values of the inputs when loading the dataset, to not count padded objects when creating a missing `<collection>_N` from parquet files and, in `MaskedBatchNorm1d`, to exclude padded entries from the normalisation statistics |
+| `pad_fill_value` | `MaskedBatchNorm1d` only: value assigned to padded entries at the output of the layer, or `"learn"` for a learnable per-feature value. The real values there are standardised and then scaled/shifted by the learnable weight and bias, so 0 corresponds to the mean of the real values only at initialisation; a fixed value does not follow the learned scale/shift |
+| `pad_indicators` | `MaskedBatchNorm1d` only: append one 0/1 "is real" flag per feature (doubles the inputs to the first linear layer) |
+
+The default values used when a key is omitted are listed in `ml_pytorch/defaults/default_configs.yml`.
+
+## DNN architecture files
+
+Models live in `ml_pytorch/models/` and are referenced by the `ML_model` key in the YAML config (the filename without `.py`). Each file must expose:
+
+* a `torch.nn.Module` subclass implementing `forward`;
+* a top-level `get_model(...)` factory returning `(model, loss_fn, optimizer, scheduler)`;
+* optionally an `export_model(model)` method on the module that wraps the network for ONNX export (e.g. to apply a softmax inside the exported graph).
+
+### Binary models — legacy signature
+
+Binary models (1-node sigmoid + `BCELoss`, or 2-node softmax + `CrossEntropyLoss`) keep the original `get_model` signature:
+
+```python
+def get_model(input_size, device, lr, lr_schedule, n_epochs):
+    model = DNN(input_size).to(device)
+    loss_fn = torch.nn.CrossEntropyLoss(reduction="none")  # or BCELoss for 1 node
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    scheduler = get_lr_scheduler(lr_schedule, optimizer, n_epochs)
+    return model, loss_fn, optimizer, scheduler
+```
+
+You can use any of these models with the binary (legacy) config layout — see `DNN_model.py`, `DNN_softmax_reweight_model.py`, `DNN_sigmoid_reweight_model.py` and variants.
+
+### Multi-class models — `num_classes` signature
+
+A multi-class model must accept an extra `num_classes` parameter so the size of the output layer can be driven by the YAML. `ml_pytorch/scripts/train.py` introspects the function signature and dispatches automatically: a model with `num_classes` in its signature gets `num_classes` passed in, a legacy binary model does not.
+
+A minimal example (`ml_pytorch/models/DNN_multiclass_model.py`) is provided:
+
+```python
+from torch import nn
+import torch
+
+from ml_pytorch.utils.learning_rate_schedules import get_lr_scheduler
+
+
+class DNN(nn.Module):
+    def __init__(self, dim_in: int, num_classes: int):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(dim_in, 64), nn.ReLU(), nn.Dropout(0.2),
+            nn.Linear(64, 64),     nn.ReLU(), nn.Dropout(0.2),
+            nn.Linear(64, 64),     nn.ReLU(), nn.Dropout(0.2),
+            nn.Linear(64, num_classes),       # multi-class logits
+        )
+
+    def forward(self, x):
+        return self.net(x)
+
+    def export_model(self, model):
+        # ONNX wrapper that applies softmax inside the graph
+        class ONNXWrappedModel(torch.nn.Module):
+            def __init__(self, m):
+                super().__init__()
+                self.m = m
+            def forward(self, x):
+                return torch.nn.functional.softmax(self.m(x), dim=1)
+        return ONNXWrappedModel(model)
+
+
+def get_model(input_size, num_classes, device, lr, lr_schedule, n_epochs):
+    model = DNN(input_size, num_classes).to(device)
+    # raw logits + CrossEntropyLoss for single-label multi-class
+    loss_fn = torch.nn.CrossEntropyLoss(reduction="none")
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-4)
+    scheduler = get_lr_scheduler(lr_schedule, optimizer, n_epochs)
+    return model, loss_fn, optimizer, scheduler
+```
+
+To create your own architecture:
+
+1. Add a new file in `ml_pytorch/models/`, e.g. `DNN_my_model.py`.
+2. Define a `torch.nn.Module` whose `__init__` takes `dim_in` (and `num_classes` if multi-class).
+3. Define `get_model(input_size, [num_classes,] device, lr, lr_schedule, n_epochs)` returning `(model, loss_fn, optimizer, scheduler)`. Use `reduction="none"` on the loss — the training loop applies per-event weights manually.
+4. Reference the file (without `.py`) from your config: `ML_model: DNN_my_model`.
+
+When using a legacy binary model with a multi-class config (`num_classes > 2`), `ml_train` raises an explicit error and points you at `DNN_multiclass_model`.
+
+## Input variable files
+
+Lists of input branches live in `ml_pytorch/defaults/`, each exposing a `dnn_input_variables` `OrderedDict` mapping output column name → `[collection, leaf]`. Reference them from a config either as a literal list of branch names:
+
+```yaml
+input_variables: [JetGood_pt, JetGood_eta, JetGood_phi, JetGood_mass, JetGood_btagPNetB]
+```
+
+or as the name of a module under `ml_pytorch/defaults/`:
+
+```yaml
+input_variables: sig_bkg_dnn_input_variables
+```
+
+In the second form the columns are resolved via `create_DNN_columns_list(run2, dnn_input_variables)` in `ml_pytorch/utils/tools.py`, which also handles the `Run2` branch-name suffix when the config sets `run2: True`.
 
 ## `ml_train` options
 
@@ -199,6 +415,170 @@ To execute 5 runs in a node without the interactive access to the GPU node (the 
 sbatch --account gpu_gres --job-name "InteractiveJob" --cpus-per-task 4 --mem-per-cpu 5000 --time 12:00:00  -p gpu --gres=gpu:1 --wrap=". ./run_batch_of_5.sh /work/tharte/datasets/ML_pytorch/configs/bkg_reweighting/DNN_AN_1e-3_e20drop75_minDelta1em5_SPANet_postEE.yml out/bkg_reweighting/SPANET_ptFlat_20_runs_postEE 0"
 ```
 
+## Boosted HH4b: multiclass background morphing
+
+> [!NOTE]
+> The multiclass support was developed on the branch
+> [`claude/add-multiclass-support-mgeOZ`](https://github.com/thierryharte/ML_pytorch/tree/claude/add-multiclass-support-mgeOZ)
+> of `thierryharte/ML_pytorch` and will be merged soon. This repository is compatible with it.
+>
+> The full boosted workflow (PocketCoffea runs, closure plots, category optimisation, datacards) is described in the
+> [boosted README of AnalysisConfigs](https://github.com/matteomalucchi/AnalysisConfigs/blob/main/configs/VBF_HH4b_boosted/README.md).
+
+The boosted analysis estimates the QCD background with an ABCD method. The plane is defined by the TXbb of the
+subleading Higgs candidate and by the Higgs mass:
+
+|  | mass sideband | mass window |
+| --- | --- | --- |
+| **high TXbb** | C: `boosted_signal_sideband_region_C` | D: `boosted_signal_region_D` (signal region) |
+| **low TXbb** | A: `boosted_control_sideband_region_A` | B: `boosted_control_region_B` |
+
+The morphing DNN is trained from A (denominator) to a neighbouring region (numerator) and applied in PocketCoffea to
+the region next to D. By default the morphing goes along the TXbb (numerator C, applied to B); with
+`bkg_morphing_direction: "mass"` in the PocketCoffea config it goes along the mass (numerator B, applied to C).
+
+Since ttbar is not negligible in these regions, the morphing model is a 4-class classifier, so that the ttbar
+contribution can be subtracted from the data.
+
+### Config
+
+The four classes have to be in this `lbl` order (the class names are only labels):
+
+| `lbl` | Class | Region (TXbb direction) |
+| --- | --- | --- |
+| 0 | data, numerator | `boosted_signal_sideband_region_C` |
+| 1 | data, denominator | `boosted_control_sideband_region_A` |
+| 2 | ttbar MC, numerator | `boosted_signal_sideband_region_C` |
+| 3 | ttbar MC, denominator | `boosted_control_sideband_region_A` |
+
+e.g. (shortened from
+[`1e-3_e20drop95_minDelta1em5_boosted_reweighting_btagging_reweight_50GeV_lower_band_wps.yml`](configs/hh4b_bkg_reweighting/boosted_vbf/1e-3_e20drop95_minDelta1em5_boosted_reweighting_btagging_reweight_50GeV_lower_band_wps.yml)):
+
+```yaml
+input_variables: bkg_morphing_dnn_boosted_bdt_inputs_50GeV_wps
+ML_model: DNN_multiclass_model
+data_format: parquet
+data_dirs: [/work/tharte/datasets/samples_vbf_boosted/other_group/<pocketcoffea_output>/]
+
+classes:
+  data_A:     # numerator data (region C)
+    sample: [DATA_JetMET0_HH4bBoosted, DATA_JetMET1_HH4bBoosted]
+    region: [boosted_signal_sideband_region_C]
+    dataset: [DATA_JetMET0_HH4bBoosted_2024_EraC, ...]
+    lbl: 0
+  data_B:     # denominator data (region A)
+    sample: [DATA_JetMET0_HH4bBoosted, DATA_JetMET1_HH4bBoosted]
+    region: [boosted_control_sideband_region_A]
+    dataset: [DATA_JetMET0_HH4bBoosted_2024_EraC, ...]
+    lbl: 1
+  ttbar_A:    # numerator ttbar (region C)
+    sample: [TTto2L2Nu, TTtoLNu2Q, TTto4Q]
+    region: [boosted_signal_sideband_region_C]
+    dataset: [TTto2L2Nu_2024, TTtoLNu2Q_2024, TTto4Q_2024]
+    lbl: 2
+  ttbar_B:    # denominator ttbar (region A)
+    sample: [TTto2L2Nu, TTtoLNu2Q, TTto4Q]
+    region: [boosted_control_sideband_region_A]
+    dataset: [TTto2L2Nu_2024, TTtoLNu2Q_2024, TTto4Q_2024]
+    lbl: 3
+```
+
+### Training
+
+The 20 trainings are run as for the resolved morphing (the config path is relative to
+`configs/hh4b_bkg_reweighting/`):
+
+```bash
+cd jobs/
+sbatch run_20_trainings_in_4_parallel.sh boosted_vbf/<config_name>.yml [<output_folder>]
+```
+
+### Compute the ttbar fraction alpha
+
+The classes are balanced to the same total weight during the training, so each ttbar output node is normalised as if
+ttbar were all of the data. The ttbar node has to be scaled back by its physical fraction in data,
+$\alpha = N_{t\bar{t}} / N_\mathrm{data}$. Compute it in the folder with the PocketCoffea output the DNN was trained
+on (the `data_dirs` of the config):
+
+```bash
+cd <pocketcoffea_output>
+python /work/tharte/datasets/ML_pytorch_matteo/ml_pytorch/scripts/compute_alpha.py
+```
+
+The output looks like this:
+
+```text
+region                            N_data      N_ttbar     alpha    MCstat
+boosted_signal_region_D             2361        661.3    0.2801    0.0040
+boosted_signal_sideband_region_C   21744       2343.8    0.1078    0.0008
+boosted_control_region_B           46741      19818.3    0.4240    0.0011
+boosted_control_sideband_region_A 545355      60568.0    0.1111    0.0002
+```
+
+The value needed is the `alpha` of the numerator region: region C for the TXbb direction (here `0.1078`),
+region B for the mass direction.
+
+### Merge the 20 models with the ttbar subtraction
+
+Run `ml_onnx` in multiclass mode inside the `best_models` folder of the training output:
+
+```bash
+cd <output_folder>/best_models
+ml_onnx -i ./ -o ./ -ar -v <input_variables> -mc -al <alpha_num> -ald <alpha_den>
+
+# e.g.
+ml_onnx -i ./ -o ./ -ar -v bkg_morphing_dnn_boosted_bdt_inputs_50GeV -mc -al 0.1078 -ald 0.0
+```
+
+| Option | Meaning |
+| --- | --- |
+| `-ar` | average the ratios of the outputs of all the models in the folder |
+| `-v` | input-variables module used for the training (or `--config <config_file>` to read it from the config) |
+| `-mc` | 4-node multiclass model, in the class order above |
+| `-al` | alpha of the numerator region |
+| `-ald` | alpha of the denominator region; `0.0` switches off the ttbar subtraction in the denominator |
+
+The morphing weight of each model is
+
+$$w = \frac{\mathrm{relu}(r_0 - \alpha\, r_2)}{\mathrm{relu}(r_1 - \alpha_\mathrm{den}\, r_3)},$$
+
+i.e. the ttbar-subtracted data in the numerator region over the (ttbar-subtracted) data in the denominator region,
+and the weights of all the models are averaged. The result is saved as `best_models/average_model_from_onnx.onnx`,
+which is the `bkg_morphing_dnn` model to use in PocketCoffea.
+
+## Boosted HH4b: signal-vs-background classifier
+
+The boosted signal-vs-background DNN is a single multiclass model with the classes QCD (data), TTbar, VBF and ggF,
+e.g.
+[`boosted/1e-3_e20drop95_minDelta1em5_boosted_signal_background_classifier_50GeV.yml`](configs/hh4b_sig_bkg_classifier/boosted/1e-3_e20drop95_minDelta1em5_boosted_signal_background_classifier_50GeV.yml).
+Its `data_dirs` should point to the PocketCoffea output produced with the morphing model above. The config path
+is relative to `configs/hh4b_sig_bkg_classifier/`:
+
+```bash
+cd jobs/
+sbatch run_sig_bkg_classifier.sh boosted/1e-3_e20drop95_minDelta1em5_boosted_signal_background_classifier_50GeV.yml
+```
+
+The output goes to `out/sig_bkg_classifier/<config_name>/`, separately from the morphing trainings in
+`out/bkg_reweighting/`. The ONNX model to use as `sig_bkg_dnn` in PocketCoffea is
+`state_dict/model_best_epoch_<n>.onnx`. PocketCoffea saves its four class scores and the
+`sig_bkg_dnn_score_ggFvsBKG` / `sig_bkg_dnn_score_VBFvsBKG` discriminants, which are then used to optimise the
+signal categories.
+
+## Outputs of a training
+
+Each training run writes to `${output_dir}` (default `/work/$USER/out_ML_pytorch/<config_name>/`):
+
+* `config_parameters.yml` — full resolved config (defaults + CLI + YAML) snapshot.
+* `ML_model.py` — copy of the model file used, so a saved run can be re-loaded with `-l`/`--load-model` even after the file in `ml_pytorch/models/` changes.
+* `logger_<name>.log` — training log with epoch-by-epoch loss / accuracy / learning rate.
+* `state_dict/model_<epoch>_state_dict.pt` — best-epoch checkpoint(s).
+* `state_dict/model_best_epoch_<n>.onnx` — ONNX export of the best model (and one for the last epoch).
+* `score_lbl_array.npz` — saved with `--save-numpy`. Contains:
+  * `score_lbl_array_train`, `score_lbl_array_test`: `[scores..., label, weight, kl]` per event. For binary the score block is a single column, for multi-class it has `num_classes` columns.
+  * `train_test_fractions`, `num_classes`, `class_info` (list of `{name, lbl, class_idx}` dicts).
+* Plots: `sig_bkg_distributions_*`, `roc_curve_*`, training history, etc.
+
 ## Additional scripts
 
 The training will produce the ONNX model to be used in PocketCoffea for background morphing, as well as plots with the training history, the ROC curve and an overtraining check (one plot per class, see [Plotting with HEPPlotter](#plotting-with-hepplotter)).
@@ -206,7 +586,7 @@ The training will produce the ONNX model to be used in PocketCoffea for backgrou
 These plots can be produced using the following command:
 
 ```bash
-# Plot the history of a training 
+# Plot the history of a training
 ml_history -i <training_log_file>
 
 # Plot the ROC curve and overtraining check (all background kl inclusive)
@@ -253,6 +633,17 @@ The same plots can be produced standalone (without running a training) with:
 ```bash
 ml_input_vars -c configs/example_DNN_config_ggF_VBF.yml -o <output_directory>
 ```
+
+### Multi-class evaluation outputs
+
+When `ml_sb` (the `sig_bkg_eval` script) detects more than one score column in `score_lbl_array.npz`, it automatically switches to multi-class mode and produces:
+
+* `roc_curve_one_vs_rest.{png,pdf}` — for each class *i*, the ROC of "is class *i*" using the score of output node *i*.
+* `roc_curve_one_vs_one.{png,pdf}` — for each ordered pair `(a, b)`, the ROC of "class *a* vs class *b*" using events with true label `∈ {a, b}` and the score of node *a*.
+* `score_distribution_class_<i>.{png,pdf}` (+ `_log`) — distribution of output node *i*'s score, split by true class, for train and test.
+* `tpr_fpr_multiclass.npz` — the saved (`tpr`, `fpr`, `auc`) arrays so that arbitrary class combinations can be replotted later.
+
+The binary path (single score column) is unchanged and still produces `sig_bkg_distributions_kl_*` and `roc_curve_kl_*`.
 
 ## COMET integration
 

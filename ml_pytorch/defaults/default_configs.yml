@@ -45,6 +45,14 @@ background_region: [4b_region]
 signal_dataset: [VBFHHto4B_CV_1_C2V_1_C3_1_2022_postEE]
 background_dataset: [GluGlutoHHto4B_kl-1p00_kt-1p00_c2-0p00__2022_postEE]
 
+# Multi-class layout. If set, it replaces the signal_*/background_* options
+# above: each entry defines one class (and one output node of the model) as
+#   <class name>: {sample: [...], region: [...], dataset: [...], lbl: <int>}
+# The classes are ordered by lbl. With more than two classes a model whose
+# get_model accepts num_classes is needed (e.g. DNN_multiclass_model).
+# See configs/hh4b_sig_bkg_classifier/example_DNN_config_multiclass.yml.
+classes: null
+
 # Directories containing the input files (.coffea files and, for parquet, the
 # config.json pointing to the parquet chunks).
 data_dirs: [/work/mmalucch/out_hh4b/out_vbf_ggf_dnn_full/]
@@ -52,10 +60,16 @@ data_dirs: [/work/mmalucch/out_hh4b/out_vbf_ggf_dnn_full/]
 # Format of the input data: coffea or parquet (root is not supported anymore).
 data_format: coffea
 
-# Only for data_format coffea: if True the columns in the .coffea files are
-# stored directly under the region, if False they are stored under the
-# "nominal" variation (columns[sample][dataset][region]["nominal"]).
-novars: True
+# If True, the inputs are saved without systematic variations, if False only
+# the "nominal" variation is read:
+#   coffea : the columns are stored directly under the region (True) or under
+#            the "nominal" variation (False), i.e.
+#            columns[sample][dataset][region]["nominal"]
+#   parquet: the chunks are read directly from <dataset>/<region>/ (True; no
+#            variation subdirectory is expected) or only from
+#            <dataset>/<region>/nominal/ (False; the other variations are
+#            skipped)
+novars: False
 
 # ---------------------------------------------------------------------------
 # Train / validation / test split
@@ -103,9 +117,16 @@ undersample: False
 # Name of the model module in ml_pytorch/models/ (must define get_model).
 ML_model: DNN_model
 
-# Seed for the event shuffling and the train/val/test split (numpy and the
-# torch generator of random_split; the torch global seed is not set).
+# Seed of the random number generators (python, numpy and torch, also on
+# GPU): it fixes the event shuffling, the train/val/test split, the weight
+# initialisation and the dropout. On CPU two trainings with the same seed are
+# identical, on GPU they can still slightly differ unless deterministic is True.
 seed: 100
+# Use only deterministic algorithms (torch.use_deterministic_algorithms and
+# cuDNN in deterministic mode), so that trainings with the same seed are
+# identical also on GPU. It can make the training slower, and with multiple
+# GPUs (DataParallel) the results can still differ.
+deterministic: False
 
 batch_size: 512
 # Maximum number of training epochs.
@@ -141,6 +162,48 @@ pin_memory: False
 # Comma-separated list of GPU indices to use (e.g. '0' or '0,1'; more than one
 # GPU uses DataParallel), or 'cpu' to run on CPU.
 gpus: '0'
+
+# ---------------------------------------------------------------------------
+# Padding
+# ---------------------------------------------------------------------------
+
+# Padded inputs (e.g. kinematics of missing jets) are handled by the
+# `MaskedBatchNorm1d` input layer of the model (see
+# models/DNN_multiclass_model.py). pad_fill_value and pad_indicators are used
+# ONLY by this layer: they are passed to get_model() only if the model's
+# get_model() accepts them (multi-class models), and are ignored otherwise
+# (e.g. models with a plain nn.BatchNorm1d). The whole padding treatment lives
+# inside the model, so the exported ONNX takes the raw padded inputs directly.
+
+# Value marking padded (missing) entries of the inputs. Must match the
+# PocketCoffea fill value. It is used:
+#   - when loading the dataset: the objects requested with "<var>:<position>"
+#     that an event does not have, the missing objects of a whole jagged
+#     collection used as input (coffea only, padded to the maximum number of
+#     objects per event), and any None value of the inputs, are set to this
+#     value;
+#   - when creating a missing <collection>_N input from the parquet files:
+#     the objects equal to this value (or None) are not counted;
+#   - in MaskedBatchNorm1d: the entries equal to this value are excluded from
+#     the batch and running mean/variance, so they don't bias the
+#     normalisation, and are then replaced by pad_fill_value;
+#   - in the input variable plots: the entries equal to this value are not
+#     plotted (the plots use the default -999).
+pad_value: -999.0
+# Value given to the padded entries at the output of MaskedBatchNorm1d, i.e.
+# in the same space as the normalised real values. The real values are
+# standardised ((x - mean) / std of the real values) and then multiplied and
+# shifted by the learnable weight and bias of the layer: at the start of the
+# training they have mean 0 and std 1, so 0.0 is where the mean of the real
+# values is mapped. It is a fixed number, though: it does not follow the
+# learned weight and bias, so during the training it is not the mean of the
+# normalised real values anymore. Use "learn" to make it a learnable parameter
+# per feature (initialised to 0).
+pad_fill_value: 0.0
+# If True, append one 0/1 flag per input feature (1 = real value, 0 = padded),
+# so the first linear layer receives 2 * n_input_features inputs. Lets the
+# network distinguish a padded entry from a real one equal to pad_fill_value.
+pad_indicators: True
 
 # ---------------------------------------------------------------------------
 # Evaluation and outputs
