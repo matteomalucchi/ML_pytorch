@@ -653,6 +653,8 @@ def plot_sig_bkg_distributions(
         hist_bkg_train = normalized_hist(bkg_score_train, bkg_weight_train)
         hist_bkg_test = normalized_hist(bkg_score_test, bkg_weight_test)
 
+        # the ratio panel shows test / training separately for signal and
+        # background (the training histograms are drawn as bands around 1)
         series_dict = {
             "Signal (training)": {
                 "data": hist_sig_train,
@@ -666,7 +668,11 @@ def plot_sig_bkg_distributions(
             },
             "Signal (test)": {
                 "data": hist_sig_test,
-                "style": {"histtype": "errorbar", "color": SIG_COLOR},
+                "style": {
+                    "histtype": "errorbar",
+                    "color": SIG_COLOR,
+                    "ratio_reference": "Signal (training)",
+                },
             },
             "Background (training)": {
                 "data": hist_bkg_train,
@@ -674,7 +680,11 @@ def plot_sig_bkg_distributions(
             },
             "Background (test)": {
                 "data": hist_bkg_test,
-                "style": {"histtype": "errorbar", "color": BKG_COLOR},
+                "style": {
+                    "histtype": "errorbar",
+                    "color": BKG_COLOR,
+                    "ratio_reference": "Background (training)",
+                },
             },
         }
 
@@ -695,6 +705,7 @@ def plot_sig_bkg_distributions(
                 .set_labels(
                     xlabel="DNN Class Score",
                     ylabel="Normalized counts",
+                    ratio_label="Test / Train",
                 )
                 .set_data(series_dict, plot_type="1d")
                 .set_options(
@@ -702,6 +713,7 @@ def plot_sig_bkg_distributions(
                     legend_font_size=20,
                     split_legend=False,
                     grid=True,
+                    set_ylim_ratio=0.5,
                     y_log=log,
                     ylim_bottom_value=1e-4 if log else 0.0,
                     ylim_top_value=5 if log else 0.15,
@@ -1127,7 +1139,12 @@ def plot_multiclass_distributions(
             }
             series_dict[f"{label} (test)"] = {
                 "data": hist_test,
-                "style": {"color": color, "histtype": "errorbar"},
+                "style": {
+                    "color": color,
+                    "histtype": "errorbar",
+                    # test / training ratio of each class
+                    "ratio_reference": f"{label} (training)",
+                },
             }
 
             if tr_mask.sum() == 0 or te_mask.sum() == 0:
@@ -1162,6 +1179,7 @@ def plot_multiclass_distributions(
                 .set_labels(
                     xlabel=f"Score of output node: {node_name}",
                     ylabel="Normalized counts",
+                    ratio_label="Test / Train",
                 )
                 .set_data(series_dict, plot_type="1d")
                 .set_options(
@@ -1169,6 +1187,7 @@ def plot_multiclass_distributions(
                     legend_font_size=18,
                     split_legend=False,
                     grid=True,
+                    set_ylim_ratio=0.5,
                     y_log=log,
                     ylim_bottom_value=1e-4 if log else 0.0,
                     # leave room for the legend and the annotations
@@ -1557,7 +1576,12 @@ def plot_multiclass_sig_over_bkg(
             }
             series_dict[f"{label} (test)"] = {
                 "data": hist_test,
-                "style": {"color": color, "histtype": "errorbar"},
+                "style": {
+                    "color": color,
+                    "histtype": "errorbar",
+                    # test / training ratio of each class
+                    "ratio_reference": f"{label} (training)",
+                },
             }
 
             _, p_value = stats.ks_2samp(d_train[tr_mask], d_test[te_mask])
@@ -1586,13 +1610,18 @@ def plot_multiclass_sig_over_bkg(
                     figsize=[13, 13], lumitext=lumitext, cmstext="Private"
                 )
                 .set_output(f"{base}{'_log' if log else ''}")
-                .set_labels(xlabel=xlabel, ylabel="Normalized counts")
+                .set_labels(
+                    xlabel=xlabel,
+                    ylabel="Normalized counts",
+                    ratio_label="Test / Train",
+                )
                 .set_data(series_dict, plot_type="1d")
                 .set_options(
                     legend_loc="upper left",
                     legend_font_size=18,
                     split_legend=False,
                     grid=True,
+                    set_ylim_ratio=0.5,
                     y_log=log,
                     ylim_bottom_value=1e-4 if log else 0.0,
                     # leave room for the legend and the annotations
