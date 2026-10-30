@@ -316,6 +316,11 @@ Comet ML logging
   -cw,  --comet-workspace STR  Comet workspace (overrides auto-derived name)
   -ctg, --comet-tags TAG […]   Comet experiment tags
   --pin-memory                 Pin memory for faster GPU data transfer
+
+Performance
+  --data-on-gpu                Keep the whole datasets on the GPU (default: on)
+  --no-data-on-gpu             Use the standard DataLoaders (copy every batch to the GPU)
+  --amp                        bfloat16 automatic mixed precision
 ```
 
 ### Run only evaluation (no training)
@@ -355,6 +360,10 @@ Optional:
   -s, --init-seed INT     Starting random seed (default: 0)
   --ratio                 Average-ratio ONNX aggregation (ml_onnx -ar), e.g. for bkg reweighting
   --load-last             Resume from latest checkpoint
+  --time HH:MM:SS         Slurm wall-clock time limit
+  --mem-per-cpu MB        Slurm memory per CPU in MB (default: 4000)
+  --cpus INT              Slurm CPUs per node/array job (default: 4)
+  -g, --gpus-per-node INT GPUs per node/array job (default: 1)
   --no-slurm              Run directly without Slurm (for local testing)
   -- EXTRA                Extra arguments forwarded to ml_train
 ```
@@ -371,6 +380,10 @@ cd jobs/
 ./run_training.sh -c /full/path/DNN_config_bkg_reweighting.yml -o /full/path/out/bkg_rew \
   -n 20 -p 4 --ratio
 
+# 20 trainings on 1 node with 4 GPUs (5 per GPU in parallel)
+./run_training.sh -c /full/path/DNN_config_bkg_reweighting.yml -o /full/path/out/bkg_rew \
+  -n 20 -g 4 --cpus 8 --ratio
+
 # 5 trainings on 1 node, plain ONNX averaging (no ratio)
 ./run_training.sh -c /full/path/DNN_config_sig_bkg.yml -o /full/path/out/sig_bkg -n 5
 
@@ -383,6 +396,17 @@ cd jobs/
 - **`NODES=1`**: submits a single Slurm job; trainings run in parallel on one GPU node, then ONNX post-processing runs inline.
 - **`NODES>1`**: submits a Slurm array job (one element per node) plus a dependent post-processing job that runs after all array tasks succeed.
 - Each node runs its share of trainings (`N_TRAININGS / NODES`) in parallel using background processes.
+- With `--gpus-per-node N` each node/array job requests `--gres=gpu:N` and the trainings of the node are distributed round-robin over its GPUs (training `i` runs on GPU `i % N`). The CPUs of the job are split among the parallel trainings (`OMP_NUM_THREADS`, DataLoader workers), so the processes do not oversubscribe the cores.
+
+### Speed tips
+
+The models are small DNNs, so the training is limited by the data loading and the Python overhead rather than by the GPU compute:
+
+- `data_on_gpu: True` (default) copies the whole datasets to the GPU once and takes the batches as slices of it, removing the DataLoader workers and the per-batch host-to-device copies. It falls back to the DataLoaders if the datasets take more than half of the free GPU memory.
+- The loss and accuracy are accumulated on the GPU (no synchronisation at every batch) and the validation/evaluation run without building the autograd graph.
+- A larger `batch_size` (e.g. 2048-8192) is the biggest further speed-up, but it changes the training dynamics: scale the learning rate accordingly.
+- `amp: True` (bfloat16 mixed precision) and `tf32: True` (default) help on Ampere or newer GPUs, mostly for larger models/batches.
+- Multiple GPUs: one GPU is enough to saturate a single small training, and `--gpus 0,1` (DataParallel) is usually *slower*. Use the GPUs to run several trainings (seeds) at the same time with `run_training.sh --gpus-per-node`. Several trainings can also share one GPU.
 - After all trainings finish, the best ONNX model from each run is copied to `best_models/` and `ml_onnx` is called to aggregate them. With `--ratio` the `-ar` flag is passed (average ratio, used for background reweighting); without it, a plain aggregation is performed.
 - The input variable name is read automatically from the training config YAML (`input_variables` field).
 - If `jobs/comet_token.key` exists, Comet ML logging is enabled automatically (see [COMET integration](#comet-integration)).

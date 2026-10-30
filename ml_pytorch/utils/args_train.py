@@ -163,6 +163,26 @@ parser.add_argument(
     action="store_true",
 )
 parser.add_argument(
+    "--data-on-gpu",
+    dest="data_on_gpu",
+    default=None,
+    help="Keep the whole datasets on the GPU and take the batches from there (default: True)",
+    action="store_true",
+)
+parser.add_argument(
+    "--no-data-on-gpu",
+    dest="data_on_gpu",
+    default=None,
+    help="Use the standard DataLoaders, copying every batch to the GPU",
+    action="store_false",
+)
+parser.add_argument(
+    "--amp",
+    default=None,
+    help="Use bfloat16 automatic mixed precision",
+    action="store_true",
+)
+parser.add_argument(
     "--overwrite",
     default=None,
     help="Overwrite output directory",
