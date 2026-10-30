@@ -1383,3 +1383,80 @@ def extract_param_value(s, param):
     value_str = value_str.replace("m", "-").replace("p", ".")
 
     return float(value_str)
+
+
+def _dataset_tensors(dataset):
+    """Return the tensors of a TensorDataset, or of a (nested) Subset of one,
+    in the order of the dataset."""
+    if isinstance(dataset, torch.utils.data.TensorDataset):
+        return list(dataset.tensors)
+    if isinstance(dataset, torch.utils.data.Subset):
+        idx = torch.as_tensor(dataset.indices, dtype=torch.long)
+        return [t[idx] for t in _dataset_tensors(dataset.dataset)]
+    raise TypeError(f"Unsupported dataset type: {type(dataset).__name__}")
+
+
+class DeviceBatchLoader:
+    """Drop-in replacement of the DataLoader for datasets that fit in the GPU
+    memory.
+
+    The whole dataset is copied once to the device and the batches are views
+    (slices) of it, so there are no worker processes, no collation and no
+    host-to-device copy per batch. For the small DNNs used here this is the
+    main bottleneck of the training. The batches have the same order and the
+    same drop_last behaviour as the DataLoader with shuffle=False.
+    """
+
+    def __init__(self, dataset, batch_size, device, drop_last=True):
+        self.dataset = dataset
+        self.batch_size = batch_size
+        self.drop_last = drop_last
+        self.tensors = [t.to(device) for t in _dataset_tensors(dataset)]
+        self.num_events = self.tensors[0].shape[0]
+
+    def __len__(self):
+        if self.drop_last:
+            return self.num_events // self.batch_size
+        return math.ceil(self.num_events / self.batch_size)
+
+    def __iter__(self):
+        for i in range(len(self)):
+            start = i * self.batch_size
+            yield tuple(t[start : start + self.batch_size] for t in self.tensors)
+
+
+def loaders_to_device(loaders, device, max_memory_fraction=0.5):
+    """Replace the DataLoaders with DeviceBatchLoaders holding the data on
+    `device`.
+
+    The loaders are left unchanged if the device is not a GPU, or if the
+    datasets would take more than `max_memory_fraction` of the free GPU memory.
+    `None` loaders are kept as they are.
+    """
+    if device.type != "cuda":
+        return loaders
+
+    datasets_bytes = sum(
+        sum(t.element_size() * t.nelement() for t in _dataset_tensors(loader.dataset))
+        for loader in loaders
+        if loader is not None
+    )
+    free_bytes, _ = torch.cuda.mem_get_info(device)
+    if datasets_bytes > max_memory_fraction * free_bytes:
+        logger.warning(
+            f"Datasets ({datasets_bytes / 1e9:.2f} GB) do not fit in the free GPU "
+            f"memory ({free_bytes / 1e9:.2f} GB): using the standard DataLoaders"
+        )
+        return loaders
+
+    logger.info(f"Moving the datasets to {device} ({datasets_bytes / 1e9:.2f} GB)")
+    return [
+        (
+            DeviceBatchLoader(
+                loader.dataset, loader.batch_size, device, drop_last=loader.drop_last
+            )
+            if loader is not None
+            else None
+        )
+        for loader in loaders
+    ]

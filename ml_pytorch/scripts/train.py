@@ -13,7 +13,7 @@ from ml_pytorch.utils.args_train import args
 
 # PyTorch TensorBoard support
 # from torch.utils.tensorboard import SummaryWriter
-from ml_pytorch.utils.dataset import load_data
+from ml_pytorch.utils.dataset import load_data, loaders_to_device
 from ml_pytorch.utils.early_stopper import EarlyStopper
 from ml_pytorch.utils.lumitext import get_lumitext
 from ml_pytorch.utils.setup_logger import setup_logger
@@ -322,6 +322,21 @@ def main():
         device = torch.device("cpu")
     logger.info(f"Using {device} device")
 
+    if device.type == "cuda":
+        if cfg.tf32 and not cfg.deterministic:
+            # TensorFloat-32 matmuls on Ampere (and newer) GPUs
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+        if not cfg.deterministic:
+            torch.backends.cudnn.benchmark = True
+
+    if cfg.data_on_gpu:
+        # copy the whole datasets to the GPU once instead of transferring
+        # every batch (no effect on CPU or if they don't fit in memory)
+        training_loader, val_loader, test_loader = loaders_to_device(
+            [training_loader, val_loader, test_loader], device
+        )
+
     if k_folds >= 2:
         # the events and the folds are the same for all the folds (seed), while
         # the weight initialisation (and dropout) is different for each fold
@@ -379,6 +394,11 @@ def main():
     logger.info(f"Number of parameters: {num_parameters}")
 
     if gpus is not None and len(gpus) > 1:
+        logger.warning(
+            "Using DataParallel on %d GPUs: for small models it is usually "
+            "slower than a single GPU, it is better to run one training per GPU "
+            "(see jobs/run_training.sh --gpus-per-node)" % len(gpus)
+        )
         # model becomes `torch.nn.DataParallel` w/ model.module being the original `torch.nn.Module`
         model = torch.nn.DataParallel(model, device_ids=gpus)
 

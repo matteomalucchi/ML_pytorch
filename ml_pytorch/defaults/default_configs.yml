@@ -206,8 +206,20 @@ num_workers: 4
 # Use pinned memory in the DataLoaders (faster transfer to GPU).
 pin_memory: False
 # Comma-separated list of GPU indices to use (e.g. '0' or '0,1'; more than one
-# GPU uses DataParallel), or 'cpu' to run on CPU.
+# GPU uses DataParallel), or 'cpu' to run on CPU. For the small models used
+# here DataParallel is usually slower than a single GPU: to use several GPUs
+# run several trainings (seeds) in parallel, one per GPU
+# (jobs/run_training.sh --gpus-per-node).
 gpus: '0'
+# Copy the whole train/val/test datasets to the GPU once and take the batches
+# directly from there, instead of using DataLoader workers and copying every
+# batch to the GPU. Much faster for small models; num_workers and pin_memory
+# are then not used. Falls back to the DataLoaders on CPU or if the datasets
+# take more than half of the free GPU memory.
+data_on_gpu: True
+# Allow TensorFloat-32 matrix multiplications on Ampere (or newer) GPUs
+# (ignored with deterministic: True).
+tf32: True
 
 # ---------------------------------------------------------------------------
 # Padding
