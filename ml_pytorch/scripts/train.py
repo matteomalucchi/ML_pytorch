@@ -2,7 +2,7 @@ import datetime
 import importlib
 import importlib.util
 import os
-import shutil
+import subprocess
 import sys
 import time
 
@@ -13,7 +13,7 @@ from ml_pytorch.utils.args_train import args
 
 # PyTorch TensorBoard support
 # from torch.utils.tensorboard import SummaryWriter
-from ml_pytorch.utils.dataset import load_data
+from ml_pytorch.utils.dataset import load_data, loaders_to_device
 from ml_pytorch.utils.early_stopper import EarlyStopper
 from ml_pytorch.utils.lumitext import get_lumitext
 from ml_pytorch.utils.setup_logger import setup_logger
@@ -32,6 +32,66 @@ if args.comet_token:
     from comet_ml.integration.pytorch import log_model
 
 import torch
+
+
+def make_output_dir(main_dir, overwrite):
+    try:
+        os.makedirs(main_dir)
+    except FileExistsError:
+        # ask the user if they want to overwrite the directory
+        print(f"Directory {main_dir} already exists")
+        if overwrite:
+            print("Overwriting...")
+            os.system(f"rm -rf {main_dir}")
+            os.makedirs(main_dir)
+        else:
+            print("Do you want to overwrite it? (y/n)")
+            answer = input()
+            if answer == "y":
+                os.system(f"rm -rf {main_dir}")
+                os.makedirs(main_dir)
+            else:
+                print("Exiting...")
+                sys.exit(0)
+
+
+def run_all_folds(cfg, main_dir):
+    """Train all the folds of the k-fold training one after the other, each
+    in its own ml_train process with the output in <main_dir>/fold_<k>, and
+    then merge them."""
+    from ml_pytorch.scripts.kfold_merge import merge_kfold
+
+    if cfg.load_model or cfg.eval_model:
+        raise ValueError(
+            "--load-model and --eval-model with k_folds >= 2 need --fold to "
+            "select the fold"
+        )
+    make_output_dir(main_dir, cfg.overwrite)
+    setup_logger(f"{main_dir}/logger_kfold.log", cfg.verbosity)
+    os.system(f"cp {args.config} {main_dir}")
+    OmegaConf.save(cfg, f"{main_dir}/config_parameters.yml")
+
+    for fold in range(cfg.k_folds):
+        fold_dir = f"{main_dir}/fold_{fold}"
+        print(f"\n\n\n=== Training fold {fold} of {cfg.k_folds} -> {fold_dir}")
+        # the options given later override the earlier ones
+        cmd = [
+            sys.executable,
+            "-m",
+            "ml_pytorch.scripts.train",
+            *sys.argv[1:],
+            "--k-folds",
+            str(cfg.k_folds),
+            "--fold",
+            str(fold),
+            "-o",
+            fold_dir,
+            "--overwrite",
+        ]
+        print(" ".join(cmd))
+        subprocess.run(cmd, check=True)
+
+    merge_kfold(main_dir, cfg)
 
 
 def main():
@@ -69,7 +129,7 @@ def main():
 
     if cfg.histos or cfg.roc:
         from ml_pytorch.scripts.sig_bkg_eval import (
-            plot_kl_distributions,
+            plot_kl_distributions_with_fallback,
         )
     if cfg.history:
         from ml_pytorch.scripts.plot_history import plot_history, plot_lr, read_from_txt
@@ -91,6 +151,23 @@ def main():
             f"{base_dir}/{os.path.basename(cfg_file_name).replace('.yml', '')}"
         )
     main_dir = cfg.output_dir
+
+    k_folds = cfg.k_folds or 0
+    if k_folds >= 2 and cfg.fold is None:
+        run_all_folds(cfg, main_dir)
+        return
+    if k_folds >= 2:
+        if not 0 <= cfg.fold < k_folds:
+            raise ValueError(
+                f"fold must be between 0 and k_folds - 1 = {k_folds - 1}, got {cfg.fold}"
+            )
+        # the scores of the test fold are needed to merge the folds
+        cfg.eval = True
+        args.save_numpy = True
+    elif cfg.fold is not None:
+        raise ValueError("fold is set but k_folds < 2")
+    fold_tag = f"_fold{cfg.fold}" if k_folds >= 2 else ""
+
     # text with the years of the datasets used in the training, shown on the plots
     lumitext = get_lumitext(cfg)
 
@@ -130,24 +207,7 @@ def main():
         # ML_model = importlib.import_module(f"ml_pytorch.models.{cfg.ML_model}")
     else:
         ML_model = importlib.import_module(f"ml_pytorch.models.{cfg.ML_model}")
-        try:
-            os.makedirs(main_dir)
-        except FileExistsError:
-            # ask the user if they want to overwrite the directory
-            print(f"Directory {main_dir} already exists")
-            if cfg.overwrite:
-                print("Overwriting...")
-                os.system(f"rm -rf {main_dir}")
-                os.makedirs(main_dir)
-            else:
-                print("Do you want to overwrite it? (y/n)")
-                answer = input()
-                if answer == "y":
-                    os.system(f"rm -rf {main_dir}")
-                    os.makedirs(main_dir)
-                else:
-                    print("Exiting...")
-                    sys.exit(0)
+        make_output_dir(main_dir, cfg.overwrite)
 
     ML_model_path = f"{file_dir}/../models/{cfg.ML_model}.py"
     # writer = SummaryWriter(f"runs/DNN_trainer_{timestamp}")
@@ -214,8 +274,11 @@ def main():
             logger.info("No 'comet_token' key found in dictionary")
         logger.info(f"Recording tags {args.comet_tags}")
         comet_logger.log_parameters(cfg_dict)
-        comet_logger.add_tags([*args.comet_tags, name_configuration, f"s{cfg.seed}"])
-        comet_logger.set_name(f"{name_configuration}_s{cfg.seed}")
+        comet_logger.add_tags(
+            [*args.comet_tags, name_configuration, f"s{cfg.seed}"]
+            + ([f"fold{cfg.fold}"] if fold_tag else [])
+        )
+        comet_logger.set_name(f"{name_configuration}_s{cfg.seed}{fold_tag}")
     else:
         comet_logger = None
 
@@ -258,6 +321,31 @@ def main():
         gpus = None
         device = torch.device("cpu")
     logger.info(f"Using {device} device")
+
+    if device.type == "cuda":
+        if cfg.tf32 and not cfg.deterministic:
+            # TensorFloat-32 matmuls on Ampere (and newer) GPUs
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+        if not cfg.deterministic:
+            torch.backends.cudnn.benchmark = True
+
+    if cfg.data_on_gpu:
+        # copy the whole datasets to the GPU once instead of transferring
+        # every batch (no effect on CPU or if they don't fit in memory)
+        training_loader, val_loader, test_loader = loaders_to_device(
+            [training_loader, val_loader, test_loader], device
+        )
+
+    if k_folds >= 2:
+        # the events and the folds are the same for all the folds (seed), while
+        # the weight initialisation (and dropout) is different for each fold
+        weights_seed = int(cfg.seed) * k_folds + cfg.fold
+        logger.info(
+            f"Fold {cfg.fold}: seed {cfg.seed} for the events, seed "
+            f"{weights_seed} for the weight initialisation"
+        )
+        set_seed(weights_seed, cfg.deterministic)
 
     # Get validation evaluator (if best model by loss or accuracy)
     eval_param = cfg.eval_param
@@ -306,6 +394,11 @@ def main():
     logger.info(f"Number of parameters: {num_parameters}")
 
     if gpus is not None and len(gpus) > 1:
+        logger.warning(
+            "Using DataParallel on %d GPUs: for small models it is usually "
+            "slower than a single GPU, it is better to run one training per GPU "
+            "(see jobs/run_training.sh --gpus-per-node)" % len(gpus)
+        )
         # model becomes `torch.nn.DataParallel` w/ model.module being the original `torch.nn.Module`
         model = torch.nn.DataParallel(model, device_ids=gpus)
 
@@ -561,7 +654,19 @@ def main():
             "Eval epoch # %d,  acc train: %.4f,  acc test: %.4f"
             % (eval_epoch, accuracy_eval_train, accuracy_eval_test)
         )
-        train_test_fractions = np.array([cfg.train_fraction, cfg.test_fraction])
+        if k_folds >= 2:
+            # fractions of the events in the training and test datasets
+            train_test_fractions = np.array(
+                [
+                    (k_folds - 1)
+                    / k_folds
+                    * cfg.train_fraction
+                    / (cfg.train_fraction + cfg.val_fraction),
+                    1 / k_folds,
+                ]
+            )
+        else:
+            train_test_fractions = np.array([cfg.train_fraction, cfg.test_fraction])
 
         if args.save_numpy:
             # save the score and label arrays
@@ -587,32 +692,13 @@ def main():
                 dataset_idx_train=dataset_idx_train,
                 dataset_idx_test=dataset_idx_test,
             )
-            try:
-                plot_kl_distributions(
-                    score_lbl_array_train,
-                    score_lbl_array_test,
-                    main_dir,
-                    ["all", 1.0],
-                    train_test_fractions[1],
-                    **plot_kwargs,
-                )
-            except ValueError as e:
-                # e.g. no background events with kl = 1
-                logger.warning(
-                    f"Plotting for background kl = 1 failed ({type(e).__name__}: {e}). "
-                    "Plotting only for all the background kl values."
-                )
-                # remove the incomplete plots of the failed kl = 1 attempt
-                for prefix in ["sig_bkg", "roc", "calibration"]:
-                    shutil.rmtree(f"{main_dir}/{prefix}_bkgkl_1.00", ignore_errors=True)
-                plot_kl_distributions(
-                    score_lbl_array_train,
-                    score_lbl_array_test,
-                    main_dir,
-                    ["all"],
-                    train_test_fractions[1],
-                    **plot_kwargs,
-                )
+            plot_kl_distributions_with_fallback(
+                score_lbl_array_train,
+                score_lbl_array_test,
+                main_dir,
+                train_test_fractions[1],
+                **plot_kwargs,
+            )
 
     # remove ML_model_loaded.py
     # if cfg.load_model or cfg.eval_model:

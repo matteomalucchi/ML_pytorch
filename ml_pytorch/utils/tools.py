@@ -61,6 +61,9 @@ def loop_one_batch(
     all_kl_values,
     type_eval,
 ):
+    # NOTE: the running/total sums are accumulated as tensors on the device and
+    # converted to python numbers only when printed, to avoid a GPU-CPU
+    # synchronisation (.item()) at every batch
     inputs, labels, class_weights, kl_values = data
 
     inputs = inputs.to(device, non_blocking=True)
@@ -72,8 +75,10 @@ def loop_one_batch(
     inputs = inputs[:, :-1]
     weights = (event_weights * class_weights.flatten()).clamp(min=0)
 
-    # compute the outputs of the model
-    outputs = model(inputs)
+    # build the autograd graph only when training
+    with torch.set_grad_enabled(train):
+        # compute the outputs of the model
+        outputs = model(inputs)
 
     if outputs.shape[1] == 1:
         outputs = outputs.flatten()
@@ -84,7 +89,7 @@ def loop_one_batch(
         y_pred = outputs.argmax(dim=1)
 
     # Compute the accuracy
-    correct = ((y_pred == labels) * weights).sum().item()
+    correct = ((y_pred == labels) * weights).sum().detach()
 
     # Compute the loss and its gradients
     loss = loss_fn(outputs, labels)
@@ -93,25 +98,27 @@ def loop_one_batch(
     # weight the loss
     loss = loss * weights
     # weighted average of the loss
-    loss_average = loss.sum() / weights.sum()
+    sum_weights = weights.sum()
+    loss_average = loss.sum() / sum_weights
 
     if train:
         # Reset the gradients of all optimized torch.Tensor
-        optimizer.zero_grad()
+        optimizer.zero_grad(set_to_none=True)
         # Compute the gradients of the loss w.r.t. the model parameters
         loss_average.backward()
         # Adjust learning weights
         optimizer.step()
 
     # Gather data for reporting
-    running_loss += loss_average.item()
-    tot_loss += loss_average.item()
+    loss_average_value = loss_average.detach()
+    running_loss += loss_average_value
+    tot_loss += loss_average_value
 
     running_correct += correct
     tot_correct += correct
 
-    running_num += weights.sum().item()
-    tot_num += weights.sum().item()
+    running_num += sum_weights
+    tot_num += sum_weights
 
     step_prints = max(1, 0.1 * num_batches)
 
@@ -149,8 +156,8 @@ def loop_one_batch(
 
         count += 1
 
-        last_loss = running_loss / step_prints  # loss per batch
-        last_accuracy = running_correct / running_num  # accuracy per batch
+        last_loss = float(running_loss) / step_prints  # loss per batch
+        last_accuracy = float(running_correct) / float(running_num)  # accuracy per batch
         tb_x = epoch_index * num_batches + i + 1
 
         if DEBUG:
@@ -195,17 +202,12 @@ def loop_one_batch(
         running_num = 0
 
     if eval_model:
-        # Create array of scores and labels
-        if i == 0:
-            all_scores = outputs.cpu().detach()
-            all_labels = labels.cpu().detach()
-            all_weights = event_weights.cpu().detach()
-            all_kl_values = kl_values.cpu().detach()
-        else:
-            all_scores = torch.cat((all_scores, outputs.cpu().detach()))
-            all_labels = torch.cat((all_labels, labels.cpu().detach()))
-            all_weights = torch.cat((all_weights, event_weights.cpu().detach()))
-            all_kl_values = torch.cat((all_kl_values, kl_values.cpu().detach()))
+        # Collect the scores and labels (kept on the device and concatenated
+        # once at the end, see eval_model)
+        all_scores.append(outputs.detach())
+        all_labels.append(labels.detach())
+        all_weights.append(event_weights.detach())
+        all_kl_values.append(kl_values.detach())
 
     return (
         running_loss,
@@ -327,8 +329,8 @@ def train_val_one_epoch(
         )
         scheduler.step()
 
-    avg_loss = tot_loss / len(loader)
-    avg_accuracy = tot_correct / tot_num
+    avg_loss = float(tot_loss) / len(loader)
+    avg_accuracy = float(tot_correct) / float(tot_num)
     if not train:
         # Track best performance, and save the model state
         if cfg.eval_param == "loss":
@@ -371,10 +373,10 @@ def eval_model(model, loader, loss_fn, type_eval, device, best_epoch):
     num_batches = len(loader)
     count = 0
 
-    all_scores = None
-    all_labels = None
-    all_weights = None
-    all_kl_values = None
+    all_scores = []
+    all_labels = []
+    all_weights = []
+    all_kl_values = []
 
     for i, data in enumerate(loader):
         (
@@ -415,8 +417,13 @@ def eval_model(model, loader, loss_fn, type_eval, device, best_epoch):
             type_eval,
         )
 
-    avg_loss = tot_loss / len(loader)
-    avg_accuracy = tot_correct / tot_num
+    avg_loss = float(tot_loss) / len(loader)
+    avg_accuracy = float(tot_correct) / float(tot_num)
+
+    all_scores = torch.cat(all_scores).cpu()
+    all_labels = torch.cat(all_labels).cpu()
+    all_weights = torch.cat(all_weights).cpu()
+    all_kl_values = torch.cat(all_kl_values).cpu()
 
     # the outputs of single-node models are flattened in loop_one_batch
     if all_scores.dim() == 1:

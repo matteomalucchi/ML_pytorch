@@ -1,4 +1,6 @@
+import logging
 import os
+import shutil
 import matplotlib
 
 matplotlib.use("Agg")
@@ -1646,6 +1648,39 @@ def plot_multiclass_sig_over_bkg(
                     f"{base}{'_log' if log else ''}.png",
                     name=f"sig_over_bkg_{tag}{'_log' if log else ''}",
                 )
+
+
+def plot_kl_distributions_with_fallback(
+    score_lbl_train, score_lbl_test, out_dir, test_fraction, **plot_kwargs
+):
+    """plot_kl_distributions for all the background kl values and for
+    background kl = 1, or only for all the background kl values if the
+    latter fails (e.g. no background events with kl = 1)."""
+    try:
+        plot_kl_distributions(
+            score_lbl_train,
+            score_lbl_test,
+            out_dir,
+            ["all", 1.0],
+            test_fraction,
+            **plot_kwargs,
+        )
+    except ValueError as e:
+        logging.getLogger(__name__).warning(
+            f"Plotting for background kl = 1 failed ({type(e).__name__}: {e}). "
+            "Plotting only for all the background kl values."
+        )
+        # remove the incomplete plots of the failed kl = 1 attempt
+        for prefix in ["sig_bkg", "roc", "calibration"]:
+            shutil.rmtree(f"{out_dir}/{prefix}_bkgkl_1.00", ignore_errors=True)
+        plot_kl_distributions(
+            score_lbl_train,
+            score_lbl_test,
+            out_dir,
+            ["all"],
+            test_fraction,
+            **plot_kwargs,
+        )
 
 
 def main():
