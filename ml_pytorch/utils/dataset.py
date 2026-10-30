@@ -219,14 +219,9 @@ def list_parquet_files(path):
     return files
 
 
-def count_objects(array, schema, n_variable, pad_value):
-    """Create the number of objects per event of a collection (<collection>_N)
-    by counting the elements of one of its jagged fields (<collection>_<field>).
-
-    The padded objects (added to have the same number per event), which are
-    either None or equal to pad_value, are not counted, so only the real
-    objects are.
-    """
+def count_field(schema, n_variable):
+    """Name of the jagged field (<collection>_<field>) used to create the
+    number of objects per event of a collection (<collection>_N)."""
     collection = n_variable[: -len("_N")]
     fields = [
         f.name
@@ -240,12 +235,24 @@ def count_objects(array, schema, n_variable, pad_value):
             f"Input variable {n_variable} is not in the parquet files and no "
             f"jagged field of the collection {collection} is available to create it"
         )
+    return fields[0]
+
+
+def count_objects(array, field, n_variable, pad_value):
+    """Create the number of objects per event of a collection (<collection>_N)
+    by counting the elements of one of its jagged fields (``field``, see
+    count_field).
+
+    The padded objects (added to have the same number per event), which are
+    either None or equal to pad_value, are not counted, so only the real
+    objects are.
+    """
     logger.warning(
         f"Input variable {n_variable} not found in the parquet files: creating it "
-        f"by counting the elements of {fields[0]} that are not None or {pad_value}"
+        f"by counting the elements of {field} that are not None or {pad_value}"
     )
     # the comparison is None for the None elements, which are then not counted
-    is_real = ak.fill_none(array[fields[0]] != pad_value, False)
+    is_real = ak.fill_none(array[field] != pad_value, False)
     return ak.fill_none(ak.sum(is_real, axis=1), 0)
 
 
@@ -348,7 +355,9 @@ def get_variables(
             # load the flat varibles
             # the files are passed explicitly in a fixed order, so that the
             # events are always loaded in the same order
-            dataset = ds.dataset(list_parquet_files(file_name), format="parquet")
+            files_in_dir = list_parquet_files(file_name)
+            logger.info(f"Reading {len(files_in_dir)} parquet files from {file_name}")
+            dataset = ds.dataset(files_in_dir, format="parquet")
             logger.debug(f"input_variables {input_variables}")
 
             # load the corresponding .coffea file to get the sum of genweights
@@ -363,12 +372,7 @@ def get_variables(
                 for x in vars
                 if x.endswith("_N") and x not in dataset.schema.names
             ]
-            table = dataset.to_table(
-                columns=[x for x in vars if x not in missing_counts]
-            )
-            variables_array = ak.from_arrow(table)
-
-            # load the jagged variables and add them flattened to the variables array
+            # jagged variables, added flattened to the variables array below
             jagged_variables = []
             max_pos = 0
 
@@ -379,14 +383,29 @@ def get_variables(
                         jagged_variables.append(variable_name)
                     if int(pos) > max_pos:
                         max_pos = int(pos)
-
-            table = dataset.to_table()
-            jagged_variables_array = ak.from_arrow(table)
             logger.debug(f"jagged_variables {jagged_variables}")
+
+            count_fields = {k: count_field(dataset.schema, k) for k in missing_counts}
+
+            # read the parquet files only once and only the needed columns
+            # (flat and jagged inputs, weight and fields to count the objects)
+            columns = list(
+                dict.fromkeys(
+                    [x for x in vars if x not in missing_counts]
+                    + jagged_variables
+                    + list(count_fields.values())
+                    + ["weight"]
+                )
+            )
+            table = dataset.to_table(columns=columns, use_threads=True)
+            jagged_variables_array = ak.from_arrow(table)
+            variables_array = jagged_variables_array[
+                [x for x in vars if x not in missing_counts]
+            ]
 
             for k in missing_counts:
                 variables_array[k] = count_objects(
-                    jagged_variables_array, dataset.schema, k, pad_value
+                    jagged_variables_array, count_fields[k], k, pad_value
                 )
 
             # add the wanted number of flattened features from the jagged variables to the feature array
@@ -433,7 +452,6 @@ def get_variables(
             # the None values of the inputs are padded with pad_value
             variables_array = np.array(
                 [
-
                     ak.to_numpy(ak.fill_none(variables_array[f], pad_value))
                         for f in input_variables
                 ]
@@ -854,12 +872,27 @@ def _find_class_files(cfg, class_def):
                         coffea_files.append(os.path.join(direct, file))
 
         if cfg.data_format == "parquet":
+            parquet_dir = cfg.get("parquet_dir", None)
+            if parquet_dir is not None and len(cfg.data_dirs) != 1:
+                raise ValueError("parquet_dir can be used only with a single data_dir")
             for direct in cfg.data_dirs:
-                with open(f"{direct}/config.json", "r") as f:
-                    config = json.load(f)
-                parquet_dirs_path = root_to_local(
-                    config["workflow"]["workflow_options"]["save_chunk"]
-                )
+                if parquet_dir is not None:
+                    # e.g. the files merged with ml_merge_parquet
+                    parquet_dirs_path = parquet_dir
+                    logger.info(
+                        f"Reading the parquet files from parquet_dir {parquet_dirs_path} "
+                        f"(instead of the save_chunk directory in {direct}/config.json)"
+                    )
+                else:
+                    with open(f"{direct}/config.json", "r") as f:
+                        config = json.load(f)
+                    parquet_dirs_path = root_to_local(
+                        config["workflow"]["workflow_options"]["save_chunk"]
+                    )
+                    logger.info(
+                        f"Reading the parquet files from {parquet_dirs_path} "
+                        f"(save_chunk directory in {direct}/config.json)"
+                    )
                 if not os.path.isdir(parquet_dirs_path):
                     raise FileNotFoundError(
                         f"Local path not found on this node: {parquet_dirs_path}"

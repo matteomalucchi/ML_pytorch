@@ -137,6 +137,29 @@ def my_roc_auc(
     )
 
 
+def _calibration_curve_with_errors(binary_labels, scores, n_bins):
+    """``sklearn`` calibration curve plus the uncertainties in each bin:
+
+    * on the fraction of positives: binomial, ``sqrt(p * (1 - p) / N)``;
+    * on the mean predicted probability: standard error of the mean,
+      ``std(score) / sqrt(N)``.
+
+    The bin counts are computed with the same uniform binning used by
+    ``calibration_curve`` (empty bins are dropped in both).
+    """
+    prob_true, prob_pred = calibration_curve(binary_labels, scores, n_bins=n_bins)
+    bins = np.linspace(0.0, 1.0, n_bins + 1)
+    binids = np.searchsorted(bins[1:-1], scores)
+    bin_total = np.bincount(binids, minlength=len(bins))
+    bin_sum_sq = np.bincount(binids, weights=scores**2, minlength=len(bins))
+    nonzero = bin_total != 0
+    bin_total = bin_total[nonzero]
+    prob_true_err = np.sqrt(prob_true * (1 - prob_true) / bin_total)
+    score_var = np.clip(bin_sum_sq[nonzero] / bin_total - prob_pred**2, 0, None)
+    prob_pred_err = np.sqrt(score_var / bin_total)
+    return prob_true, prob_true_err, prob_pred, prob_pred_err
+
+
 def plot_calibration_curve(
     score_lbl_tensor_test,
     dir,
@@ -157,6 +180,9 @@ def plot_calibration_curve(
 
     Note that ``sklearn.calibration.calibration_curve`` does not support
     event weights, so both the curve and the Brier score are unweighted.
+    The error bars on the fraction of positives are the binomial uncertainty
+    ``sqrt(p * (1 - p) / N)`` with ``N`` the number of events in the bin;
+    those on the mean predicted probability are ``std(score) / sqrt(N)``.
 
     Produces ``calibration_curve{,_class_<i>}.{png,pdf,svg}`` in ``dir``.
     """
@@ -175,8 +201,8 @@ def plot_calibration_curve(
             print(f"Skipping calibration curve for class {pos_class}: only one class present")
             continue
 
-        prob_true, prob_pred = calibration_curve(
-            binary_labels, scores, n_bins=n_bins
+        prob_true, prob_true_err, prob_pred, prob_pred_err = _calibration_curve_with_errors(
+            binary_labels, scores, n_bins
         )
         brier_score = brier_score_loss(binary_labels, scores)
 
@@ -192,7 +218,7 @@ def plot_calibration_curve(
 
         series_dict = {
             f"{name} vs rest" if n_score > 1 else "Signal vs background": {
-                "data": {"x": [prob_pred, None], "y": [prob_true, None]},
+                "data": {"x": [prob_pred, prob_pred_err], "y": [prob_true, prob_true_err]},
                 "style": {"linestyle": "", "fmt": "o", "color": SIG_COLOR},
             },
             "Perfectly calibrated": {
@@ -250,8 +276,8 @@ def plot_calibration_curve(
                     )
                     continue
 
-                prob_true, prob_pred = calibration_curve(
-                    reduced_labels, reduced_scores, n_bins=n_bins
+                prob_true, prob_true_err, prob_pred, prob_pred_err = _calibration_curve_with_errors(
+                    reduced_labels, reduced_scores, n_bins
                 )
                 brier_score = brier_score_loss(reduced_labels, reduced_scores)
 
@@ -263,7 +289,7 @@ def plot_calibration_curve(
 
                 series_dict = {
                     f"{name} vs {name_ref}" if n_score > 1 else "Signal vs background": {
-                        "data": {"x": [prob_pred, None], "y": [prob_true, None]},
+                        "data": {"x": [prob_pred, prob_pred_err], "y": [prob_true, prob_true_err]},
                         "style": {"linestyle": "", "fmt": "o", "color": SIG_COLOR},
                     },
                     "Perfectly calibrated": {
@@ -629,6 +655,8 @@ def plot_sig_bkg_distributions(
         hist_bkg_train = normalized_hist(bkg_score_train, bkg_weight_train)
         hist_bkg_test = normalized_hist(bkg_score_test, bkg_weight_test)
 
+        # the ratio panel shows test / training separately for signal and
+        # background (the training histograms are drawn as bands around 1)
         series_dict = {
             "Signal (training)": {
                 "data": hist_sig_train,
@@ -642,7 +670,11 @@ def plot_sig_bkg_distributions(
             },
             "Signal (test)": {
                 "data": hist_sig_test,
-                "style": {"histtype": "errorbar", "color": SIG_COLOR},
+                "style": {
+                    "histtype": "errorbar",
+                    "color": SIG_COLOR,
+                    "ratio_reference": "Signal (training)",
+                },
             },
             "Background (training)": {
                 "data": hist_bkg_train,
@@ -650,7 +682,11 @@ def plot_sig_bkg_distributions(
             },
             "Background (test)": {
                 "data": hist_bkg_test,
-                "style": {"histtype": "errorbar", "color": BKG_COLOR},
+                "style": {
+                    "histtype": "errorbar",
+                    "color": BKG_COLOR,
+                    "ratio_reference": "Background (training)",
+                },
             },
         }
 
@@ -671,6 +707,7 @@ def plot_sig_bkg_distributions(
                 .set_labels(
                     xlabel="DNN Class Score",
                     ylabel="Normalized counts",
+                    ratio_label="Test / Train",
                 )
                 .set_data(series_dict, plot_type="1d")
                 .set_options(
@@ -678,6 +715,7 @@ def plot_sig_bkg_distributions(
                     legend_font_size=20,
                     split_legend=False,
                     grid=True,
+                    set_ylim_ratio=0.5,
                     y_log=log,
                     ylim_bottom_value=1e-4 if log else 0.0,
                     ylim_top_value=5 if log else 0.15,
@@ -1103,7 +1141,12 @@ def plot_multiclass_distributions(
             }
             series_dict[f"{label} (test)"] = {
                 "data": hist_test,
-                "style": {"color": color, "histtype": "errorbar"},
+                "style": {
+                    "color": color,
+                    "histtype": "errorbar",
+                    # test / training ratio of each class
+                    "ratio_reference": f"{label} (training)",
+                },
             }
 
             if tr_mask.sum() == 0 or te_mask.sum() == 0:
@@ -1138,6 +1181,7 @@ def plot_multiclass_distributions(
                 .set_labels(
                     xlabel=f"Score of output node: {node_name}",
                     ylabel="Normalized counts",
+                    ratio_label="Test / Train",
                 )
                 .set_data(series_dict, plot_type="1d")
                 .set_options(
@@ -1145,6 +1189,7 @@ def plot_multiclass_distributions(
                     legend_font_size=18,
                     split_legend=False,
                     grid=True,
+                    set_ylim_ratio=0.5,
                     y_log=log,
                     ylim_bottom_value=1e-4 if log else 0.0,
                     # leave room for the legend and the annotations
@@ -1533,7 +1578,12 @@ def plot_multiclass_sig_over_bkg(
             }
             series_dict[f"{label} (test)"] = {
                 "data": hist_test,
-                "style": {"color": color, "histtype": "errorbar"},
+                "style": {
+                    "color": color,
+                    "histtype": "errorbar",
+                    # test / training ratio of each class
+                    "ratio_reference": f"{label} (training)",
+                },
             }
 
             _, p_value = stats.ks_2samp(d_train[tr_mask], d_test[te_mask])
@@ -1562,13 +1612,18 @@ def plot_multiclass_sig_over_bkg(
                     figsize=[13, 13], lumitext=lumitext, cmstext="Private"
                 )
                 .set_output(f"{base}{'_log' if log else ''}")
-                .set_labels(xlabel=xlabel, ylabel="Normalized counts")
+                .set_labels(
+                    xlabel=xlabel,
+                    ylabel="Normalized counts",
+                    ratio_label="Test / Train",
+                )
                 .set_data(series_dict, plot_type="1d")
                 .set_options(
                     legend_loc="upper left",
                     legend_font_size=18,
                     split_legend=False,
                     grid=True,
+                    set_ylim_ratio=0.5,
                     y_log=log,
                     ylim_bottom_value=1e-4 if log else 0.0,
                     # leave room for the legend and the annotations

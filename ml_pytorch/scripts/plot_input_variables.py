@@ -96,36 +96,27 @@ def arrays_from_loaders(loaders):
 def resolve_variable_names(n_columns, input_variables):
     """Match the name of the input variables to the columns of the feature array.
 
-    A single entry of `input_variables` can correspond to more than one column
-    of the feature array (e.g. a jet collection variable which is unflattened
-    into one column per jet), in which case the position in the collection is
-    appended to the name of the variable.
+    `load_data` produces exactly one column per entry of `input_variables`
+    (the jagged variables are already listed once per object as `name:pos`),
+    so any mismatch means that the feature array is not built as expected
+    and the plots (and the training) would be wrong: in that case an error
+    is raised.
     """
     n_variables = len(input_variables)
 
-    if n_columns == n_variables:
-        return list(input_variables)
-
-    if n_variables > 0 and n_columns % n_variables == 0:
-        columns_per_variable = n_columns // n_variables
-        logger.warning(
-            "Found %d columns for %d input variables: assuming %d columns per variable",
-            n_columns,
-            n_variables,
-            columns_per_variable,
+    if n_columns != n_variables:
+        raise ValueError(
+            f"Mismatch between the feature array and the input variables: "
+            f"found {n_columns} feature columns but {n_variables} input variables "
+            f"({n_columns - n_variables:+d} columns). The feature array returned "
+            "by load_data must contain one column per input variable followed "
+            "only by the event weight (which is removed before plotting): check "
+            "how the rows are built in ml_pytorch/utils/dataset.py (e.g. extra "
+            "rows such as weights/kl/dataset_idx added twice) and the "
+            f"input_variables of the config. Input variables: {list(input_variables)}"
         )
-        return [
-            f"{variable}_{position}"
-            for variable in input_variables
-            for position in range(columns_per_variable)
-        ]
 
-    logger.warning(
-        "Found %d columns for %d input variables: using generic names for the plots",
-        n_columns,
-        n_variables,
-    )
-    return [f"feature_{i}" for i in range(n_columns)]
+    return list(input_variables)
 
 
 def safe_file_name(variable):
