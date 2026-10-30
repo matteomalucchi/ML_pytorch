@@ -177,12 +177,6 @@ parser.add_argument(
     action="store_false",
 )
 parser.add_argument(
-    "--amp",
-    default=None,
-    help="Use bfloat16 automatic mixed precision",
-    action="store_true",
-)
-parser.add_argument(
     "--overwrite",
     default=None,
     help="Overwrite output directory",

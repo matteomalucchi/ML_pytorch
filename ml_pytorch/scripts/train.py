@@ -266,8 +266,6 @@ def main():
             torch.backends.cudnn.allow_tf32 = True
         if not cfg.deterministic:
             torch.backends.cudnn.benchmark = True
-        if cfg.amp:
-            logger.info("Using bfloat16 automatic mixed precision")
 
     if cfg.data_on_gpu:
         # copy the whole datasets to the GPU once instead of transferring
@@ -553,7 +551,6 @@ def main():
             "training",
             device,
             eval_epoch,
-            amp=cfg.amp,
         )
 
         logger.info("\n")
@@ -570,7 +567,6 @@ def main():
             "test",
             device,
             eval_epoch,
-            amp=cfg.amp,
         )
         logger.info("================================")
         logger.info(

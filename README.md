@@ -320,7 +320,6 @@ Comet ML logging
 Performance
   --data-on-gpu                Keep the whole datasets on the GPU (default: on)
   --no-data-on-gpu             Use the standard DataLoaders (copy every batch to the GPU)
-  --amp                        bfloat16 automatic mixed precision
 ```
 
 ### Run only evaluation (no training)
@@ -405,7 +404,7 @@ The models are small DNNs, so the training is limited by the data loading and th
 - `data_on_gpu: True` (default) copies the whole datasets to the GPU once and takes the batches as slices of it, removing the DataLoader workers and the per-batch host-to-device copies. It falls back to the DataLoaders if the datasets take more than half of the free GPU memory.
 - The loss and accuracy are accumulated on the GPU (no synchronisation at every batch) and the validation/evaluation run without building the autograd graph.
 - A larger `batch_size` (e.g. 2048-8192) is the biggest further speed-up, but it changes the training dynamics: scale the learning rate accordingly.
-- `amp: True` (bfloat16 mixed precision) and `tf32: True` (default) help on Ampere or newer GPUs, mostly for larger models/batches.
+- `tf32: True` (default) speeds up the matrix multiplications on Ampere or newer GPUs.
 - Multiple GPUs: one GPU is enough to saturate a single small training, and `--gpus 0,1` (DataParallel) is usually *slower*. Use the GPUs to run several trainings (seeds) at the same time with `run_training.sh --gpus-per-node`. Several trainings can also share one GPU.
 - After all trainings finish, the best ONNX model from each run is copied to `best_models/` and `ml_onnx` is called to aggregate them. With `--ratio` the `-ar` flag is passed (average ratio, used for background reweighting); without it, a plain aggregation is performed.
 - The input variable name is read automatically from the training config YAML (`input_variables` field).

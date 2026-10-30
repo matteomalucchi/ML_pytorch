@@ -60,7 +60,6 @@ def loop_one_batch(
     all_weights,
     all_kl_values,
     type_eval,
-    amp=False,
 ):
     # NOTE: the running/total sums are accumulated as tensors on the device and
     # converted to python numbers only when printed, to avoid a GPU-CPU
@@ -77,13 +76,9 @@ def loop_one_batch(
     weights = (event_weights * class_weights.flatten()).clamp(min=0)
 
     # build the autograd graph only when training
-    with torch.set_grad_enabled(train), torch.autocast(
-        device_type=device.type, dtype=torch.bfloat16, enabled=amp
-    ):
+    with torch.set_grad_enabled(train):
         # compute the outputs of the model
         outputs = model(inputs)
-    # loss and accuracy in full precision
-    outputs = outputs.float()
 
     if outputs.shape[1] == 1:
         outputs = outputs.flatten()
@@ -325,7 +320,6 @@ def train_val_one_epoch(
             all_weights,
             all_kl_values,
             None,
-            amp=cfg.get("amp", False),
         )
 
     if train:
@@ -365,7 +359,7 @@ def train_val_one_epoch(
     )
 
 
-def eval_model(model, loader, loss_fn, type_eval, device, best_epoch, amp=False):
+def eval_model(model, loader, loss_fn, type_eval, device, best_epoch):
     # Test the model by running it on the test set
     running_loss = 0.0
     tot_loss = 0.0
@@ -421,7 +415,6 @@ def eval_model(model, loader, loss_fn, type_eval, device, best_epoch, amp=False)
             all_weights,
             all_kl_values,
             type_eval,
-            amp=amp,
         )
 
     avg_loss = float(tot_loss) / len(loader)

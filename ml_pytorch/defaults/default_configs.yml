@@ -177,10 +177,6 @@ gpus: '0'
 # are then not used. Falls back to the DataLoaders on CPU or if the datasets
 # take more than half of the free GPU memory.
 data_on_gpu: True
-# Use bfloat16 automatic mixed precision for the forward pass (the loss is
-# computed in float32). Faster on recent GPUs (Ampere or newer) for large
-# models and batches; for small models the gain is limited.
-amp: False
 # Allow TensorFloat-32 matrix multiplications on Ampere (or newer) GPUs
 # (ignored with deterministic: True).
 tf32: True
