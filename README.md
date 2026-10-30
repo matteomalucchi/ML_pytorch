@@ -167,6 +167,7 @@ A ready-to-edit multi-class example is provided at `configs/hh4b_sig_bkg_classif
 | `preprocess_variables_functions` | mapping `{var: [func_name, [args...]]}` resolved against `ml_pytorch/defaults/preprocess_variables_functions.py` |
 | `data_format` | `coffea`, `parquet`, or `root` |
 | `data_dirs` | list of directories containing the input files (`.coffea` files / parquet config) |
+| `parquet_dir` | parquet only: directory of the parquet files to use instead of the `save_chunk` one in the `config.json` of `data_dirs` (single `data_dir` only), e.g. the output of `ml_merge_parquet` |
 | `oversample_split`, `split_oversample`, `undersample` | binary-only class balancing strategies |
 | `eval`, `roc`, `histos`, `history`, `onnx` | toggle the post-training outputs |
 | `gpus` | comma-separated GPU indices, or unset for CPU |
@@ -602,6 +603,23 @@ ml_sb -i <training_directory> -klb full
 ml_input_vars -c <config_file> -o <output_directory>
 ```
 
+### Merge the parquet chunks
+
+Loading thousands of small parquet chunks from dCache (`/pnfs`) is dominated by the per-file latency (~1-2 min per dataset/region even for few MB). `ml_merge_parquet` merges them once into a single `merged.parquet` per leaf directory (e.g. `<dataset>/<region>/nominal`), keeping the directory structure and the events order. Then set `parquet_dir: <output_dir>` in the training config.
+
+```bash
+# -i: PocketCoffea output dir (parquet location read from config.json) or the parquet_files dir
+ml_merge_parquet -i <data_dir> -o /work/$USER/merged_parquet/<name> [-j 32] [--files-per-step 256] [--overwrite]
+
+# the merged files cannot be written directly on /pnfs: merge on /work, copy to /pnfs and remove from /work
+ml_merge_parquet -i <data_dir> -o /work/$USER/merged_parquet/<name> --copy-to /pnfs/psi.ch/cms/trivcat/store/user/$USER/merged_parquet/<name>
+```
+
+* `-j/--threads`: number of threads reading the files in parallel (default 32)
+* `--files-per-step`: number of files kept in memory at the same time (default 256)
+* `--overwrite`: re-merge directories already merged (skipped by default)
+* `--copy-to`: after each merge, copy the merged file to this directory (e.g. on `/pnfs`) keeping the directory structure, check the copy (size, adler32 checksum, number of events) and remove the file (and the directories left empty) from the `-o` directory. If the check fails the copy is removed, the original is kept and the script stops; a rerun reuses the merged file left in `-o`. Use the `--copy-to` directory as `parquet_dir`
+
 ## Input variable distributions
 
 Before the training starts, the normalized distributions of the input variables
@@ -634,6 +652,12 @@ The same plots can be produced standalone (without running a training) with:
 ml_input_vars -c configs/example_DNN_config_ggF_VBF.yml -o <output_directory>
 ```
 
+Each plot is named after its input variable. If the number of columns of the
+feature array differs from the number of `input_variables`, the script raises
+a `ValueError` explaining the mismatch (number of columns vs variables and
+the list of variables), since it means the feature array is not built
+correctly in `ml_pytorch/utils/dataset.py`.
+
 ### Multi-class evaluation outputs
 
 When `ml_sb` (the `sig_bkg_eval` script) detects more than one score column in `score_lbl_array.npz`, it automatically switches to multi-class mode and produces:
@@ -644,6 +668,8 @@ When `ml_sb` (the `sig_bkg_eval` script) detects more than one score column in `
 * `tpr_fpr_multiclass.npz` — the saved (`tpr`, `fpr`, `auc`) arrays so that arbitrary class combinations can be replotted later.
 
 The binary path (single score column) is unchanged and still produces `sig_bkg_distributions_kl_*` and `roc_curve_kl_*`.
+
+All the overtraining plots (`sig_bkg_distributions_kl_*`, `score_distribution_class_<i>`, `sig_over_bkg_*`) include a ratio panel with the test / training ratio of each class separately (via the HEPPlotter `ratio_reference` style key), with the training uncertainty drawn as a band around 1.
 
 ## COMET integration
 

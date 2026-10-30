@@ -327,7 +327,9 @@ def get_variables(
             # load the flat varibles
             # the files are passed explicitly in a fixed order, so that the
             # events are always loaded in the same order
-            dataset = ds.dataset(list_parquet_files(file_name), format="parquet")
+            files_in_dir = list_parquet_files(file_name)
+            logger.info(f"Reading {len(files_in_dir)} parquet files from {file_name}")
+            dataset = ds.dataset(files_in_dir, format="parquet")
             logger.debug(f"input_variables {input_variables}")
 
             # load the corresponding .coffea file to get the sum of genweights
@@ -831,12 +833,27 @@ def _find_class_files(cfg, class_def):
                         coffea_files.append(os.path.join(direct, file))
 
         if cfg.data_format == "parquet":
+            parquet_dir = cfg.get("parquet_dir", None)
+            if parquet_dir is not None and len(cfg.data_dirs) != 1:
+                raise ValueError("parquet_dir can be used only with a single data_dir")
             for direct in cfg.data_dirs:
-                with open(f"{direct}/config.json", "r") as f:
-                    config = json.load(f)
-                parquet_dirs_path = root_to_local(
-                    config["workflow"]["workflow_options"]["save_chunk"]
-                )
+                if parquet_dir is not None:
+                    # e.g. the files merged with ml_merge_parquet
+                    parquet_dirs_path = parquet_dir
+                    logger.info(
+                        f"Reading the parquet files from parquet_dir {parquet_dirs_path} "
+                        f"(instead of the save_chunk directory in {direct}/config.json)"
+                    )
+                else:
+                    with open(f"{direct}/config.json", "r") as f:
+                        config = json.load(f)
+                    parquet_dirs_path = root_to_local(
+                        config["workflow"]["workflow_options"]["save_chunk"]
+                    )
+                    logger.info(
+                        f"Reading the parquet files from {parquet_dirs_path} "
+                        f"(save_chunk directory in {direct}/config.json)"
+                    )
                 if not os.path.isdir(parquet_dirs_path):
                     raise FileNotFoundError(
                         f"Local path not found on this node: {parquet_dirs_path}"

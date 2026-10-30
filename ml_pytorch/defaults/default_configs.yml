@@ -57,6 +57,12 @@ classes: null
 # config.json pointing to the parquet chunks).
 data_dirs: [/work/mmalucch/out_hh4b/out_vbf_ggf_dnn_full/]
 
+# Parquet only: directory of the parquet files to use instead of the one in
+# the config.json of data_dirs (only with a single data_dir), e.g. the output
+# of ml_merge_parquet, which merges the many small chunks into a single file
+# per dataset/region and makes the loading much faster.
+parquet_dir: null
+
 # Format of the input data: coffea or parquet (root is not supported anymore).
 data_format: coffea
 
