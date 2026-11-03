@@ -42,6 +42,26 @@
 #                           over its GPUs (one process per training)
 #   --no-slurm              Run directly without Slurm (for local testing)
 #   -- EXTRA                Additional arguments forwarded to ml_train
+#
+# K-fold in several jobs (see the README, "K-fold in several jobs"): the events
+# are loaded once by a CPU job into a shared cache, then the folds are trained
+# by small GPU jobs that copy it to their node, then a CPU job merges them.
+#   --prepare-job           Submit the CPU prepare job, an array of GPU jobs
+#                           with --folds-per-job folds each, and the CPU merge
+#                           job, chained with dependencies
+#   --folds-per-job INT     Folds per GPU job with --prepare-job (default: 1)
+#   --prepare-only          Submit only the CPU prepare job
+#   --folds LIST            Submit one GPU job training only these folds (e.g.
+#                           0-4 or 5,7,9) from the shared cache
+#   --merge-only            Submit only the CPU merge job
+#   --cache-dir DIR         Shared cache (default: OUTDIR/kfold_cache_shared),
+#                           removed after the merge
+#   --keep-cache            Do not remove the shared cache after the merge
+#   --cpu-partition STR     Partition of the CPU jobs (default: standard)
+#   --cpu-account STR       Account of the CPU jobs (default: t3)
+#   --cpu-cpus INT          CPUs of the CPU jobs (default: 8)
+#   --cpu-mem-per-cpu MB    Memory per CPU of the CPU jobs (default: --mem-per-cpu)
+#   --cpu-time HH:MM:SS     Time limit of the CPU jobs (default: --time)
 
 # ─── Defaults ─────────────────────────────────────────────────────────────────
 N_TRAININGS=1
@@ -63,6 +83,18 @@ SLURM_TIME="12:00:00"
 SLURM_MEM=4000
 SLURM_CPUS=4
 GPUS_PER_NODE=1
+SPLIT_JOBS=false
+PREPARE_ONLY=false
+MERGE_ONLY=false
+FOLDS=""
+FOLDS_PER_JOB=1
+SHARED_CACHE_DIR=""
+KEEP_CACHE=false
+CPU_PARTITION="standard"
+CPU_ACCOUNT="t3"
+CPU_CPUS=8
+CPU_MEM=""
+CPU_TIME=""
 
 # ─── Usage ────────────────────────────────────────────────────────────────────
 usage() {
@@ -103,6 +135,28 @@ Optional:
   --no-slurm              Run directly without Slurm (for testing; forces NODES=1)
   -- EXTRA                Extra arguments forwarded to ml_train
 
+K-fold in several jobs (the events are loaded once by a CPU job into a shared
+cache, the folds are trained by small GPU jobs that copy it to their node, and
+a CPU job merges them):
+  --prepare-job           Submit the CPU prepare job, an array of GPU jobs with
+                          --folds-per-job folds each (-g GPUs per job) and the
+                          CPU merge job, chained with dependencies. The array
+                          tasks start one by one when their GPUs are free
+  --folds-per-job INT     Folds per GPU job with --prepare-job (default: 1)
+  --prepare-only          Submit only the CPU prepare job
+  --folds LIST            Submit one GPU job training only these folds (e.g.
+                          0-4 or 5,7,9) from the shared cache; repeat it for
+                          the other folds when resources are free
+  --merge-only            Submit only the CPU merge job, after all the folds
+  --cache-dir DIR         Shared cache, visible from all the nodes (default:
+                          OUTDIR/kfold_cache_shared); removed after the merge
+  --keep-cache            Do not remove the shared cache after the merge
+  --cpu-partition STR     Partition of the CPU jobs (default: standard)
+  --cpu-account STR       Account of the CPU jobs (default: t3)
+  --cpu-cpus INT          CPUs of the CPU jobs (default: 8)
+  --cpu-mem-per-cpu MB    Memory per CPU of the CPU jobs (default: --mem-per-cpu)
+  --cpu-time HH:MM:SS     Time limit of the CPU jobs (default: --time)
+
 Examples:
   # Single training
   $0 -c /full/path/DNN_config.yml -o /full/path/out
@@ -118,6 +172,15 @@ Examples:
 
   # 5-fold training, the 5 folds in parallel on 1 node, with ratio ONNX models
   $0 -c /full/path/DNN_config.yml -o /full/path/out -k 5 --ratio
+
+  # 20-fold training in 20 jobs of 1 GPU each, started when GPUs are free
+  $0 -c /full/path/DNN_config.yml -o /full/path/out -k 20 --prepare-job -g 1 --cpus 4
+
+  # The same by hand: prepare, then train the folds in pieces, then merge
+  $0 -c /full/path/DNN_config.yml -o /full/path/out -k 20 --prepare-only
+  $0 -c /full/path/DNN_config.yml -o /full/path/out -k 20 --folds 0-7 -g 8 --cpus 32
+  $0 -c /full/path/DNN_config.yml -o /full/path/out -k 20 --folds 8-19 -g 4 --cpus 24
+  $0 -c /full/path/DNN_config.yml -o /full/path/out -k 20 --merge-only
 
   # Local test
   $0 -c /full/path/DNN_config.yml -o /full/path/out --no-slurm
@@ -145,6 +208,18 @@ while [[ $# -gt 0 ]]; do
         --cpus)            SLURM_CPUS="$2"; shift 2 ;;
         -g|--gpus-per-node) GPUS_PER_NODE="$2"; shift 2 ;;
         --no-slurm)        NO_SLURM=true; shift ;;
+        --prepare-job)     SPLIT_JOBS=true; shift ;;
+        --folds-per-job)   FOLDS_PER_JOB="$2"; shift 2 ;;
+        --prepare-only)    PREPARE_ONLY=true; shift ;;
+        --folds)           FOLDS="$2"; shift 2 ;;
+        --merge-only)      MERGE_ONLY=true; shift ;;
+        --cache-dir)       SHARED_CACHE_DIR="$2"; shift 2 ;;
+        --keep-cache)      KEEP_CACHE=true; shift ;;
+        --cpu-partition)   CPU_PARTITION="$2"; shift 2 ;;
+        --cpu-account)     CPU_ACCOUNT="$2"; shift 2 ;;
+        --cpu-cpus)        CPU_CPUS="$2"; shift 2 ;;
+        --cpu-mem-per-cpu) CPU_MEM="$2"; shift 2 ;;
+        --cpu-time)        CPU_TIME="$2"; shift 2 ;;
         --mode)            MODE="$2"; shift 2 ;;
         -h|--help)         usage ;;
         --)                shift; EXTRA_ARGS=("$@"); break ;;
@@ -192,6 +267,61 @@ USE_KFOLD_CACHE=false
 KFOLD_CACHE_DIR="${TMPDIR:-/tmp}/ml_kfold_cache_${SLURM_JOB_ID:-$$}${SLURM_ARRAY_TASK_ID:+_${SLURM_ARRAY_TASK_ID}}"
 KFOLD_SPLIT_DIR="${OUT_DIR}/kfold_split"
 
+# ─── K-fold in several jobs ──────────────────────────────────────────────────
+[[ -z "$SHARED_CACHE_DIR" ]] && SHARED_CACHE_DIR="${OUT_DIR}/kfold_cache_shared"
+[[ -z "$CPU_MEM" ]] && CPU_MEM="$SLURM_MEM"
+[[ -z "$CPU_TIME" ]] && CPU_TIME="$SLURM_TIME"
+N_SPLIT_OPTIONS=0
+for opt in "$SPLIT_JOBS" "$PREPARE_ONLY" "$MERGE_ONLY"; do
+    [[ "$opt" == true ]] && N_SPLIT_OPTIONS=$(( N_SPLIT_OPTIONS + 1 ))
+done
+[[ -n "$FOLDS" ]] && N_SPLIT_OPTIONS=$(( N_SPLIT_OPTIONS + 1 ))
+if [[ "$N_SPLIT_OPTIONS" -gt 1 ]]; then
+    echo "Error: use only one of --prepare-job, --prepare-only, --folds and --merge-only."
+    exit 1
+fi
+if [[ "$N_SPLIT_OPTIONS" -eq 1 ]]; then
+    if [[ "$K_FOLDS" -lt 2 || "$KFOLD_CACHE" != true ]]; then
+        echo "Error: --prepare-job, --prepare-only, --folds and --merge-only need --k-folds >= 2 and the k-fold cache."
+        exit 1
+    fi
+    if [[ "$NODES" -ne 1 ]]; then
+        echo "Error: -p/--nodes cannot be combined with the k-fold split options (use --folds-per-job)."
+        exit 1
+    fi
+fi
+if [[ "$FOLDS_PER_JOB" -lt 1 ]]; then
+    echo "Error: --folds-per-job must be >= 1."
+    exit 1
+fi
+
+# Folds of a list like "0-4,7,9-10" (sorted, unique), checked against K_FOLDS
+parse_folds() {
+    local item start end f out=()
+    IFS=',' read -r -a items <<< "$1"
+    for item in "${items[@]}"; do
+        if [[ "$item" =~ ^([0-9]+)-([0-9]+)$ ]]; then
+            start="${BASH_REMATCH[1]}"; end="${BASH_REMATCH[2]}"
+        elif [[ "$item" =~ ^[0-9]+$ ]]; then
+            start="$item"; end="$item"
+        else
+            echo "Error: invalid fold list '$1'." >&2; return 1
+        fi
+        for ((f=start; f<=end; f++)); do
+            if [[ "$f" -ge "$K_FOLDS" ]]; then
+                echo "Error: fold $f is not in 0 ... $(( K_FOLDS - 1 ))." >&2; return 1
+            fi
+            out+=("$f")
+        done
+    done
+    [[ ${#out[@]} -eq 0 ]] && { echo "Error: empty fold list '$1'." >&2; return 1; }
+    printf '%s\n' "${out[@]}" | sort -n -u | tr '\n' ' '
+}
+if [[ -n "$FOLDS" ]]; then
+    FOLD_LIST=$(parse_folds "$FOLDS") || exit 1
+fi
+N_FOLD_JOBS=$(( (K_FOLDS + FOLDS_PER_JOB - 1) / FOLDS_PER_JOB ))
+
 
 # ─── Helper: canonical run directory for a given seed ────────────────────────
 # (with --k-folds the index is the fold: OUT_DIR/fold_<seed - INIT_SEED>)
@@ -226,6 +356,9 @@ build_submit_args() {
     [[ "$ALPHA" == true ]] && args+=(--alpha)
     [[ "$SAVE_ROC" == true ]] && args+=(--save-roc)
     [[ "$ALPHA_DEN_COMPUTED" == true ]] && args+=(--alpha-den-computed)
+    args+=(--folds-per-job "$FOLDS_PER_JOB" --cache-dir "$SHARED_CACHE_DIR")
+    [[ "$KEEP_CACHE" == true ]] && args+=(--keep-cache)
+    [[ -n "$FOLDS" ]] && args+=(--folds "$FOLDS")
     [[ ${#EXTRA_ARGS[@]} -gt 0 ]] && args+=(-- "${EXTRA_ARGS[@]}")
     printf '%s\0' "${args[@]}"
 }
@@ -249,6 +382,76 @@ if [[ -z "${SLURM_JOB_ID:-}" && "$NO_SLURM" != true ]]; then
     # Slurm logs always go to OUT_DIR: ml_train --overwrite does rm -rf run_dir,
     # which would delete a log written inside the run directory.
     SLURM_LOG_DIR="$OUT_DIR"
+
+    # CPU jobs (prepare and merge of the k-fold in several jobs): submitted with
+    # --wrap, so the GPU #SBATCH lines of this script are not applied
+    submit_cpu_job() {
+        local job_name="$1" mode="$2" dependency="$3"
+        local mode_args wrapped
+        mapfile -d '' mode_args < <(build_submit_args "$mode")
+        wrapped="bash $(printf '%q ' "$SCRIPT_PATH" "${mode_args[@]}")"
+        local dep_args=()
+        [[ -n "$dependency" ]] && dep_args=(--dependency="afterok:${dependency}")
+        sbatch --parsable \
+            --job-name="$job_name" \
+            --partition="$CPU_PARTITION" \
+            --account="$CPU_ACCOUNT" \
+            --output="${SLURM_LOG_DIR}/slurm-%j.out" \
+            --time="$CPU_TIME" \
+            --mem-per-cpu="$CPU_MEM" \
+            --cpus-per-task="$CPU_CPUS" \
+            "${dep_args[@]}" \
+            --wrap="$wrapped"
+    }
+    # GPU jobs training folds from the shared cache
+    submit_fold_jobs() {
+        local dependency="$1" array_args=()
+        local fold_args
+        mapfile -d '' fold_args < <(build_submit_args train_folds)
+        local dep_args=()
+        [[ -n "$dependency" ]] && dep_args=(--dependency="afterok:${dependency}")
+        local output="${SLURM_LOG_DIR}/slurm-%j.out"
+        if [[ -z "$FOLDS" ]]; then
+            array_args=(--array="0-$(( N_FOLD_JOBS - 1 ))")
+            output="${SLURM_LOG_DIR}/slurm-%A_%a.out"
+        fi
+        sbatch --parsable \
+            --job-name="ml_train_folds" \
+            "${array_args[@]}" \
+            "${dep_args[@]}" \
+            --output="$output" \
+            --gres="gpu:${GPUS_PER_NODE}" \
+            "${SBATCH_RESOURCES[@]}" \
+            "$SCRIPT_PATH" "${fold_args[@]}"
+    }
+
+    if [[ "$SPLIT_JOBS" == true ]]; then
+        PREPARE_JOB_ID=$(submit_cpu_job ml_kfold_prepare prepare_shared "") || exit 1
+        echo "K-fold prepare job (${CPU_PARTITION}, no GPU): ${PREPARE_JOB_ID} -> ${SHARED_CACHE_DIR}"
+        TRAIN_JOB_ID=$(submit_fold_jobs "$PREPARE_JOB_ID") || exit 1
+        echo "Fold jobs: array ${TRAIN_JOB_ID}, ${N_FOLD_JOBS} job(s) of ${FOLDS_PER_JOB} fold(s) on ${GPUS_PER_NODE} GPU(s) each, after ${PREPARE_JOB_ID}"
+        MERGE_JOB_ID=$(submit_cpu_job ml_kfold_merge merge_shared "$TRAIN_JOB_ID") || exit 1
+        echo "K-fold merge job (${CPU_PARTITION}, no GPU): ${MERGE_JOB_ID}, after ${TRAIN_JOB_ID}"
+        exit 0
+    elif [[ "$PREPARE_ONLY" == true ]]; then
+        PREPARE_JOB_ID=$(submit_cpu_job ml_kfold_prepare prepare_shared "") || exit 1
+        echo "K-fold prepare job (${CPU_PARTITION}, no GPU): ${PREPARE_JOB_ID} -> ${SHARED_CACHE_DIR}"
+        echo "When it is done, train the folds (in as many jobs as you want) and merge them, e.g.:"
+        echo "  $0 -c $CONFIG_FILE -o $OUT_DIR -k $K_FOLDS --folds 0-$(( K_FOLDS - 1 )) -g <GPUs> --cpus <CPUs>"
+        echo "  $0 -c $CONFIG_FILE -o $OUT_DIR -k $K_FOLDS --merge-only"
+        exit 0
+    elif [[ -n "$FOLDS" ]]; then
+        if [[ ! -f "${SHARED_CACHE_DIR}/kfold_cache_meta.json" ]]; then
+            echo "Warning: the shared cache ${SHARED_CACHE_DIR} is not ready yet: the job will fail if it is not when it starts (run --prepare-only first)."
+        fi
+        TRAIN_JOB_ID=$(submit_fold_jobs "") || exit 1
+        echo "Fold job ${TRAIN_JOB_ID}: folds ${FOLD_LIST}on ${GPUS_PER_NODE} GPU(s)"
+        exit 0
+    elif [[ "$MERGE_ONLY" == true ]]; then
+        MERGE_JOB_ID=$(submit_cpu_job ml_kfold_merge merge_shared "") || exit 1
+        echo "K-fold merge job (${CPU_PARTITION}, no GPU): ${MERGE_JOB_ID}"
+        exit 0
+    fi
 
     if [[ "$NODES" -eq 1 ]]; then
         # Single job: all trainings on one node, postproc runs inline
@@ -364,20 +567,72 @@ run_one_training() {
 }
 
 # ─── K-fold cache: load the events once for all the folds ────────────────────
+# (in the temporary directory of the job, removed when the job ends, unless
+# "keep" is given: the shared cache of the k-fold in several jobs)
 run_prepare() {
+    local cache_dir="${1:-$KFOLD_CACHE_DIR}" keep="${2:-}"
     # all the CPUs of the job for loading the events
     export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-$SLURM_CPUS}"
     export MKL_NUM_THREADS="$OMP_NUM_THREADS"
     local prepare_args=(
         -c "$CONFIG_FILE" -s "$INIT_SEED" --k-folds "$K_FOLDS"
-        --kfold-cache "$KFOLD_CACHE_DIR" --kfold-split-dir "$KFOLD_SPLIT_DIR"
+        --kfold-cache "$cache_dir" --kfold-split-dir "$KFOLD_SPLIT_DIR"
         --kfold-prepare
     )
     [[ ${#EXTRA_ARGS[@]} -gt 0 ]] && prepare_args+=("${EXTRA_ARGS[@]}")
-    echo "Preparing the k-fold cache in ${KFOLD_CACHE_DIR}..."
-    # remove the cache when the job ends, also if it fails
-    trap 'echo "Removing the k-fold cache ${KFOLD_CACHE_DIR}"; rm -rf "${KFOLD_CACHE_DIR}"' EXIT
+    echo "Preparing the k-fold cache in ${cache_dir}..."
+    if [[ "$keep" != keep ]]; then
+        # remove the cache when the job ends, also if it fails
+        trap 'echo "Removing the k-fold cache ${KFOLD_CACHE_DIR}"; rm -rf "${KFOLD_CACHE_DIR}"' EXIT
+    fi
     ml_train "${prepare_args[@]}" || { echo "Error: k-fold cache preparation failed"; exit 1; }
+}
+
+# Copy the shared cache to the temporary directory of this job (read locally,
+# not from the network filesystem), removed when the job ends
+copy_shared_cache() {
+    if [[ ! -f "${SHARED_CACHE_DIR}/kfold_cache_meta.json" ]]; then
+        echo "Error: no k-fold cache in ${SHARED_CACHE_DIR}: run run_training.sh --prepare-only first."
+        exit 1
+    fi
+    trap 'echo "Removing the k-fold cache ${KFOLD_CACHE_DIR}"; rm -rf "${KFOLD_CACHE_DIR}"' EXIT
+    echo "Copying the k-fold cache ${SHARED_CACHE_DIR} -> ${KFOLD_CACHE_DIR}..."
+    mkdir -p "$KFOLD_CACHE_DIR"
+    cp -r "${SHARED_CACHE_DIR}/." "$KFOLD_CACHE_DIR/" || { echo "Error: copying the k-fold cache failed"; exit 1; }
+}
+
+# Train the trainings (seeds, or folds INIT_SEED + fold) given as arguments
+# in parallel, spread over the GPUs and CPUs of this job
+launch_trainings() {
+    local seeds=("$@")
+    local n_trainings=${#seeds[@]}
+
+    # GPUs actually visible to this job (Slurm sets CUDA_VISIBLE_DEVICES
+    # to the allocated ones, which are then numbered 0..N-1)
+    local n_gpus="$GPUS_PER_NODE"
+    if [[ -n "${CUDA_VISIBLE_DEVICES:-}" ]]; then
+        IFS=',' read -r -a VISIBLE_GPUS <<< "$CUDA_VISIBLE_DEVICES"
+        n_gpus=${#VISIBLE_GPUS[@]}
+    fi
+    [[ "$n_gpus" -gt "$n_trainings" ]] && n_gpus="$n_trainings"
+
+    # Split the CPUs among the parallel trainings, so that the torch/numpy
+    # threads of the different processes do not oversubscribe the cores
+    local n_cpus="${SLURM_CPUS_PER_TASK:-$SLURM_CPUS}"
+    local cpus_per_training=$(( n_cpus / n_trainings ))
+    [[ "$cpus_per_training" -lt 1 ]] && cpus_per_training=1
+    export OMP_NUM_THREADS="$cpus_per_training"
+    export MKL_NUM_THREADS="$cpus_per_training"
+    # DataLoader workers, only used if the datasets do not fit on the GPU
+    # (see data_on_gpu in the config)
+    local num_workers=$(( cpus_per_training - 1 ))
+
+    echo "Launching ${n_trainings} training(s) (seeds/folds ${seeds[*]}) in parallel on ${n_gpus} GPU(s), ${cpus_per_training} CPU(s) per training"
+    local i
+    for ((i=0; i<n_trainings; i++)); do
+        run_one_training "${seeds[$i]}" "$(run_path "${seeds[$i]}")" "$(( i % n_gpus ))" "$num_workers" &
+    done
+    wait
 }
 
 # ─── Post-processing: collect best models + ONNX aggregation ──────────────────
@@ -401,9 +656,10 @@ run_postproc() {
         [[ "$RATIO" == true ]] && merge_args+=(--ratio)
         [[ "$SAVE_ROC" == true ]] && merge_args+=(--save-roc)
         [[ "$ALPHA" == true ]] && merge_args+=(--alpha "$ALPHA_NUM" --alpha-den "$ALPHA_DEN_VALUE")
-        # the cache of this job, if the merge runs in it (otherwise the merge
-        # loads the events again into a temporary directory)
-        [[ "$USE_KFOLD_CACHE" == true && -d "$KFOLD_CACHE_DIR" ]] && merge_args+=(--kfold-cache "$KFOLD_CACHE_DIR")
+        # the cache of this job (or the shared one), if there is one (otherwise
+        # the merge loads the events again into a temporary directory)
+        local merge_cache="${MERGE_CACHE_DIR:-$KFOLD_CACHE_DIR}"
+        [[ "$USE_KFOLD_CACHE" == true && -d "$merge_cache" ]] && merge_args+=(--kfold-cache "$merge_cache")
         echo "Merging the ${K_FOLDS} folds in ${OUT_DIR}..."
         ml_kfold_merge "${merge_args[@]}"
         return
@@ -454,6 +710,15 @@ echo "  Ratio:      ${RATIO}"
 
 mkdir -p "$OUT_DIR"
 
+# --no-slurm with the k-fold split options: run the corresponding step here
+if [[ "$NO_SLURM" == true && "$MODE" == train ]]; then
+    if [[ "$SPLIT_JOBS" == true ]]; then MODE=split_local
+    elif [[ "$PREPARE_ONLY" == true ]]; then MODE=prepare_shared
+    elif [[ -n "$FOLDS" ]]; then MODE=train_folds
+    elif [[ "$MERGE_ONLY" == true ]]; then MODE=merge_shared
+    fi
+fi
+
 case "$MODE" in
     train)
         TASK_ID="${SLURM_ARRAY_TASK_ID:-0}"
@@ -473,33 +738,7 @@ case "$MODE" in
         # starting its folds (every array task prepares its own, on its node)
         [[ "$USE_KFOLD_CACHE" == true ]] && run_prepare
 
-        # GPUs actually visible to this job (Slurm sets CUDA_VISIBLE_DEVICES
-        # to the allocated ones, which are then numbered 0..N-1)
-        N_GPUS="$GPUS_PER_NODE"
-        if [[ -n "${CUDA_VISIBLE_DEVICES:-}" ]]; then
-            IFS=',' read -r -a VISIBLE_GPUS <<< "$CUDA_VISIBLE_DEVICES"
-            N_GPUS=${#VISIBLE_GPUS[@]}
-        fi
-        [[ "$N_GPUS" -gt "$N_NODE_TRAININGS" ]] && N_GPUS="$N_NODE_TRAININGS"
-
-        # Split the CPUs among the parallel trainings, so that the torch/numpy
-        # threads of the different processes do not oversubscribe the cores
-        N_CPUS="${SLURM_CPUS_PER_TASK:-$SLURM_CPUS}"
-        CPUS_PER_TRAINING=$(( N_CPUS / N_NODE_TRAININGS ))
-        [[ "$CPUS_PER_TRAINING" -lt 1 ]] && CPUS_PER_TRAINING=1
-        export OMP_NUM_THREADS="$CPUS_PER_TRAINING"
-        export MKL_NUM_THREADS="$CPUS_PER_TRAINING"
-        # DataLoader workers, only used if the datasets do not fit on the GPU
-        # (see data_on_gpu in the config)
-        NUM_WORKERS=$(( CPUS_PER_TRAINING - 1 ))
-
-        echo "Node ${TASK_ID}: launching seeds ${NODE_START}–${NODE_END} in parallel on ${N_GPUS} GPU(s), ${CPUS_PER_TRAINING} CPU(s) per training"
-
-        for ((seed=NODE_START; seed<=NODE_END; seed++)); do
-            gpu=$(( (seed - NODE_START) % N_GPUS ))
-            run_one_training "$seed" "$(run_path "$seed")" "$gpu" "$NUM_WORKERS" &
-        done
-        wait
+        launch_trainings $(seq "$NODE_START" "$NODE_END")
         echo "Node ${TASK_ID}: all trainings complete."
 
         # For single-node multi-training: run postproc inline (no separate job)
@@ -510,6 +749,59 @@ case "$MODE" in
 
     postproc)
         run_postproc
+        ;;
+
+    prepare_shared)
+        # k-fold in several jobs: load the events once into the shared cache
+        mkdir -p "$(dirname "$SHARED_CACHE_DIR")"
+        run_prepare "$SHARED_CACHE_DIR" keep
+        echo "Shared k-fold cache ready in ${SHARED_CACHE_DIR}"
+        ;;
+
+    train_folds)
+        # k-fold in several jobs: train the folds given with --folds, or the
+        # folds of this array task, from a local copy of the shared cache
+        if [[ -n "$FOLDS" ]]; then
+            JOB_FOLDS=($FOLD_LIST)
+        else
+            TASK_ID="${SLURM_ARRAY_TASK_ID:-0}"
+            FIRST=$(( TASK_ID * FOLDS_PER_JOB ))
+            LAST=$(( FIRST + FOLDS_PER_JOB - 1 ))
+            [[ "$LAST" -ge "$K_FOLDS" ]] && LAST=$(( K_FOLDS - 1 ))
+            JOB_FOLDS=($(seq "$FIRST" "$LAST"))
+        fi
+        copy_shared_cache
+        launch_trainings $(for f in "${JOB_FOLDS[@]}"; do echo $(( INIT_SEED + f )); done)
+        echo "Folds ${JOB_FOLDS[*]} complete."
+        ;;
+
+    merge_shared)
+        # k-fold in several jobs: merge the folds, with the shared cache (if
+        # it is not there, the merge loads the events again)
+        [[ -d "$SHARED_CACHE_DIR" ]] && MERGE_CACHE_DIR="$SHARED_CACHE_DIR"
+        run_postproc || exit 1
+        if [[ "$KEEP_CACHE" != true && -d "$SHARED_CACHE_DIR" ]]; then
+            echo "Removing the shared k-fold cache ${SHARED_CACHE_DIR}"
+            rm -rf "$SHARED_CACHE_DIR"
+        fi
+        ;;
+
+    split_local)
+        # --prepare-job with --no-slurm: the same steps one after the other
+        mkdir -p "$(dirname "$SHARED_CACHE_DIR")"
+        run_prepare "$SHARED_CACHE_DIR" keep
+        copy_shared_cache
+        for ((first=0; first<K_FOLDS; first+=FOLDS_PER_JOB)); do
+            last=$(( first + FOLDS_PER_JOB - 1 ))
+            [[ "$last" -ge "$K_FOLDS" ]] && last=$(( K_FOLDS - 1 ))
+            launch_trainings $(seq $(( INIT_SEED + first )) $(( INIT_SEED + last )))
+        done
+        MERGE_CACHE_DIR="$SHARED_CACHE_DIR"
+        run_postproc || exit 1
+        if [[ "$KEEP_CACHE" != true ]]; then
+            echo "Removing the shared k-fold cache ${SHARED_CACHE_DIR}"
+            rm -rf "$SHARED_CACHE_DIR"
+        fi
         ;;
 
     *)

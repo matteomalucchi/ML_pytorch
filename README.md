@@ -409,6 +409,42 @@ With `-s-n/--save-numpy` all the scores are saved: `fold_<k>/score_lbl_array.npz
 
 The weight initialisation of every fold is independent (seed `SeedSequence([seed, fold])`, recorded as `weights_seed` in `kfold_fold_info.json`).
 
+### K-fold in several jobs
+
+A single job with all the folds needs a whole node to be free. To start the folds as GPUs become available instead, split the work into several jobs. `run_training.sh` then works in three steps:
+
+1. **Prepare (CPU, no GPU).** A job on the CPU queue (`-p standard --account=t3` by default, `--cpu-partition`/`--cpu-account` to change them) loads the events once and makes the fold split. The events go into a shared cache, `<outdir>/kfold_cache_shared` (`--cache-dir` to change it), which has to be on a disk that all the nodes see. The record of the split goes to `<outdir>/kfold_split`.
+2. **Train the folds (GPU).** Each fold job copies the shared cache to its node-local `$TMPDIR`, memory-maps it, and trains its folds on its GPUs, as above. The local copy is removed when the job ends. Since the events are loaded only once, a fold job needs only about one copy of the events in RAM plus a few GB per fold.
+3. **Merge (CPU, no GPU).** A job on the CPU queue merges the folds, with the out-of-fold scores, the checks and the ONNX models, and then removes the shared cache (`--keep-cache` to keep it).
+
+Automatic: submit the three steps at once, chained with Slurm dependencies. The fold jobs are an array with `--folds-per-job` folds each, and Slurm starts every task as soon as its GPUs are free:
+
+```bash
+# 20 jobs of 1 fold on 1 GPU each
+./run_training.sh -c /full/path/config.yml -o /full/path/out -k 20 --prepare-job -g 1 --cpus 4 --mem-per-cpu 6000 \
+  --cpu-cpus 8 --cpu-mem-per-cpu 16000
+
+# 5 jobs of 4 folds on 2 GPUs each
+./run_training.sh -c /full/path/config.yml -o /full/path/out -k 20 --prepare-job --folds-per-job 4 -g 2 --cpus 8
+```
+
+By hand: prepare once, then submit the folds in as many pieces as you want (`--folds` takes ranges and lists), and merge when they are all done:
+
+```bash
+./run_training.sh -c /full/path/config.yml -o /full/path/out -k 20 --prepare-only
+./run_training.sh -c /full/path/config.yml -o /full/path/out -k 20 --folds 0-7 -g 8 --cpus 32
+./run_training.sh -c /full/path/config.yml -o /full/path/out -k 20 --folds 8-11,15 -g 2 --cpus 8
+./run_training.sh -c /full/path/config.yml -o /full/path/out -k 20 --folds 12-14,16-19 -g 4 --cpus 16
+./run_training.sh -c /full/path/config.yml -o /full/path/out -k 20 --merge-only
+```
+
+Notes:
+* **Same options everywhere:** use the same config, `-s`, `-k` and extra `ml_train` options in all the steps. A fold job refuses a shared cache made with a different config, and the merge checks that the folds are the folds of the same split.
+* **Resources:** `--time`, `--mem-per-cpu`, `--cpus` and `-g` set the resources of the fold jobs; `--cpu-time`, `--cpu-mem-per-cpu` and `--cpu-cpus` those of the prepare and merge jobs. The prepare job needs the memory of loading all the events, about what a single fold needed before the cache.
+* **Other options:** `--ratio`, `--alpha`, `--save-roc` and `--load-last` work as for the single job. With `--load-last`, a `--folds` job skips the folds that are already finished and resumes the others.
+* **Same results:** they are identical to the single job. In the tests, the fold checkpoints were bit-identical with the same seed and the same number of threads per fold.
+* **Disk:** the shared cache takes one copy of the events (≈ 15 GB for the 2024 parking config) until the merge removes it.
+
 ### Outputs
 
 * `fold_<k>/`: a normal training output for each fold, plus `kfold_fold_info.json`. The test scores (plots, and `score_lbl_array.npz` with `--save-numpy`) are the scores of the events of fold `k`, with no event dropped.
@@ -460,6 +496,13 @@ Optional:
                           merged with ml_kfold_merge (see K-fold training); the events are
                           loaded once in OUTDIR/kfold_cache and shared by the folds
   --no-kfold-cache        K-fold: every fold loads the events itself
+  --prepare-job           K-fold in several jobs: CPU prepare job, array of GPU fold jobs
+                          (--folds-per-job folds each), CPU merge job, chained
+  --prepare-only / --folds LIST / --merge-only
+                          the same steps submitted one at a time (see "K-fold in several jobs")
+  --cache-dir DIR         shared k-fold cache (default OUTDIR/kfold_cache_shared), --keep-cache
+  --cpu-partition / --cpu-account / --cpu-cpus / --cpu-mem-per-cpu / --cpu-time
+                          resources of the CPU jobs (default -p standard --account=t3)
   --load-last             Resume from latest checkpoint
   --time HH:MM:SS         Slurm wall-clock time limit
   --mem-per-cpu MB        Slurm memory per CPU in MB (default: 4000)
