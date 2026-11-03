@@ -62,6 +62,11 @@
 #   --cpu-cpus INT          CPUs of the CPU jobs (default: 8)
 #   --cpu-mem-per-cpu MB    Memory per CPU of the CPU jobs (default: --mem-per-cpu)
 #   --cpu-time HH:MM:SS     Time limit of the CPU jobs (default: --time)
+#   --prepare-gpu           Run the prepare job on the GPU partition (1 GPU,
+#                           -p gpu --account=gpu_gres) instead of the CPU queue
+#   --merge-gpu             Run the merge job on the GPU partition
+#   --after JOBIDS          With --folds / --merge-only: start only after these
+#                           jobs (colon-separated) succeed, e.g. the prepare job
 
 # ─── Defaults ─────────────────────────────────────────────────────────────────
 N_TRAININGS=1
@@ -95,6 +100,12 @@ CPU_ACCOUNT="t3"
 CPU_CPUS=8
 CPU_MEM=""
 CPU_TIME=""
+PREPARE_GPU=false
+MERGE_GPU=false
+AFTER=""
+# partition and account of the GPU jobs (as in the #SBATCH lines above)
+GPU_PARTITION="gpu"
+GPU_ACCOUNT="gpu_gres"
 
 # ─── Usage ────────────────────────────────────────────────────────────────────
 usage() {
@@ -156,6 +167,14 @@ a CPU job merges them):
   --cpu-cpus INT          CPUs of the CPU jobs (default: 8)
   --cpu-mem-per-cpu MB    Memory per CPU of the CPU jobs (default: --mem-per-cpu)
   --cpu-time HH:MM:SS     Time limit of the CPU jobs (default: --time)
+  --prepare-gpu           Run the prepare job on the GPU partition (1 GPU,
+                          -p gpu --account=gpu_gres) instead of the CPU queue,
+                          with the --cpu-* resources; the GPU is not used
+  --merge-gpu             Run the merge job on the GPU partition too
+  --after JOBIDS          With --folds or --merge-only: start the job only
+                          after these jobs (colon-separated ids) succeed, so it
+                          can be submitted right after the prepare job (or,
+                          for the merge, after the fold jobs)
 
 Examples:
   # Single training
@@ -181,6 +200,10 @@ Examples:
   $0 -c /full/path/DNN_config.yml -o /full/path/out -k 20 --folds 0-7 -g 8 --cpus 32
   $0 -c /full/path/DNN_config.yml -o /full/path/out -k 20 --folds 8-19 -g 4 --cpus 24
   $0 -c /full/path/DNN_config.yml -o /full/path/out -k 20 --merge-only
+
+  # Prepare on a GPU node, then 20 one-fold jobs submitted at once, waiting for it
+  $0 -c /full/path/DNN_config.yml -o /full/path/out -k 20 --prepare-only --prepare-gpu   # -> job id P
+  for k in \$(seq 0 19); do $0 -c /full/path/DNN_config.yml -o /full/path/out -k 20 --folds \$k --after P; done
 
   # Local test
   $0 -c /full/path/DNN_config.yml -o /full/path/out --no-slurm
@@ -220,6 +243,9 @@ while [[ $# -gt 0 ]]; do
         --cpu-cpus)        CPU_CPUS="$2"; shift 2 ;;
         --cpu-mem-per-cpu) CPU_MEM="$2"; shift 2 ;;
         --cpu-time)        CPU_TIME="$2"; shift 2 ;;
+        --prepare-gpu)     PREPARE_GPU=true; shift ;;
+        --merge-gpu)       MERGE_GPU=true; shift ;;
+        --after)           AFTER="$2"; shift 2 ;;
         --mode)            MODE="$2"; shift 2 ;;
         -h|--help)         usage ;;
         --)                shift; EXTRA_ARGS=("$@"); break ;;
@@ -289,6 +315,14 @@ if [[ "$N_SPLIT_OPTIONS" -eq 1 ]]; then
         echo "Error: -p/--nodes cannot be combined with the k-fold split options (use --folds-per-job)."
         exit 1
     fi
+fi
+if [[ -n "$AFTER" && -z "$FOLDS" && "$MERGE_ONLY" != true ]]; then
+    echo "Error: --after can be used only with --folds or --merge-only."
+    exit 1
+fi
+if [[ -n "$AFTER" && ! "$AFTER" =~ ^[0-9_]+(:[0-9_]+)*$ ]]; then
+    echo "Error: --after needs job ids separated by colons, e.g. 1234 or 1234:1235."
+    exit 1
 fi
 if [[ "$FOLDS_PER_JOB" -lt 1 ]]; then
     echo "Error: --folds-per-job must be >= 1."
@@ -385,17 +419,22 @@ if [[ -z "${SLURM_JOB_ID:-}" && "$NO_SLURM" != true ]]; then
 
     # CPU jobs (prepare and merge of the k-fold in several jobs): submitted with
     # --wrap, so the GPU #SBATCH lines of this script are not applied
+    # (with on_gpu=true on the GPU partition with 1 GPU, e.g. when the CPU queue
+    # is busy or its nodes have too little memory)
     submit_cpu_job() {
-        local job_name="$1" mode="$2" dependency="$3"
+        local job_name="$1" mode="$2" dependency="$3" on_gpu="${4:-false}"
         local mode_args wrapped
         mapfile -d '' mode_args < <(build_submit_args "$mode")
         wrapped="bash $(printf '%q ' "$SCRIPT_PATH" "${mode_args[@]}")"
         local dep_args=()
         [[ -n "$dependency" ]] && dep_args=(--dependency="afterok:${dependency}")
+        local queue_args=(--partition="$CPU_PARTITION" --account="$CPU_ACCOUNT")
+        [[ "$on_gpu" == true ]] && queue_args=(
+            --partition="$GPU_PARTITION" --account="$GPU_ACCOUNT" --gres="gpu:1"
+        )
         sbatch --parsable \
             --job-name="$job_name" \
-            --partition="$CPU_PARTITION" \
-            --account="$CPU_ACCOUNT" \
+            "${queue_args[@]}" \
             --output="${SLURM_LOG_DIR}/slurm-%j.out" \
             --time="$CPU_TIME" \
             --mem-per-cpu="$CPU_MEM" \
@@ -425,31 +464,36 @@ if [[ -z "${SLURM_JOB_ID:-}" && "$NO_SLURM" != true ]]; then
             "$SCRIPT_PATH" "${fold_args[@]}"
     }
 
+    queue_name() { [[ "$1" == true ]] && echo "${GPU_PARTITION}, 1 GPU" || echo "${CPU_PARTITION}, no GPU"; }
+
     if [[ "$SPLIT_JOBS" == true ]]; then
-        PREPARE_JOB_ID=$(submit_cpu_job ml_kfold_prepare prepare_shared "") || exit 1
-        echo "K-fold prepare job (${CPU_PARTITION}, no GPU): ${PREPARE_JOB_ID} -> ${SHARED_CACHE_DIR}"
+        PREPARE_JOB_ID=$(submit_cpu_job ml_kfold_prepare prepare_shared "" "$PREPARE_GPU") || exit 1
+        echo "K-fold prepare job ($(queue_name "$PREPARE_GPU")): ${PREPARE_JOB_ID} -> ${SHARED_CACHE_DIR}"
         TRAIN_JOB_ID=$(submit_fold_jobs "$PREPARE_JOB_ID") || exit 1
         echo "Fold jobs: array ${TRAIN_JOB_ID}, ${N_FOLD_JOBS} job(s) of ${FOLDS_PER_JOB} fold(s) on ${GPUS_PER_NODE} GPU(s) each, after ${PREPARE_JOB_ID}"
-        MERGE_JOB_ID=$(submit_cpu_job ml_kfold_merge merge_shared "$TRAIN_JOB_ID") || exit 1
-        echo "K-fold merge job (${CPU_PARTITION}, no GPU): ${MERGE_JOB_ID}, after ${TRAIN_JOB_ID}"
+        MERGE_JOB_ID=$(submit_cpu_job ml_kfold_merge merge_shared "$TRAIN_JOB_ID" "$MERGE_GPU") || exit 1
+        echo "K-fold merge job ($(queue_name "$MERGE_GPU")): ${MERGE_JOB_ID}, after ${TRAIN_JOB_ID}"
         exit 0
     elif [[ "$PREPARE_ONLY" == true ]]; then
-        PREPARE_JOB_ID=$(submit_cpu_job ml_kfold_prepare prepare_shared "") || exit 1
-        echo "K-fold prepare job (${CPU_PARTITION}, no GPU): ${PREPARE_JOB_ID} -> ${SHARED_CACHE_DIR}"
-        echo "When it is done, train the folds (in as many jobs as you want) and merge them, e.g.:"
-        echo "  $0 -c $CONFIG_FILE -o $OUT_DIR -k $K_FOLDS --folds 0-$(( K_FOLDS - 1 )) -g <GPUs> --cpus <CPUs>"
-        echo "  $0 -c $CONFIG_FILE -o $OUT_DIR -k $K_FOLDS --merge-only"
+        PREPARE_JOB_ID=$(submit_cpu_job ml_kfold_prepare prepare_shared "" "$PREPARE_GPU") || exit 1
+        echo "K-fold prepare job ($(queue_name "$PREPARE_GPU")): ${PREPARE_JOB_ID} -> ${SHARED_CACHE_DIR}"
+        echo "Submit the folds now (they start when the prepare job has succeeded and"
+        echo "their GPUs are free), in as many jobs as you want, then the merge, e.g.:"
+        echo "  for k in \$(seq 0 $(( K_FOLDS - 1 ))); do"
+        echo "    $0 -c $CONFIG_FILE -o $OUT_DIR -k $K_FOLDS --folds \$k --after ${PREPARE_JOB_ID} -g 1 --cpus <CPUs> --mem-per-cpu <MB>"
+        echo "  done"
+        echo "  $0 -c $CONFIG_FILE -o $OUT_DIR -k $K_FOLDS --merge-only --after <fold job ids, colon-separated>"
         exit 0
     elif [[ -n "$FOLDS" ]]; then
-        if [[ ! -f "${SHARED_CACHE_DIR}/kfold_cache_meta.json" ]]; then
-            echo "Warning: the shared cache ${SHARED_CACHE_DIR} is not ready yet: the job will fail if it is not when it starts (run --prepare-only first)."
+        if [[ -z "$AFTER" && ! -f "${SHARED_CACHE_DIR}/kfold_cache_meta.json" ]]; then
+            echo "Warning: the shared cache ${SHARED_CACHE_DIR} is not ready yet: the job will fail if it is not when it starts (run --prepare-only first, or use --after <prepare job id>)."
         fi
-        TRAIN_JOB_ID=$(submit_fold_jobs "") || exit 1
-        echo "Fold job ${TRAIN_JOB_ID}: folds ${FOLD_LIST}on ${GPUS_PER_NODE} GPU(s)"
+        TRAIN_JOB_ID=$(submit_fold_jobs "$AFTER") || exit 1
+        echo "Fold job ${TRAIN_JOB_ID}: folds ${FOLD_LIST}on ${GPUS_PER_NODE} GPU(s)${AFTER:+, after ${AFTER}}"
         exit 0
     elif [[ "$MERGE_ONLY" == true ]]; then
-        MERGE_JOB_ID=$(submit_cpu_job ml_kfold_merge merge_shared "") || exit 1
-        echo "K-fold merge job (${CPU_PARTITION}, no GPU): ${MERGE_JOB_ID}"
+        MERGE_JOB_ID=$(submit_cpu_job ml_kfold_merge merge_shared "$AFTER" "$MERGE_GPU") || exit 1
+        echo "K-fold merge job ($(queue_name "$MERGE_GPU")): ${MERGE_JOB_ID}${AFTER:+, after ${AFTER}}"
         exit 0
     fi
 

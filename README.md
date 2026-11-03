@@ -438,6 +438,21 @@ By hand: prepare once, then submit the folds in as many pieces as you want (`--f
 ./run_training.sh -c /full/path/config.yml -o /full/path/out -k 20 --merge-only
 ```
 
+**Fold jobs submitted right after the prepare job.** With `--after <job id>` a `--folds` (or `--merge-only`) job waits for the given jobs to succeed, so all the jobs can be submitted at once. Each fold job then starts as soon as the split is ready and its GPUs are free. `--prepare-gpu` runs the prepare job on the GPU partition (`-p gpu --account=gpu_gres`, 1 GPU), e.g. when the CPU queue is busy or its nodes have too little memory. The GPU is not used by the preparation, which is CPU and I/O work.
+
+```bash
+# prepare on a GPU node -> prints its job id P
+./run_training.sh -c /full/path/config.yml -o /full/path/out -k 20 --prepare-only --prepare-gpu --cpu-cpus 8 --cpu-mem-per-cpu 16000
+# 20 one-fold jobs, each waiting for P
+for k in $(seq 0 19); do
+  ./run_training.sh -c /full/path/config.yml -o /full/path/out -k 20 --folds $k --after P -g 1 --cpus 4 --mem-per-cpu 6000
+done
+# the merge, after the fold jobs (their ids, colon-separated)
+./run_training.sh -c /full/path/config.yml -o /full/path/out -k 20 --merge-only --after F0:F1:...:F19
+```
+
+`--prepare-job --prepare-gpu` does the same in one command: the fold jobs are then an array (one independent job per task) and the merge waits for the whole array.
+
 Notes:
 * **Same options everywhere:** use the same config, `-s`, `-k` and extra `ml_train` options in all the steps. A fold job refuses a shared cache made with a different config, and the merge checks that the folds are the folds of the same split.
 * **Resources:** `--time`, `--mem-per-cpu`, `--cpus` and `-g` set the resources of the fold jobs; `--cpu-time`, `--cpu-mem-per-cpu` and `--cpu-cpus` those of the prepare and merge jobs. The prepare job needs the memory of loading all the events, about what a single fold needed before the cache.
@@ -503,6 +518,9 @@ Optional:
   --cache-dir DIR         shared k-fold cache (default OUTDIR/kfold_cache_shared), --keep-cache
   --cpu-partition / --cpu-account / --cpu-cpus / --cpu-mem-per-cpu / --cpu-time
                           resources of the CPU jobs (default -p standard --account=t3)
+  --prepare-gpu / --merge-gpu
+                          run the prepare / merge job on the GPU partition (1 GPU)
+  --after JOBIDS          with --folds / --merge-only: wait for these jobs (colon-separated)
   --load-last             Resume from latest checkpoint
   --time HH:MM:SS         Slurm wall-clock time limit
   --mem-per-cpu MB        Slurm memory per CPU in MB (default: 4000)
