@@ -121,12 +121,13 @@ kfold_event_column: event
 # the folds (p / (1 - p) for 1 output node, p1 / p0 for 2), used for the
 # background reweighting.
 onnx_ratio: False
-# Combined ONNX model of the k-fold training copied to
-# <output_dir>/kfold_onnx/final_kfold_<type>.onnx, with <type> classifier,
-# morphing_ratio (onnx_ratio) or morphing_ttbar_subtracted (morphing_alpha).
-# All the combinations kfold_<type>_{average,all_folds,event_fold}.onnx
-# (all_folds: the outputs of every fold, not averaged) and the model of each
-# fold are saved too:
+# Combination of the folds of the final ONNX model of the k-fold training,
+# recorded in <output_dir>/kfold/kfold_summary.yml (final_onnx). The models
+# are saved as <output_dir>/kfold_onnx/kfold_<type>_<combination>.onnx, with
+# <type> classifier, morphing_ratio (onnx_ratio) or
+# morphing_ttbar_subtracted (morphing_alpha), and <combination> average,
+# all_folds (the outputs of every fold, not averaged) or event_fold; the
+# final model is kfold_<type>_average.onnx or kfold_<type>_event_fold.onnx:
 #   average: average over the folds of the outputs (of their ratio with
 #            onnx_ratio: True). For events not used in the training, e.g. the
 #            background reweighting applied in a separate region.

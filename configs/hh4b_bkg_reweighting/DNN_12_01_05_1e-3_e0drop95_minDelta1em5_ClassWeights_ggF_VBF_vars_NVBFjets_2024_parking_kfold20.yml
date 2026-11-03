@@ -50,7 +50,7 @@ oversample_split: False
 # K-fold training: 20 folds assigned randomly (no event number needed). The
 # morphing weights are applied to the events of a separate region, so the
 # final ONNX model is the average over the folds of the ratio of the outputs
-# (kfold_onnx/final_kfold_morphing_ratio.onnx).
+# (kfold_onnx/kfold_morphing_ratio_average.onnx).
 k_folds: 20
 kfold_split: random
 kfold_onnx: average

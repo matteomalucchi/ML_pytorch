@@ -432,7 +432,7 @@ The weight initialisation of every fold is independent (seed `SeedSequence([seed
   | `all_folds` | `args_0` | the output of every fold separately, not averaged (`score_fold_<k>` or `w_fold_<k>`) |
   | `event_fold` | `args_0` and `event`, the event number `(N,)` int64 | the output of the fold `event % K`, the model that was **not** trained on the event. Use it for the events that were used in the training (e.g. the training regions); only with `kfold_split: event` |
 
-* `kfold_onnx/final_kfold_<type>.onnx`: a copy of the combined model chosen with `kfold_onnx` (`average` or `event_fold`), named after its type (e.g. `final_kfold_morphing_ratio.onnx`). The type is `morphing_ttbar_subtracted` with `morphing_alpha`, `morphing_ratio` with `onnx_ratio`, otherwise `classifier`. The choice is also written in `kfold/kfold_summary.yml` (`final_onnx`).
+* **The final model** is the combined model chosen with `kfold_onnx`: `kfold_<type>_average.onnx` or `kfold_<type>_event_fold.onnx`, with type `morphing_ttbar_subtracted` with `morphing_alpha`, `morphing_ratio` with `onnx_ratio`, otherwise `classifier`. It is recorded, with its inputs, in `kfold/kfold_summary.yml` (`final_onnx`); no extra copy is written.
   * `kfold_onnx: average` (default) gives the average over the folds. Use it when the model is applied to events that were not used in the training, e.g. the background reweighting applied in a separate region.
   * `kfold_onnx: event` gives the event-number-aware model and needs `kfold_split: event`. Use it when the model is also applied to the training events, e.g. the sig/bkg or ggF/VBF classifiers. Events whose number was never seen in the training can be evaluated by any fold, so the same model works for them too.
 
@@ -653,7 +653,7 @@ and the two alphas, and `--json <file>` saves them.
 in `<outdir>/alpha.json`) and passes it to the conversion:
 * `ml_onnx -ar -mc -al <alpha> -ald <alpha_den>` for the trainings with several seeds;
 * `ml_kfold_merge --alpha <alpha> --alpha-den <alpha_den>` with `--k-folds`. The final model,
-  `kfold_onnx/final_kfold_morphing_ttbar_subtracted.onnx`, is then the morphing weight averaged over the folds.
+  `kfold_onnx/kfold_morphing_ttbar_subtracted_average.onnx`, is then the morphing weight averaged over the folds.
 
 `alpha_den` is `0.0` (no ttbar subtraction in the denominator) unless `--alpha-den-computed` is given; then the
 computed alpha of the denominator region is used.

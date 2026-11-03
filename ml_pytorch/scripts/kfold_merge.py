@@ -67,15 +67,6 @@ KFOLD_ONNX_NAMES = {
 }
 
 
-def final_onnx_name(final_key):
-    """File name of the copy of the final model, with its type, e.g.
-    final_kfold_morphing_ratio.onnx."""
-    suffix = next(
-        (s for s in ["_ratio", "_morphing"] if final_key.endswith(s)), ""
-    )
-    return f"final_kfold_{KFOLD_ONNX_TYPES[suffix]}.onnx"
-
-
 def final_onnx_key(kfold_onnx, ratio, morphing=False):
     """Key in KFOLD_ONNX_NAMES of the final model chosen with kfold_onnx."""
     if kfold_onnx not in ["average", "event"]:
@@ -413,10 +404,11 @@ def check_kfold_models(fold_files, kfold_files, n_features, k_folds, morphing=No
 def merge_onnx(
     fold_dirs, out_dir, ratio, event_split, kfold_onnx="average", alpha=None, alpha_den=0.0
 ):
-    """Copy the best model of each fold, build the combined models and save
-    the one chosen with kfold_onnx as the final model. With ``alpha`` (4-node
-    multiclass morphing models) the final model is the morphing weight with
-    the ttbar subtraction (see build_multiclass_morphing_models)."""
+    """Copy the best model of each fold and build the combined models.
+    Returns their files and the key of the one chosen with kfold_onnx (the
+    model to use, recorded in the summary). With ``alpha`` (4-node multiclass
+    morphing models) it is the morphing weight with the ttbar subtraction (see
+    build_multiclass_morphing_models)."""
     folds_dir = f"{out_dir}/folds"
     os.makedirs(folds_dir, exist_ok=True)
     fold_files = []
@@ -468,11 +460,9 @@ def merge_onnx(
     )
 
     final_key = final_onnx_key(kfold_onnx, ratio, morphing)
-    kfold_files["final"] = f"{out_dir}/{final_onnx_name(final_key)}"
-    shutil.copy(kfold_files[final_key], kfold_files["final"])
     logger.info(
         f"Final k-fold model (kfold_onnx: {kfold_onnx}, ratio: {ratio}): "
-        f"{kfold_files['final']} = {os.path.basename(kfold_files[final_key])}"
+        f"{kfold_files[final_key]}"
     )
     return kfold_files, final_key
 
@@ -535,7 +525,7 @@ def merge_kfold(main_dir, cfg, ratio=None, plots=True, save_numpy=False):
             summary["morphing_alpha"] = float(alpha)
             summary["morphing_alpha_den"] = float(cfg.get("morphing_alpha_den", 0.0) or 0.0)
         summary["final_onnx"] = {
-            "file": kfold_files["final"],
+            "file": kfold_files[final_key],
             "kfold_onnx": cfg.kfold_onnx,
             "model": final_key,
             "inputs": (
