@@ -95,6 +95,12 @@ parser.add_argument(
     "--roc", default=None, help="Make roc curve of discrimination", action="store_true"
 )
 parser.add_argument(
+    "--save-roc",
+    default=None,
+    help="Save also the ROC points (tpr_fpr*.npz) next to the ROC plots",
+    action="store_true",
+)
+parser.add_argument(
     "--input-plots",
     dest="input_plots",
     default=None,

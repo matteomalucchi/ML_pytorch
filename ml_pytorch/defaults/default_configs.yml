@@ -121,9 +121,12 @@ kfold_event_column: event
 # the folds (p / (1 - p) for 1 output node, p1 / p0 for 2), used for the
 # background reweighting.
 onnx_ratio: False
-# Combined ONNX model of the k-fold training saved as
-# <output_dir>/kfold_onnx/final_model_kfold.onnx (the other combinations
-# and the model of each fold are saved too):
+# Combined ONNX model of the k-fold training copied to
+# <output_dir>/kfold_onnx/final_kfold_<type>.onnx, with <type> classifier,
+# morphing_ratio (onnx_ratio) or morphing_ttbar_subtracted (morphing_alpha).
+# All the combinations kfold_<type>_{average,all_folds,event_fold}.onnx
+# (all_folds: the outputs of every fold, not averaged) and the model of each
+# fold are saved too:
 #   average: average over the folds of the outputs (of their ratio with
 #            onnx_ratio: True). For events not used in the training, e.g. the
 #            background reweighting applied in a separate region.
@@ -340,6 +343,10 @@ eval: True
 histos: True
 # Plot the ROC curves.
 roc: True
+# Save also the ROC points (tpr_fpr*.npz next to the ROC plots), e.g. to
+# replot them later. Off by default, to keep the outputs small; also
+# ml_train / ml_kfold_merge / ml_sb / jobs/run_training.sh --save-roc.
+save_roc: False
 # Plot the training history (loss, accuracy and learning rate vs epoch).
 history: True
 # Plot the input variable distributions of signal and background before the training

@@ -278,8 +278,12 @@ def build_kfold_models(onnx_models, n_features, ratio=False, event_split=False):
 
     Returns a dict {name: onnx model} with:
       - ``average``: average of the outputs of the folds (input ``args_0``)
+      - ``all_folds``: the outputs of all the folds, not averaged (outputs
+        ``score_fold_<k>``)
       - ``average_ratio`` (ratio=True): average of the ratio of the outputs
         of the folds (see get_ratio_model_tensor_onnx), for reweighting
+      - ``all_folds_ratio`` (ratio=True): the ratio of every fold (outputs
+        ``w_fold_<k>``)
       - ``event`` (event_split=True): inputs ``args_0`` and ``event`` (int64
         event number); every event is evaluated with the model of the fold
         ``event % k_folds``, i.e. the model that was not trained on it
@@ -292,13 +296,19 @@ def build_kfold_models(onnx_models, n_features, ratio=False, event_split=False):
         "average": build(
             {"args_0": b},
             {"avg_score": op.div(_sum(scores), op.const(np.float32(k_folds)))},
-        )
+        ),
+        "all_folds": build(
+            {"args_0": b}, {f"score_fold_{k}": r for k, r in enumerate(scores)}
+        ),
     }
     if ratio:
         ratios = [get_ratio_model_tensor_onnx(m, b) for m in onnx_models]
         models["average_ratio"] = build(
             {"args_0": b},
             {"avg_w": op.div(_sum(ratios), op.const(np.float32(k_folds)))},
+        )
+        models["all_folds_ratio"] = build(
+            {"args_0": b}, {f"w_fold_{k}": r for k, r in enumerate(ratios)}
         )
     if event_split:
         event = argument(Tensor(np.int64, ("N",)))
@@ -333,6 +343,8 @@ def build_multiclass_morphing_models(
         r_0 - alpha * r_2 and denominators r_1 - alpha_den * r_3 are averaged
         over the folds before the relu and the division (input ``args_0``,
         output ``avg_w``)
+      - ``all_folds_morphing``: the weight of every fold, each with its own
+        relu and division (outputs ``w_fold_<k>``)
       - ``event_morphing`` (event_split=True): inputs ``args_0`` and
         ``event``, the weight of the fold ``event % k_folds`` (output ``w``)
     """
@@ -347,15 +359,18 @@ def build_multiclass_morphing_models(
     if alpha_den:
         avg_den = op.relu(avg_den)
     avg_den = op.add(avg_den, op.const(np.float32(RATIO_DEN_EPS)))
+    ratios = [
+        get_multiclass_ratio_model_tensor_onnx(m, b, alpha, alpha_den)
+        for m in onnx_models
+    ]
     models = {
-        "average_morphing": build({"args_0": b}, {"avg_w": op.div(avg_num, avg_den)})
+        "average_morphing": build({"args_0": b}, {"avg_w": op.div(avg_num, avg_den)}),
+        "all_folds_morphing": build(
+            {"args_0": b}, {f"w_fold_{k}": r for k, r in enumerate(ratios)}
+        ),
     }
     if event_split:
         event = argument(Tensor(np.int64, ("N",)))
-        ratios = [
-            get_multiclass_ratio_model_tensor_onnx(m, b, alpha, alpha_den)
-            for m in onnx_models
-        ]
         models["event_morphing"] = build(
             {"args_0": b, "event": event},
             {"w": _select_per_fold(ratios, event, k_folds)},

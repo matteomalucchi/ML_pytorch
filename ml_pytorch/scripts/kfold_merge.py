@@ -40,29 +40,49 @@ from ml_pytorch.utils.onnx_tools import (
 logger = logging.getLogger(__name__)
 
 # file names of the combined ONNX models in <main_dir>/kfold_onnx
-KFOLD_ONNX_NAMES = {
-    "average": "average_model_kfold.onnx",
-    "average_ratio": "average_ratio_model_kfold.onnx",
-    "event": "event_fold_model_kfold.onnx",
-    "event_ratio": "event_fold_ratio_model_kfold.onnx",
-    "average_morphing": "average_morphing_model_kfold.onnx",
-    "event_morphing": "event_fold_morphing_model_kfold.onnx",
+# file names of the combined ONNX models in <main_dir>/kfold_onnx, by type:
+#   classifier                : the scores of the classifier
+#   morphing_ratio            : ratio of the outputs p / (1 - p) (1 node) or
+#                               p1 / p0 (2 nodes), for the binary reweighting
+#   morphing_ttbar_subtracted : 4-node multiclass morphing weight with the
+#                               ttbar subtraction (alpha)
+# and combination of the folds:
+#   average   : average over the folds (input args_0)
+#   all_folds : the output of every fold separately, not averaged (outputs
+#               <name>_fold_<k>)
+#   event_fold: the output of the fold event % k_folds (inputs args_0, event)
+KFOLD_ONNX_TYPES = {
+    "": "classifier",
+    "_ratio": "morphing_ratio",
+    "_morphing": "morphing_ttbar_subtracted",
 }
-# copy of the combined model chosen with kfold_onnx (and onnx_ratio)
-KFOLD_FINAL_ONNX_NAME = "final_model_kfold.onnx"
+KFOLD_ONNX_NAMES = {
+    f"{combination}{suffix}": f"kfold_{kind}_{name}.onnx"
+    for suffix, kind in KFOLD_ONNX_TYPES.items()
+    for combination, name in [
+        ("average", "average"),
+        ("all_folds", "all_folds"),
+        ("event", "event_fold"),
+    ]
+}
+
+
+def final_onnx_name(final_key):
+    """File name of the copy of the final model, with its type, e.g.
+    final_kfold_morphing_ratio.onnx."""
+    suffix = next(
+        (s for s in ["_ratio", "_morphing"] if final_key.endswith(s)), ""
+    )
+    return f"final_kfold_{KFOLD_ONNX_TYPES[suffix]}.onnx"
 
 
 def final_onnx_key(kfold_onnx, ratio, morphing=False):
     """Key in KFOLD_ONNX_NAMES of the final model chosen with kfold_onnx."""
+    if kfold_onnx not in ["average", "event"]:
+        raise ValueError(f"kfold_onnx must be average or event, got {kfold_onnx}")
     if morphing:
-        if kfold_onnx not in ["average", "event"]:
-            raise ValueError(f"kfold_onnx must be average or event, got {kfold_onnx}")
         return f"{kfold_onnx}_morphing"
-    if kfold_onnx == "average":
-        return "average_ratio" if ratio else "average"
-    if kfold_onnx == "event":
-        return "event_ratio" if ratio else "event"
-    raise ValueError(f"kfold_onnx must be average or event, got {kfold_onnx}")
+    return f"{kfold_onnx}_ratio" if ratio else kfold_onnx
 
 
 def get_fold_dirs(main_dir, k_folds):
@@ -306,6 +326,13 @@ def run_onnx(model_file, inputs):
     return session.run(None, dict(zip(names, inputs)))[0]
 
 
+def run_onnx_all(model_file, inputs):
+    """All the outputs of a model."""
+    session = ort.InferenceSession(model_file, providers=["CPUExecutionProvider"])
+    names = [i.name for i in session.get_inputs()]
+    return session.run(None, dict(zip(names, inputs)))
+
+
 def ratio_of_outputs(out):
     if out.shape[1] == 1:
         return (out / (1 - out)).flatten()
@@ -330,6 +357,7 @@ def morphing_weights(fold_out, event, k_folds, alpha, alpha_den):
     ]
     return {
         "average_morphing": avg_num / (avg_den + RATIO_DEN_EPS),
+        "all_folds_morphing": fold_w,
         "event_morphing": np.choose(event % k_folds, fold_w),
     }
 
@@ -344,16 +372,33 @@ def check_kfold_models(fold_files, kfold_files, n_features, k_folds, morphing=No
     # each event with the model of its fold
     selected = np.choose(event % k_folds, [o.T for o in fold_out]).T
 
-    expected = {"average": np.mean(fold_out, axis=0), "event": selected}
+    expected = {
+        "average": np.mean(fold_out, axis=0),
+        "all_folds": fold_out,
+        "event": selected,
+    }
     if morphing is not None:
         expected.update(morphing_weights(fold_out, event, k_folds, *morphing))
     if "average_ratio" in kfold_files or "event_ratio" in kfold_files:
         fold_ratios = [ratio_of_outputs(o) for o in fold_out]
         expected["average_ratio"] = np.mean(fold_ratios, axis=0)
         expected["event_ratio"] = np.choose(event % k_folds, fold_ratios)
+        expected["all_folds_ratio"] = fold_ratios
 
     for key, model_file in kfold_files.items():
         inputs = [x, event] if key.startswith("event") else [x]
+        if key.startswith("all_folds"):
+            # one output per fold
+            outs = run_onnx_all(model_file, inputs)
+            if len(outs) != k_folds or not all(
+                np.allclose(o.reshape(e.shape), e, rtol=1e-4, atol=1e-6)
+                for o, e in zip(outs, expected[key])
+            ):
+                raise RuntimeError(
+                    f"The combined model {model_file} does not match the fold models"
+                )
+            logger.info(f"Checked {model_file} against the fold models")
+            continue
         out = run_onnx(model_file, inputs)
         # the ratio of a 1-node model keeps the (N, 1) shape of the output
         if out.size != expected[key].size or not np.allclose(
@@ -423,7 +468,7 @@ def merge_onnx(
     )
 
     final_key = final_onnx_key(kfold_onnx, ratio, morphing)
-    kfold_files["final"] = f"{out_dir}/{KFOLD_FINAL_ONNX_NAME}"
+    kfold_files["final"] = f"{out_dir}/{final_onnx_name(final_key)}"
     shutil.copy(kfold_files[final_key], kfold_files["final"])
     logger.info(
         f"Final k-fold model (kfold_onnx: {kfold_onnx}, ratio: {ratio}): "
@@ -470,6 +515,7 @@ def merge_kfold(main_dir, cfg, ratio=None, plots=True, save_numpy=False):
             lumitext=get_lumitext(cfg),
             dataset_idx_train=merged["dataset_idx_train"],
             dataset_idx_test=merged["dataset_idx_test"],
+            save_roc=bool(cfg.get("save_roc", False)),
         )
 
     if cfg.onnx:
@@ -561,6 +607,11 @@ def main():
         help="Save the out-of-fold scores (kfold/score_lbl_array_oof.npz)",
     )
     parser.add_argument(
+        "--save-roc",
+        action="store_true",
+        help="Save also the ROC points (tpr_fpr*.npz) of the out-of-fold plots",
+    )
+    parser.add_argument(
         "--no-plots", action="store_true", help="Do not plot the out-of-fold scores"
     )
     args = parser.parse_args()
@@ -589,6 +640,8 @@ def main():
         cfg.kfold_onnx = args.kfold_onnx
     if args.kfold_cache is not None:
         cfg.kfold_cache = args.kfold_cache
+    if args.save_roc:
+        cfg.save_roc = True
     if args.alpha is not None:
         cfg.morphing_alpha = args.alpha
     if args.alpha_den is not None:

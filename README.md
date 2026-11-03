@@ -416,11 +416,23 @@ The weight initialisation of every fold is independent (seed `SeedSequence([seed
 * `kfold/kfold_summary.yml`: best epoch and validation/test loss and accuracy of each fold, with their mean and standard deviation.
 * `kfold/`: the histograms, ROC and calibration curves of the out-of-fold scores of all the events. With `--save-numpy` it also holds `score_lbl_array_oof.npz`, which contains `score_lbl_array_test`, `fold_test` (the fold of each event) and the training scores.
 * `kfold_onnx/folds/model_fold<k>.onnx`: the best model of each fold.
-* `kfold_onnx/average_model_kfold.onnx`: the average of the outputs of the K models (input `args_0`, output `avg_score`). Use it for events that were not used in the training.
-* `kfold_onnx/average_ratio_model_kfold.onnx` (`onnx_ratio: True` or `--ratio`): the average over the folds of the ratio of the outputs (`p/(1-p)` for one output node, `p1/p0` for two), output `avg_w`, for the background reweighting. Equivalent to `ml_onnx -ar` on the fold models.
-* `kfold_onnx/average_morphing_model_kfold.onnx` (and `event_fold_morphing_model_kfold.onnx` with `kfold_split: event`): for the 4-node multiclass morphing, when `morphing_alpha` (`ml_kfold_merge --alpha`) is given. It is the morphing weight with the ttbar subtraction, the same as `ml_onnx -ar -mc` on the fold models, and it becomes the final model; see [Boosted HH4b: multiclass background morphing](#boosted-hh4b-multiclass-background-morphing).
-* `kfold_onnx/event_fold_model_kfold.onnx` (and `event_fold_ratio_model_kfold.onnx` with the ratio), only with `kfold_split: event`. It takes two inputs: `args_0`, the input variables `(N, n_features)` float32, and `event`, the event number `(N,)` int64. Each event is evaluated with the model of fold `event % K`, which is the model that was **not** trained on it. Use it for the events that were used in the training (e.g. the training regions).
-* `kfold_onnx/final_model_kfold.onnx`: a copy of the combined model chosen with `kfold_onnx`. Its ratio variant is used when `onnx_ratio` is set. The choice is also written in `kfold/kfold_summary.yml` (`final_onnx`).
+* `kfold_onnx/kfold_<type>_<combination>.onnx`: the combined models. The type says what the model computes:
+
+  | type | output | built |
+  | --- | --- | --- |
+  | `classifier` | the scores of the classifier | always |
+  | `morphing_ratio` | the ratio of the outputs, `p/(1-p)` for one output node or `p1/p0` for two, for the binary background reweighting (equivalent to `ml_onnx -ar`) | with `onnx_ratio: True` or `--ratio` |
+  | `morphing_ttbar_subtracted` | the 4-node multiclass morphing weight with the ttbar subtraction, `relu(r0 - alpha r2) / relu(r1 - alpha_den r3)` (equivalent to `ml_onnx -ar -mc`, see [Boosted HH4b: multiclass background morphing](#boosted-hh4b-multiclass-background-morphing)) | with `morphing_alpha` (`--alpha`) |
+
+  The combination says how the folds are combined:
+
+  | combination | inputs | outputs |
+  | --- | --- | --- |
+  | `average` | `args_0`, the input variables `(N, n_features)` float32 | the average over the folds (`avg_score` or `avg_w`); for the morphing, the numerators and denominators are averaged before the relu and the division, as `ml_onnx -ar -mc` does. Use it for events that were not used in the training |
+  | `all_folds` | `args_0` | the output of every fold separately, not averaged (`score_fold_<k>` or `w_fold_<k>`) |
+  | `event_fold` | `args_0` and `event`, the event number `(N,)` int64 | the output of the fold `event % K`, the model that was **not** trained on the event. Use it for the events that were used in the training (e.g. the training regions); only with `kfold_split: event` |
+
+* `kfold_onnx/final_kfold_<type>.onnx`: a copy of the combined model chosen with `kfold_onnx` (`average` or `event_fold`), named after its type (e.g. `final_kfold_morphing_ratio.onnx`). The type is `morphing_ttbar_subtracted` with `morphing_alpha`, `morphing_ratio` with `onnx_ratio`, otherwise `classifier`. The choice is also written in `kfold/kfold_summary.yml` (`final_onnx`).
   * `kfold_onnx: average` (default) gives the average over the folds. Use it when the model is applied to events that were not used in the training, e.g. the background reweighting applied in a separate region.
   * `kfold_onnx: event` gives the event-number-aware model and needs `kfold_split: event`. Use it when the model is also applied to the training events, e.g. the sig/bkg or ggF/VBF classifiers. Events whose number was never seen in the training can be evaluated by any fold, so the same model works for them too.
 
@@ -641,7 +653,7 @@ and the two alphas, and `--json <file>` saves them.
 in `<outdir>/alpha.json`) and passes it to the conversion:
 * `ml_onnx -ar -mc -al <alpha> -ald <alpha_den>` for the trainings with several seeds;
 * `ml_kfold_merge --alpha <alpha> --alpha-den <alpha_den>` with `--k-folds`. The final model,
-  `kfold_onnx/final_model_kfold.onnx`, is then the morphing weight averaged over the folds.
+  `kfold_onnx/final_kfold_morphing_ttbar_subtracted.onnx`, is then the morphing weight averaged over the folds.
 
 `alpha_den` is `0.0` (no ttbar subtraction in the denominator) unless `--alpha-den-computed` is given; then the
 computed alpha of the denominator region is used.
@@ -798,7 +810,7 @@ When `ml_sb` (the `sig_bkg_eval` script) detects more than one score column in `
 * `roc_curve_one_vs_rest.{png,pdf}` — for each class *i*, the ROC of "is class *i*" using the score of output node *i*.
 * `roc_curve_one_vs_one.{png,pdf}` — for each ordered pair `(a, b)`, the ROC of "class *a* vs class *b*" using events with true label `∈ {a, b}` and the score of node *a*.
 * `score_distribution_class_<i>.{png,pdf}` (+ `_log`) — distribution of output node *i*'s score, split by true class, for train and test.
-* `tpr_fpr_multiclass.npz` — the saved (`tpr`, `fpr`, `auc`) arrays so that arbitrary class combinations can be replotted later.
+* with `--save-roc` (`save_roc: True`), the saved ROC points (`tpr_fpr*.npz`: `tpr`, `fpr`, `auc`), so that arbitrary class combinations can be replotted later.
 
 The binary path (single score column) is unchanged and still produces `sig_bkg_distributions_kl_*` and `roc_curve_kl_*`.
 

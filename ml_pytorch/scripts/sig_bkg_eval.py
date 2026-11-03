@@ -846,6 +846,7 @@ def plot_roc_curve(
     lumitext=LUMITEXT,
     sig_over_bkg=SIG_OVER_BKG,
     dataset_idx_test=None,
+    save_roc=False,
 ):
     # Dispatch to multi-class ROCs when more than one score column is stored.
     n_score, label_col, weight_col, kl_col = get_layout(score_lbl_tensor_test)
@@ -860,6 +861,7 @@ def plot_roc_curve(
             kl_bkg_str=kl_bkg_str,
             lumitext=lumitext,
             dataset_idx_test=dataset_idx_test,
+            save_roc=save_roc,
         )
         if dataset_idx_test is not None:
             plot_per_dataset_roc_curves(
@@ -871,6 +873,7 @@ def plot_roc_curve(
                 comet_logger=comet_logger,
                 kl_bkg_str=kl_bkg_str,
                 lumitext=lumitext,
+                save_roc=save_roc,
             )
         return
 
@@ -999,7 +1002,9 @@ def plot_roc_curve(
             comet_logger.log_image(f"{dir}/roc_curve_kl_{kl_tag}.png", name="roc_curve")
 
     # save tpr and fpr in a npz file
-    np.savez(f"{dir}/tpr_fpr.npz", **roc_info_dict)
+    # the ROC points, only with save_roc (--save-roc), to keep the outputs small
+    if save_roc:
+        np.savez(f"{dir}/tpr_fpr.npz", **roc_info_dict)
 
 
 def plot_kl_distributions(
@@ -1021,7 +1026,11 @@ def plot_kl_distributions(
     sig_over_bkg=SIG_OVER_BKG,
     dataset_idx_train=None,
     dataset_idx_test=None,
+    save_roc=False,
 ):
+    """Plot the score distributions, ROC and calibration curves of the
+    training and test scores. The ROC points are saved (tpr_fpr*.npz) only
+    with save_roc."""
     if rescale is None:
         rescale = []
 
@@ -1113,6 +1122,7 @@ def plot_kl_distributions(
                 class_info=class_info,
                 sig_over_bkg=sig_over_bkg,
                 dataset_idx_test=test_dataset_idx,
+                save_roc=save_roc,
             )
 
         if do_calibration:
@@ -1406,6 +1416,7 @@ def plot_per_dataset_roc_curves(
     comet_logger=None,
     kl_bkg_str=None,
     lumitext=LUMITEXT,
+    save_roc=False,
 ):
     """For each class made of several coupling points (e.g. the VBF or ggF HH
     samples), plot the ROC of each of its datasets vs all the events of the
@@ -1477,7 +1488,8 @@ def plot_per_dataset_roc_curves(
             + (f"\n{annotation}" if annotation else ""),
         )
 
-    np.savez(f"{dir}/tpr_fpr_per_dataset.npz", **roc_info_dict)
+    if save_roc:
+        np.savez(f"{dir}/tpr_fpr_per_dataset.npz", **roc_info_dict)
 
 
 def plot_multiclass_sig_over_bkg_roc_curves(
@@ -1490,6 +1502,7 @@ def plot_multiclass_sig_over_bkg_roc_curves(
     kl_bkg_str=None,
     lumitext=LUMITEXT,
     dataset_idx_test=None,
+    save_roc=False,
 ):
     """For every entry of ``sig_over_bkg`` plot the ROC of the signal vs the
     sum of the backgrounds, using the discriminant
@@ -1544,7 +1557,8 @@ def plot_multiclass_sig_over_bkg_roc_curves(
             annotation=annotation,
         )
 
-    np.savez(f"{dir}/tpr_fpr_sig_over_bkg.npz", **roc_info_dict)
+    if save_roc:
+        np.savez(f"{dir}/tpr_fpr_sig_over_bkg.npz", **roc_info_dict)
 
 
 def plot_multiclass_sig_over_bkg(
@@ -1772,6 +1786,12 @@ def main():
         "signal class (default: %(default)s).",
     )
 
+    parser.add_argument(
+        "--save-roc",
+        action="store_true",
+        help="Save the ROC points (tpr_fpr*.npz) next to the ROC plots",
+    )
+
     parser.print_help()
     args = parser.parse_args()
 
@@ -1849,6 +1869,7 @@ def main():
         sig_over_bkg=sig_over_bkg,
         dataset_idx_train=dataset_idx_train,
         dataset_idx_test=dataset_idx_test,
+        save_roc=args.save_roc,
     )
 
 

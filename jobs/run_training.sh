@@ -26,6 +26,8 @@
 #                           same seed) and merge them with ml_kfold_merge
 #   --no-kfold-cache        K-fold: every fold loads the events itself, instead
 #                           of loading them once in a temporary cache
+#   --save-roc              Save also the ROC points (tpr_fpr*.npz) of the
+#                           trainings and of the k-fold merge
 #   --alpha                 Boosted multiclass morphing: compute the ttbar
 #                           fraction alpha with ml_alpha and use it in the ONNX
 #                           conversion (ttbar subtraction)
@@ -50,6 +52,7 @@ K_FOLDS=0
 KFOLD_CACHE=true
 ALPHA=false
 ALPHA_DEN_COMPUTED=false
+SAVE_ROC=false
 LOAD_LAST=false
 MODE="train"
 NO_SLURM=false
@@ -81,6 +84,8 @@ Optional:
                           events are loaded once in OUTDIR/kfold_cache and
                           memory-mapped by all the folds
   --no-kfold-cache        K-fold: every fold loads the events itself
+  --save-roc              Save also the ROC points (tpr_fpr*.npz) of the
+                          trainings and of the k-fold merge (off by default)
   --alpha                 Boosted 4-node multiclass morphing: compute the ttbar
                           fraction alpha = N_ttbar / N_data with ml_alpha (from
                           the data_dirs and the regions of the config, saved
@@ -132,6 +137,7 @@ while [[ $# -gt 0 ]]; do
         -k|--k-folds)      K_FOLDS="$2"; shift 2 ;;
         --no-kfold-cache)  KFOLD_CACHE=false; shift ;;
         --alpha)           ALPHA=true; shift ;;
+        --save-roc)        SAVE_ROC=true; shift ;;
         --alpha-den-computed) ALPHA_DEN_COMPUTED=true; shift ;;
         --load-last)       LOAD_LAST=true; shift ;;
         --time)            SLURM_TIME="$2"; shift 2 ;;
@@ -218,6 +224,7 @@ build_submit_args() {
     [[ "$LOAD_LAST" == true ]] && args+=(--load-last)
     [[ "$KFOLD_CACHE" != true ]] && args+=(--no-kfold-cache)
     [[ "$ALPHA" == true ]] && args+=(--alpha)
+    [[ "$SAVE_ROC" == true ]] && args+=(--save-roc)
     [[ "$ALPHA_DEN_COMPUTED" == true ]] && args+=(--alpha-den-computed)
     [[ ${#EXTRA_ARGS[@]} -gt 0 ]] && args+=(-- "${EXTRA_ARGS[@]}")
     printf '%s\0' "${args[@]}"
@@ -334,6 +341,7 @@ run_one_training() {
         "${load_model_args[@]}"
     )
     [[ "$LOAD_LAST" != true ]] && train_args+=(--overwrite)
+    [[ "$SAVE_ROC" == true ]] && train_args+=(--save-roc)
     if [[ "$K_FOLDS" -ge 2 ]]; then
         train_args+=(-s "$INIT_SEED" --k-folds "$K_FOLDS" --fold "$(( seed - INIT_SEED ))")
         [[ "$USE_KFOLD_CACHE" == true ]] && train_args+=(--kfold-cache "$KFOLD_CACHE_DIR")
@@ -391,6 +399,7 @@ run_postproc() {
         # options used for the trainings
         local merge_args=(-i "$OUT_DIR" -k "$K_FOLDS")
         [[ "$RATIO" == true ]] && merge_args+=(--ratio)
+        [[ "$SAVE_ROC" == true ]] && merge_args+=(--save-roc)
         [[ "$ALPHA" == true ]] && merge_args+=(--alpha "$ALPHA_NUM" --alpha-den "$ALPHA_DEN_VALUE")
         # the cache of this job, if the merge runs in it (otherwise the merge
         # loads the events again into a temporary directory)

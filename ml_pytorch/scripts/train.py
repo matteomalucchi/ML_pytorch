@@ -821,6 +821,7 @@ def main():
                 lumitext=lumitext,
                 dataset_idx_train=dataset_idx_train,
                 dataset_idx_test=dataset_idx_test,
+                save_roc=bool(cfg.save_roc),
             )
             plot_kl_distributions_with_fallback(
                 score_lbl_array_train,
