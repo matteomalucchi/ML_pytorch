@@ -502,7 +502,7 @@ Notes:
 
   | combination | inputs | outputs |
   | --- | --- | --- |
-  | `average` | `args_0`, the input variables `(N, n_features)` float32 | the average over the folds (`avg_score` or `avg_w`). For the ratios and the morphing, the ratio (weight) of every fold is computed first and then averaged, as `ml_onnx -ar` / `-ar -mc` do. Use it for events that were not used in the training |
+  | `average` | `args_0`, the input variables `(N, n_features)` float32 | the average over the folds (`avg_score` or `avg_w`); for the morphing, the numerators and denominators are averaged before the relu and the division, as `ml_onnx -ar -mc` does. Use it for events that were not used in the training |
   | `all_folds` | `args_0` | the output of every fold separately, not averaged (`score_fold_<k>` or `w_fold_<k>`) |
   | `event_fold` | `args_0` and `event`, the event number `(N,)` int64 | the output of the fold `event % K`, the model that was **not** trained on the event. Use it for the events that were used in the training (e.g. the training regions); only with `kfold_split: event` |
 

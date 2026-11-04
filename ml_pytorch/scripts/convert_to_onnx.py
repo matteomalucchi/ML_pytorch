@@ -8,6 +8,8 @@ import uproot
 import importlib
 
 from ml_pytorch.utils.onnx_tools import (
+    RATIO_DEN_EPS,
+    get_multiclass_num_den_tensor_onnx,
     get_multiclass_ratio_model_tensor_onnx,
     get_onnx_output,
     get_ratio_model_tensor_onnx,
@@ -207,6 +209,8 @@ def main():
         tot_len = 1
         first_file_name = os.path.join(in_dir, model_files[0])
         b = argument(Tensor(np.float32, ("N", len(columns))))
+        num_sum_graph = None
+        den_sum_graph = None
         if args.model_type == "keras":
             model = tf.keras.models.load_model(first_file_name)
             model_ratio = tf.keras.models.Model(
@@ -229,6 +233,11 @@ def main():
                 r = get_multiclass_ratio_model_tensor_onnx(
                     onnx_model_ratio_sum, b, args.alpha, args.alpha_den
                 )
+                num0, den0 = get_multiclass_num_den_tensor_onnx(
+                    onnx_model_ratio_sum, b, args.alpha, args.alpha_den
+                )
+                num_sum_graph = build({"args_0": b}, {"sum_num": num0})
+                den_sum_graph = build({"args_0": b}, {"sum_den": den0})
             r_list = []
             r_list.append(r)
 
@@ -277,6 +286,17 @@ def main():
                         r1 = get_multiclass_ratio_model_tensor_onnx(
                             onnx_model_ratio_add, b, args.alpha, args.alpha_den
                         )
+                        num_i, den_i = get_multiclass_num_den_tensor_onnx(
+                            onnx_model_ratio_add, b, args.alpha, args.alpha_den
+                        )
+                        (num_prev,) = inline(num_sum_graph)(b).values()
+                        (den_prev,) = inline(den_sum_graph)(b).values()
+                        num_sum_graph = build(
+                            {"args_0": b}, {"sum_num": op.add(num_prev, num_i)}
+                        )
+                        den_sum_graph = build(
+                            {"args_0": b}, {"sum_den": op.add(den_prev, den_i)}
+                        )
                     r_list.append(r1)
 
                     if SAVE_SINGLE_RATIOS:
@@ -293,19 +313,35 @@ def main():
 
         print(f"\ntotal length: {tot_len}")
 
-        # Output all the individual ratios of the models (each model's own
-        # weight, computed independently of the other models)
+        # Output all individual per-fold ratios (diagnostic only: each is
+        # that fold's own relu(num)/den, computed independently of the
+        # other folds -- not used to build the ensemble average below).
         onnx_model_ratio_list = build(
             {"args_0": b}, {f"ratio_{i}": r for i, r in enumerate(r_list)}
         )
         onnx_model_ratios_name = f"{out_dir}/all_ratios_model_{args.model_type}.onnx"
         save_onnx_model(onnx_model_ratio_list, onnx_model_ratios_name)
 
-        # Average of the ratios: the ratio (morphing weight) is computed for
-        # every model first, and only then averaged over the models, also in
-        # the multiclass case
-        (r_sum,) = inline(onnx_model_ratio_sum)(b).values()
-        a = op.div(r_sum, op.constant(value_float=tot_len))
+        if args.multiclass:
+            # Average the RAW numerator and denominator across folds first,
+            # and only then enforce non-negativity (relu) and divide -- see
+            # get_multiclass_num_den_tensor_onnx for why this order matters.
+            (num_sum,) = inline(num_sum_graph)(b).values()
+            (den_sum,) = inline(den_sum_graph)(b).values()
+            avg_num = op.div(num_sum, op.constant(value_float=tot_len))
+            avg_den = op.div(den_sum, op.constant(value_float=tot_len))
+
+            avg_num = op.relu(avg_num)
+            if args.alpha_den:
+                avg_den = op.relu(avg_den)
+            avg_den = op.add(
+                avg_den, op.const(float(RATIO_DEN_EPS), dtype="float32")
+            )
+
+            a = op.div(avg_num, avg_den)
+        else:
+            (r_sum,) = inline(onnx_model_ratio_sum)(b).values()
+            a = op.div(r_sum, op.constant(value_float=tot_len))
 
         onnx_model_final = build({"args_0": b}, {"avg_w": a})
         onnx_model_final_name = (

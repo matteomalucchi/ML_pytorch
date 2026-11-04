@@ -337,14 +337,17 @@ def morphing_weights(fold_out, event, k_folds, alpha, alpha_den):
 
     nums = [o[:, 0] - alpha * o[:, 2] for o in fold_out]
     dens = [o[:, 1] - alpha_den * o[:, 3] for o in fold_out]
+    avg_num = np.maximum(np.mean(nums, axis=0), 0)
+    avg_den = np.mean(dens, axis=0)
+    if alpha_den:
+        avg_den = np.maximum(avg_den, 0)
     fold_w = [
         (np.maximum(n, 0) if alpha else n)
         / ((np.maximum(d, 0) if alpha_den else d) + RATIO_DEN_EPS)
         for n, d in zip(nums, dens)
     ]
     return {
-        # the weight of every fold first, then the average
-        "average_morphing": np.mean(fold_w, axis=0),
+        "average_morphing": avg_num / (avg_den + RATIO_DEN_EPS),
         "all_folds_morphing": fold_w,
         "event_morphing": np.choose(event % k_folds, fold_w),
     }
