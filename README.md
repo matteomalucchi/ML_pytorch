@@ -438,20 +438,43 @@ By hand: prepare once, then submit the folds in as many pieces as you want (`--f
 ./run_training.sh -c /full/path/config.yml -o /full/path/out -k 20 --merge-only
 ```
 
-**Fold jobs submitted right after the prepare job.** With `--after <job id>` a `--folds` (or `--merge-only`) job waits for the given jobs to succeed, so all the jobs can be submitted at once. Each fold job then starts as soon as the split is ready and its GPUs are free. `--prepare-gpu` runs the prepare job on the GPU partition (`-p gpu --account=gpu_gres`, 1 GPU), e.g. when the CPU queue is busy or its nodes have too little memory. The GPU is not used by the preparation, which is CPU and I/O work.
+**Freeing the GPUs fold by fold.** Slurm cannot give back part of the GPUs of a running job: a job with 8 GPUs keeps all 8 until its last training ends. To have each GPU freed as soon as its folds are done, run the folds as separate jobs, e.g. one job of 1 GPU per fold. The automatic workflows below do this:
 
 ```bash
-# prepare on a GPU node -> prints its job id P
-./run_training.sh -c /full/path/config.yml -o /full/path/out -k 20 --prepare-only --prepare-gpu --cpu-cpus 8 --cpu-mem-per-cpu 16000
-# 20 one-fold jobs, each waiting for P
-for k in $(seq 0 19); do
-  ./run_training.sh -c /full/path/config.yml -o /full/path/out -k 20 --folds $k --after P -g 1 --cpus 4 --mem-per-cpu 6000
-done
-# the merge, after the fold jobs (their ids, colon-separated)
-./run_training.sh -c /full/path/config.yml -o /full/path/out -k 20 --merge-only --after F0:F1:...:F19
+# everything in one command: prepare (CPU) -> 20 one-fold GPU jobs -> merge (CPU)
+./run_training.sh -c /full/path/config.yml -o /full/path/out -k 20 --prepare-job -g 1 --cpus 4 --mem-per-cpu 6000
+
+# or: prepare first (here on a GPU node), then all the fold jobs and the merge after it
+./run_training.sh -c /full/path/config.yml -o /full/path/out -k 20 --prepare-only --prepare-gpu   # -> job id P
+./run_training.sh -c /full/path/config.yml -o /full/path/out -k 20 --fold-jobs --after P -g 1 --cpus 4 --mem-per-cpu 6000
 ```
 
-`--prepare-job --prepare-gpu` does the same in one command: the fold jobs are then an array (one independent job per task) and the merge waits for the whole array.
+`--fold-jobs` submits the fold jobs as an array (`--folds-per-job` folds each) and the merge after them, from an existing shared cache or after the prepare job given with `--after`. Each array task is a separate Slurm job: it starts when its GPUs are free and frees them when it ends.
+
+If one big job is still preferred, `--slots-per-gpu S` keeps the GPUs busy until the queue of folds is empty. It runs at most `S` trainings per GPU, and each time one ends, the next fold starts on the GPU that just freed up, instead of a fixed round-robin assignment. `--separate-merge` runs the merge as a separate CPU job, so the GPUs are released as soon as the last fold ends. For example, 20 folds on one 8-GPU node:
+
+```bash
+./run_training.sh -c /full/path/config.yml -o /full/path/out -k 20 -g 8 --cpus 40 --mem-per-cpu 6000 --slots-per-gpu 2 --separate-merge
+```
+
+**When something goes wrong.** The merge waits for all the fold jobs to succeed (`afterok`). If a fold job fails or hits its time limit, the merge stays pending forever (`squeue` shows `DependencyNeverSatisfied`).
+1. Find the failed folds with `sacct -j <array id>` or the `slurm-<id>_<task>.out` logs in the output directory.
+2. Cancel the blocked merge with `scancel <merge id>`; the job ids are printed at submission.
+3. Resubmit the unfinished folds and the merge:
+
+   ```bash
+   ./run_training.sh -c /full/path/config.yml -o /full/path/out -k 20 --missing-folds -g 1 --cpus 4 --mem-per-cpu 6000
+   ```
+
+   `--missing-folds` finds the folds without a finished best model (`fold_<k>/state_dict/model_best_epoch_*.onnx`) and resubmits only those, with `--load-last`, so an interrupted fold resumes from its last checkpoint exactly as if it had not stopped. It then submits the merge after them. If all the folds are done, it submits only the merge.
+
+   The shared cache is still there because the merge has not run. If it is gone, prepare it again with `--prepare-only`: the same config and seed give exactly the same split. Then use `--missing-folds --after <prepare id>`.
+
+For full manual control, `--folds LIST` (with `--load-last` to resume) trains given folds, and `--merge-only` merges. Both accept `--after`.
+
+**The prepare job on a GPU node.** `--prepare-gpu` runs the prepare job on the GPU partition (`-p gpu --account=gpu_gres`, 1 GPU), e.g. when the CPU queue is busy or its nodes have too little memory. The preparation is CPU and I/O work, so the GPU stays idle during it. `--merge-gpu` does the same for the merge.
+
+**By hand,** e.g. to resubmit one specific fold: `--folds LIST --after <id>` submits one job with these folds, waiting for the given jobs. `--merge-only --after <id1>:<id2>:...` submits the merge after them.
 
 Notes:
 * **Same options everywhere:** use the same config, `-s`, `-k` and extra `ml_train` options in all the steps. A fold job refuses a shared cache made with a different config, and the merge checks that the folds are the folds of the same split.
@@ -479,7 +502,7 @@ Notes:
 
   | combination | inputs | outputs |
   | --- | --- | --- |
-  | `average` | `args_0`, the input variables `(N, n_features)` float32 | the average over the folds (`avg_score` or `avg_w`); for the morphing, the numerators and denominators are averaged before the relu and the division, as `ml_onnx -ar -mc` does. Use it for events that were not used in the training |
+  | `average` | `args_0`, the input variables `(N, n_features)` float32 | the average over the folds (`avg_score` or `avg_w`). For the ratios and the morphing, the ratio (weight) of every fold is computed first and then averaged, as `ml_onnx -ar` / `-ar -mc` do. Use it for events that were not used in the training |
   | `all_folds` | `args_0` | the output of every fold separately, not averaged (`score_fold_<k>` or `w_fold_<k>`) |
   | `event_fold` | `args_0` and `event`, the event number `(N,)` int64 | the output of the fold `event % K`, the model that was **not** trained on the event. Use it for the events that were used in the training (e.g. the training regions); only with `kfold_split: event` |
 
@@ -520,7 +543,12 @@ Optional:
                           resources of the CPU jobs (default -p standard --account=t3)
   --prepare-gpu / --merge-gpu
                           run the prepare / merge job on the GPU partition (1 GPU)
-  --after JOBIDS          with --folds / --merge-only: wait for these jobs (colon-separated)
+  --after JOBIDS          with --folds / --merge-only / --fold-jobs / --missing-folds:
+                          wait for these jobs (colon-separated)
+  --fold-jobs             all the fold jobs (array) + the merge, after --after or from the shared cache
+  --missing-folds         resubmit only the unfinished folds (resuming) + the merge
+  --slots-per-gpu INT     at most INT trainings per GPU at a time, the others start when a GPU frees up
+  --separate-merge        merge / post-process in a separate CPU job, releasing the GPUs earlier
   --load-last             Resume from latest checkpoint
   --time HH:MM:SS         Slurm wall-clock time limit
   --mem-per-cpu MB        Slurm memory per CPU in MB (default: 4000)

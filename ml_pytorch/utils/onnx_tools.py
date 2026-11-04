@@ -94,67 +94,6 @@ def get_ratio_model_tensor_onnx(onnx_model, b):
 
     return r
 
-def get_multiclass_num_den_tensor_onnx(onnx_model, b, alpha, alpha_den):
-    """Build the *raw*, un-clamped numerator/denominator tensors for one
-    k-fold multiclass model -- i.e. ``r_0 - alpha*r_2`` and
-    ``r_1 - alpha_den*r_3`` with no ``relu`` and no epsilon floor applied.
-
-    This exists so the per-fold numerator and denominator can be summed
-    across all k-fold models and averaged *before* non-negativity is
-    enforced (see ``main()``), instead of enforcing it on each fold
-    individually and then averaging the already-clipped per-fold ratios
-    (what ``get_multiclass_ratio_model_tensor_onnx`` does, still used for
-    the per-fold diagnostic outputs in ``all_ratios_model_*.onnx``).
-
-    Clipping every fold separately before averaging is worse than clipping
-    the average once: (1) ``relu`` is convex, so by Jensen's inequality
-    ``E[relu(x)] >= relu(E[x])`` -- averaging noisy per-fold values *after*
-    the floor systematically overestimates the true (non-negative)
-    quantity whenever it sits near zero; (2) whenever a single fold's
-    estimate dips negative for a given event, it gets hard-zeroed for that
-    fold regardless of what the other folds say, instead of letting the
-    folds' independent statistical noise partially cancel in the average
-    first. Averaging the raw numerator/denominator first and clipping once
-    avoids both effects.
-    """
-    inferred_model = onnx.shape_inference.infer_shapes(onnx_model)
-    output_shape = (
-        inferred_model.graph.output[0].type.tensor_type.shape.dim[1].dim_value
-    )
-    if output_shape != 4:
-        raise ValueError(
-            f"Multiclass morphing expects a 4-node model, got {output_shape} outputs"
-        )
-
-    (r,) = inline(onnx_model)(b).values()
-
-    def _node(i):
-        return op.squeeze(
-            op.slice(
-                r,
-                op.constant(value=np.array([0, i])),
-                op.constant(value=np.array([sys.maxsize, i + 1])),
-            ),
-            axes=op.const([-1]),
-        )
-
-    r_0 = _node(0)  # data,  numerator region
-    r_1 = _node(1)  # data,  denominator region
-    r_2 = _node(2)  # ttbar, numerator region
-    r_3 = _node(3)  # ttbar, denominator region
-
-    if alpha:
-        numerator = op.sub(r_0, op.mul(op.const(float(alpha), dtype="float32"), r_2))
-    else:
-        numerator = r_0
-    if alpha_den:
-        denominator = op.sub(r_1, op.mul(op.const(float(alpha_den), dtype="float32"), r_3))
-    else:
-        denominator = r_1
-
-    return numerator, denominator
-
-
 def get_multiclass_ratio_model_tensor_onnx(onnx_model, b, alpha, alpha_den):
     """Build the QCD-morphing weight tensor for a 4-node multiclass model.
 
@@ -339,10 +278,10 @@ def build_multiclass_morphing_models(
     get_multiclass_ratio_model_tensor_onnx.
 
     Returns a dict {name: onnx model} with:
-      - ``average_morphing``: as ml_onnx -ar -mc, the raw numerators
-        r_0 - alpha * r_2 and denominators r_1 - alpha_den * r_3 are averaged
-        over the folds before the relu and the division (input ``args_0``,
-        output ``avg_w``)
+      - ``average_morphing``: as ml_onnx -ar -mc, the morphing weight of every
+        fold (relu(r_0 - alpha * r_2) / relu(r_1 - alpha_den * r_3), see
+        get_multiclass_ratio_model_tensor_onnx) averaged over the folds
+        (input ``args_0``, output ``avg_w``)
       - ``all_folds_morphing``: the weight of every fold, each with its own
         relu and division (outputs ``w_fold_<k>``)
       - ``event_morphing`` (event_split=True): inputs ``args_0`` and
@@ -350,21 +289,16 @@ def build_multiclass_morphing_models(
     """
     k_folds = len(onnx_models)
     b = argument(Tensor(np.float32, ("N", n_features)))
-    num_den = [
-        get_multiclass_num_den_tensor_onnx(m, b, alpha, alpha_den) for m in onnx_models
-    ]
-    avg_num = op.div(_sum([n for n, _ in num_den]), op.const(np.float32(k_folds)))
-    avg_den = op.div(_sum([d for _, d in num_den]), op.const(np.float32(k_folds)))
-    avg_num = op.relu(avg_num)
-    if alpha_den:
-        avg_den = op.relu(avg_den)
-    avg_den = op.add(avg_den, op.const(np.float32(RATIO_DEN_EPS)))
     ratios = [
         get_multiclass_ratio_model_tensor_onnx(m, b, alpha, alpha_den)
         for m in onnx_models
     ]
     models = {
-        "average_morphing": build({"args_0": b}, {"avg_w": op.div(avg_num, avg_den)}),
+        # the weight of every fold first, then the average over the folds
+        "average_morphing": build(
+            {"args_0": b},
+            {"avg_w": op.div(_sum(ratios), op.const(np.float32(k_folds)))},
+        ),
         "all_folds_morphing": build(
             {"args_0": b}, {f"w_fold_{k}": r for k, r in enumerate(ratios)}
         ),

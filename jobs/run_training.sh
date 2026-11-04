@@ -65,8 +65,20 @@
 #   --prepare-gpu           Run the prepare job on the GPU partition (1 GPU,
 #                           -p gpu --account=gpu_gres) instead of the CPU queue
 #   --merge-gpu             Run the merge job on the GPU partition
-#   --after JOBIDS          With --folds / --merge-only: start only after these
-#                           jobs (colon-separated) succeed, e.g. the prepare job
+#   --after JOBIDS          With --folds / --merge-only / --fold-jobs /
+#                           --missing-folds: start only after these jobs
+#                           (colon-separated) succeed, e.g. the prepare job
+#   --fold-jobs             Submit the fold jobs (array, --folds-per-job folds
+#                           each) and the merge after them, from an existing
+#                           shared cache or after the prepare job (--after)
+#   --missing-folds         Resubmit only the folds without a finished model
+#                           (resuming from their checkpoints) and the merge
+#   --slots-per-gpu INT     Run at most INT trainings per GPU at a time; the
+#                           others start when a GPU frees up (default: 0 = all
+#                           at once)
+#   --separate-merge        Single job / -p array: merge in a separate CPU job
+#                           after the training job, so the GPUs are released
+#                           when the last training ends
 
 # ─── Defaults ─────────────────────────────────────────────────────────────────
 N_TRAININGS=1
@@ -103,6 +115,10 @@ CPU_TIME=""
 PREPARE_GPU=false
 MERGE_GPU=false
 AFTER=""
+FOLD_JOBS=false
+MISSING_FOLDS=false
+SLOTS_PER_GPU=0
+SEPARATE_MERGE=false
 # partition and account of the GPU jobs (as in the #SBATCH lines above)
 GPU_PARTITION="gpu"
 GPU_ACCOUNT="gpu_gres"
@@ -171,10 +187,27 @@ a CPU job merges them):
                           -p gpu --account=gpu_gres) instead of the CPU queue,
                           with the --cpu-* resources; the GPU is not used
   --merge-gpu             Run the merge job on the GPU partition too
-  --after JOBIDS          With --folds or --merge-only: start the job only
-                          after these jobs (colon-separated ids) succeed, so it
-                          can be submitted right after the prepare job (or,
-                          for the merge, after the fold jobs)
+  --after JOBIDS          With --folds, --merge-only, --fold-jobs or
+                          --missing-folds: start only after these jobs
+                          (colon-separated ids) succeed, so they can be
+                          submitted right after the prepare job (or, for the
+                          merge, after the fold jobs)
+  --fold-jobs             Submit all the fold jobs (an array with
+                          --folds-per-job folds each, -g GPUs) and the merge
+                          after them, using an existing shared cache or the
+                          prepare job given with --after
+  --missing-folds         Recovery: resubmit only the folds that have no
+                          finished model yet (with --load-last, so interrupted
+                          folds resume from their last checkpoint) and the
+                          merge after them
+
+Occupancy of a single job with several GPUs:
+  --slots-per-gpu INT     Run at most INT trainings per GPU at a time; when one
+                          ends, the next one starts on the GPU that freed up
+                          (default: 0, all the trainings at once)
+  --separate-merge        Merge (or post-process) in a separate CPU job after
+                          the training job, instead of inside it, so the GPUs
+                          are released as soon as the last training ends
 
 Examples:
   # Single training
@@ -201,9 +234,15 @@ Examples:
   $0 -c /full/path/DNN_config.yml -o /full/path/out -k 20 --folds 8-19 -g 4 --cpus 24
   $0 -c /full/path/DNN_config.yml -o /full/path/out -k 20 --merge-only
 
-  # Prepare on a GPU node, then 20 one-fold jobs submitted at once, waiting for it
+  # Prepare on a GPU node, then all the fold jobs and the merge, waiting for it
   $0 -c /full/path/DNN_config.yml -o /full/path/out -k 20 --prepare-only --prepare-gpu   # -> job id P
-  for k in \$(seq 0 19); do $0 -c /full/path/DNN_config.yml -o /full/path/out -k 20 --folds \$k --after P; done
+  $0 -c /full/path/DNN_config.yml -o /full/path/out -k 20 --fold-jobs --after P -g 1
+
+  # Some folds failed: resubmit only them (resuming) and the merge
+  $0 -c /full/path/DNN_config.yml -o /full/path/out -k 20 --missing-folds -g 1
+
+  # One big job: at most 2 folds per GPU at a time, merge in a separate CPU job
+  $0 -c /full/path/DNN_config.yml -o /full/path/out -k 20 -g 8 --cpus 40 --slots-per-gpu 2 --separate-merge
 
   # Local test
   $0 -c /full/path/DNN_config.yml -o /full/path/out --no-slurm
@@ -246,6 +285,10 @@ while [[ $# -gt 0 ]]; do
         --prepare-gpu)     PREPARE_GPU=true; shift ;;
         --merge-gpu)       MERGE_GPU=true; shift ;;
         --after)           AFTER="$2"; shift 2 ;;
+        --fold-jobs)       FOLD_JOBS=true; shift ;;
+        --missing-folds)   MISSING_FOLDS=true; shift ;;
+        --slots-per-gpu)   SLOTS_PER_GPU="$2"; shift 2 ;;
+        --separate-merge)  SEPARATE_MERGE=true; shift ;;
         --mode)            MODE="$2"; shift 2 ;;
         -h|--help)         usage ;;
         --)                shift; EXTRA_ARGS=("$@"); break ;;
@@ -298,17 +341,17 @@ KFOLD_SPLIT_DIR="${OUT_DIR}/kfold_split"
 [[ -z "$CPU_MEM" ]] && CPU_MEM="$SLURM_MEM"
 [[ -z "$CPU_TIME" ]] && CPU_TIME="$SLURM_TIME"
 N_SPLIT_OPTIONS=0
-for opt in "$SPLIT_JOBS" "$PREPARE_ONLY" "$MERGE_ONLY"; do
+for opt in "$SPLIT_JOBS" "$PREPARE_ONLY" "$MERGE_ONLY" "$FOLD_JOBS" "$MISSING_FOLDS"; do
     [[ "$opt" == true ]] && N_SPLIT_OPTIONS=$(( N_SPLIT_OPTIONS + 1 ))
 done
 [[ -n "$FOLDS" ]] && N_SPLIT_OPTIONS=$(( N_SPLIT_OPTIONS + 1 ))
 if [[ "$N_SPLIT_OPTIONS" -gt 1 ]]; then
-    echo "Error: use only one of --prepare-job, --prepare-only, --folds and --merge-only."
+    echo "Error: use only one of --prepare-job, --prepare-only, --folds, --merge-only, --fold-jobs and --missing-folds."
     exit 1
 fi
 if [[ "$N_SPLIT_OPTIONS" -eq 1 ]]; then
     if [[ "$K_FOLDS" -lt 2 || "$KFOLD_CACHE" != true ]]; then
-        echo "Error: --prepare-job, --prepare-only, --folds and --merge-only need --k-folds >= 2 and the k-fold cache."
+        echo "Error: --prepare-job, --prepare-only, --folds, --merge-only, --fold-jobs and --missing-folds need --k-folds >= 2 and the k-fold cache."
         exit 1
     fi
     if [[ "$NODES" -ne 1 ]]; then
@@ -316,12 +359,16 @@ if [[ "$N_SPLIT_OPTIONS" -eq 1 ]]; then
         exit 1
     fi
 fi
-if [[ -n "$AFTER" && -z "$FOLDS" && "$MERGE_ONLY" != true ]]; then
-    echo "Error: --after can be used only with --folds or --merge-only."
+if [[ -n "$AFTER" && -z "$FOLDS" && "$MERGE_ONLY" != true && "$FOLD_JOBS" != true && "$MISSING_FOLDS" != true ]]; then
+    echo "Error: --after can be used only with --folds, --merge-only, --fold-jobs or --missing-folds."
     exit 1
 fi
 if [[ -n "$AFTER" && ! "$AFTER" =~ ^[0-9_]+(:[0-9_]+)*$ ]]; then
     echo "Error: --after needs job ids separated by colons, e.g. 1234 or 1234:1235."
+    exit 1
+fi
+if [[ ! "$SLOTS_PER_GPU" =~ ^[0-9]+$ ]]; then
+    echo "Error: --slots-per-gpu must be an integer >= 0."
     exit 1
 fi
 if [[ "$FOLDS_PER_JOB" -lt 1 ]]; then
@@ -393,6 +440,8 @@ build_submit_args() {
     args+=(--folds-per-job "$FOLDS_PER_JOB" --cache-dir "$SHARED_CACHE_DIR")
     [[ "$KEEP_CACHE" == true ]] && args+=(--keep-cache)
     [[ -n "$FOLDS" ]] && args+=(--folds "$FOLDS")
+    args+=(--slots-per-gpu "$SLOTS_PER_GPU")
+    [[ "$SEPARATE_MERGE" == true ]] && args+=(--separate-merge)
     [[ ${#EXTRA_ARGS[@]} -gt 0 ]] && args+=(-- "${EXTRA_ARGS[@]}")
     printf '%s\0' "${args[@]}"
 }
@@ -443,15 +492,19 @@ if [[ -z "${SLURM_JOB_ID:-}" && "$NO_SLURM" != true ]]; then
             --wrap="$wrapped"
     }
     # GPU jobs training folds from the shared cache
+    # (n_array_tasks: an array of that many jobs, each with --folds-per-job of
+    # the folds of --folds; by default an array over all the folds without
+    # --folds, a single job with --folds)
     submit_fold_jobs() {
-        local dependency="$1" array_args=()
+        local dependency="$1" n_array_tasks="${2:-}" array_args=()
         local fold_args
         mapfile -d '' fold_args < <(build_submit_args train_folds)
         local dep_args=()
         [[ -n "$dependency" ]] && dep_args=(--dependency="afterok:${dependency}")
         local output="${SLURM_LOG_DIR}/slurm-%j.out"
-        if [[ -z "$FOLDS" ]]; then
-            array_args=(--array="0-$(( N_FOLD_JOBS - 1 ))")
+        [[ -z "$n_array_tasks" && -z "$FOLDS" ]] && n_array_tasks="$N_FOLD_JOBS"
+        if [[ -n "$n_array_tasks" ]]; then
+            array_args=(--array="0-$(( n_array_tasks - 1 ))")
             output="${SLURM_LOG_DIR}/slurm-%A_%a.out"
         fi
         sbatch --parsable \
@@ -473,16 +526,59 @@ if [[ -z "${SLURM_JOB_ID:-}" && "$NO_SLURM" != true ]]; then
         echo "Fold jobs: array ${TRAIN_JOB_ID}, ${N_FOLD_JOBS} job(s) of ${FOLDS_PER_JOB} fold(s) on ${GPUS_PER_NODE} GPU(s) each, after ${PREPARE_JOB_ID}"
         MERGE_JOB_ID=$(submit_cpu_job ml_kfold_merge merge_shared "$TRAIN_JOB_ID" "$MERGE_GPU") || exit 1
         echo "K-fold merge job ($(queue_name "$MERGE_GPU")): ${MERGE_JOB_ID}, after ${TRAIN_JOB_ID}"
+        echo "If a fold job fails, the merge does not start (cancel it with: scancel ${MERGE_JOB_ID}) and"
+        echo "  $0 -c $CONFIG_FILE -o $OUT_DIR -k $K_FOLDS --missing-folds -g ${GPUS_PER_NODE}"
+        echo "resubmits only the unfinished folds and the merge."
         exit 0
     elif [[ "$PREPARE_ONLY" == true ]]; then
         PREPARE_JOB_ID=$(submit_cpu_job ml_kfold_prepare prepare_shared "" "$PREPARE_GPU") || exit 1
         echo "K-fold prepare job ($(queue_name "$PREPARE_GPU")): ${PREPARE_JOB_ID} -> ${SHARED_CACHE_DIR}"
-        echo "Submit the folds now (they start when the prepare job has succeeded and"
-        echo "their GPUs are free), in as many jobs as you want, then the merge, e.g.:"
-        echo "  for k in \$(seq 0 $(( K_FOLDS - 1 ))); do"
-        echo "    $0 -c $CONFIG_FILE -o $OUT_DIR -k $K_FOLDS --folds \$k --after ${PREPARE_JOB_ID} -g 1 --cpus <CPUs> --mem-per-cpu <MB>"
-        echo "  done"
-        echo "  $0 -c $CONFIG_FILE -o $OUT_DIR -k $K_FOLDS --merge-only --after <fold job ids, colon-separated>"
+        echo "Submit now the fold jobs and the merge (they start when the prepare job has"
+        echo "succeeded and their GPUs are free), e.g. one job per fold on 1 GPU:"
+        echo "  $0 -c $CONFIG_FILE -o $OUT_DIR -k $K_FOLDS --fold-jobs --after ${PREPARE_JOB_ID} -g 1 --cpus <CPUs> --mem-per-cpu <MB>"
+        exit 0
+    elif [[ "$FOLD_JOBS" == true ]]; then
+        if [[ -z "$AFTER" && ! -f "${SHARED_CACHE_DIR}/kfold_cache_meta.json" ]]; then
+            echo "Error: no shared k-fold cache in ${SHARED_CACHE_DIR}: give the prepare job with --after <id>, or run --prepare-only first."
+            exit 1
+        fi
+        TRAIN_JOB_ID=$(submit_fold_jobs "$AFTER") || exit 1
+        echo "Fold jobs: array ${TRAIN_JOB_ID}, ${N_FOLD_JOBS} job(s) of ${FOLDS_PER_JOB} fold(s) on ${GPUS_PER_NODE} GPU(s) each${AFTER:+, after ${AFTER}}"
+        MERGE_JOB_ID=$(submit_cpu_job ml_kfold_merge merge_shared "$TRAIN_JOB_ID" "$MERGE_GPU") || exit 1
+        echo "K-fold merge job ($(queue_name "$MERGE_GPU")): ${MERGE_JOB_ID}, after ${TRAIN_JOB_ID}"
+        echo "If a fold job fails, the merge does not start (cancel it with: scancel ${MERGE_JOB_ID}) and"
+        echo "  $0 -c $CONFIG_FILE -o $OUT_DIR -k $K_FOLDS --missing-folds -g ${GPUS_PER_NODE}"
+        echo "resubmits only the unfinished folds and the merge."
+        exit 0
+    elif [[ "$MISSING_FOLDS" == true ]]; then
+        MISSING=()
+        for ((f=0; f<K_FOLDS; f++)); do
+            shopt -s nullglob
+            finished=("${OUT_DIR}/fold_${f}/state_dict/"model_best_epoch_*.onnx)
+            shopt -u nullglob
+            [[ ${#finished[@]} -eq 0 ]] && MISSING+=("$f")
+        done
+        if [[ ${#MISSING[@]} -eq 0 ]]; then
+            echo "All the ${K_FOLDS} folds are finished: submitting only the merge."
+            MERGE_JOB_ID=$(submit_cpu_job ml_kfold_merge merge_shared "$AFTER" "$MERGE_GPU") || exit 1
+            echo "K-fold merge job ($(queue_name "$MERGE_GPU")): ${MERGE_JOB_ID}${AFTER:+, after ${AFTER}}"
+            exit 0
+        fi
+        if [[ -z "$AFTER" && ! -f "${SHARED_CACHE_DIR}/kfold_cache_meta.json" ]]; then
+            echo "Error: the folds ${MISSING[*]} are not finished but there is no shared k-fold cache in ${SHARED_CACHE_DIR}."
+            echo "Prepare it again (same config and seed, the split is identical) and resubmit after it:"
+            echo "  $0 -c $CONFIG_FILE -o $OUT_DIR -k $K_FOLDS --prepare-only   # -> job id P"
+            echo "  $0 -c $CONFIG_FILE -o $OUT_DIR -k $K_FOLDS --missing-folds --after P -g ${GPUS_PER_NODE}"
+            exit 1
+        fi
+        echo "Unfinished folds: ${MISSING[*]} (they resume from their last checkpoint)"
+        FOLDS=$(IFS=,; echo "${MISSING[*]}")
+        LOAD_LAST=true
+        N_MISSING_JOBS=$(( (${#MISSING[@]} + FOLDS_PER_JOB - 1) / FOLDS_PER_JOB ))
+        TRAIN_JOB_ID=$(submit_fold_jobs "$AFTER" "$N_MISSING_JOBS") || exit 1
+        echo "Fold jobs: array ${TRAIN_JOB_ID}, ${N_MISSING_JOBS} job(s) of ${FOLDS_PER_JOB} fold(s) on ${GPUS_PER_NODE} GPU(s) each${AFTER:+, after ${AFTER}}"
+        MERGE_JOB_ID=$(submit_cpu_job ml_kfold_merge merge_shared "$TRAIN_JOB_ID" "$MERGE_GPU") || exit 1
+        echo "K-fold merge job ($(queue_name "$MERGE_GPU")): ${MERGE_JOB_ID}, after ${TRAIN_JOB_ID}"
         exit 0
     elif [[ -n "$FOLDS" ]]; then
         if [[ -z "$AFTER" && ! -f "${SHARED_CACHE_DIR}/kfold_cache_meta.json" ]]; then
@@ -501,10 +597,17 @@ if [[ -z "${SLURM_JOB_ID:-}" && "$NO_SLURM" != true ]]; then
         # Single job: all trainings on one node, postproc runs inline
         mapfile -d '' TRAIN_ARGS < <(build_submit_args train)
         echo "Submitting single job (${N_TRAININGS} training(s) on ${GPUS_PER_NODE} GPU(s))..."
-        sbatch --job-name="ml_train" \
+        TRAIN_JOB_ID=$(sbatch --parsable --job-name="ml_train" \
             --output="${SLURM_LOG_DIR}/slurm-%j.out" \
             --gres="gpu:${GPUS_PER_NODE}" \
-        "${SBATCH_RESOURCES[@]}" "$SCRIPT_PATH" "${TRAIN_ARGS[@]}"
+            "${SBATCH_RESOURCES[@]}" "$SCRIPT_PATH" "${TRAIN_ARGS[@]}") || exit 1
+        echo "  Training job submitted: ${TRAIN_JOB_ID}"
+        if [[ "$SEPARATE_MERGE" == true && "$N_TRAININGS" -gt 1 ]]; then
+            MERGE_MODE=postproc
+            [[ "$K_FOLDS" -ge 2 ]] && MERGE_MODE=merge_shared
+            MERGE_JOB_ID=$(submit_cpu_job ml_postproc "$MERGE_MODE" "$TRAIN_JOB_ID" "$MERGE_GPU") || exit 1
+            echo "  Merge job ($(queue_name "$MERGE_GPU")): ${MERGE_JOB_ID}, after ${TRAIN_JOB_ID}"
+        fi
     else
         # Array job per node + dependent postproc job
         ARRAY_MAX=$(( NODES - 1 ))
@@ -519,6 +622,13 @@ if [[ -z "${SLURM_JOB_ID:-}" && "$NO_SLURM" != true ]]; then
             "$SCRIPT_PATH" "${TRAIN_ARGS[@]}")
         echo "  Training array job submitted: ${TRAIN_JOB_ID}"
 
+        if [[ "$SEPARATE_MERGE" == true ]]; then
+            MERGE_MODE=postproc
+            [[ "$K_FOLDS" -ge 2 ]] && MERGE_MODE=merge_shared
+            POSTPROC_JOB_ID=$(submit_cpu_job ml_postproc "$MERGE_MODE" "$TRAIN_JOB_ID" "$MERGE_GPU") || exit 1
+            echo "  Post-processing job ($(queue_name "$MERGE_GPU")): ${POSTPROC_JOB_ID}, after ${TRAIN_JOB_ID}"
+            exit 0
+        fi
         mapfile -d '' POSTPROC_ARGS < <(build_submit_args postproc)
         echo "Submitting post-processing job (depends on ${TRAIN_JOB_ID})..."
         POSTPROC_JOB_ID=$(sbatch --parsable \
@@ -587,7 +697,9 @@ run_one_training() {
         -c "$CONFIG_FILE"
         "${load_model_args[@]}"
     )
-    [[ "$LOAD_LAST" != true ]] && train_args+=(--overwrite)
+    # restart from scratch if there is no checkpoint to resume from (e.g. a
+    # fold that never started), without the interactive overwrite question
+    [[ "$LOAD_LAST" != true || ${#load_model_args[@]} -eq 0 ]] && train_args+=(--overwrite)
     [[ "$SAVE_ROC" == true ]] && train_args+=(--save-roc)
     if [[ "$K_FOLDS" -ge 2 ]]; then
         train_args+=(-s "$INIT_SEED" --k-folds "$K_FOLDS" --fold "$(( seed - INIT_SEED ))")
@@ -660,10 +772,16 @@ launch_trainings() {
     fi
     [[ "$n_gpus" -gt "$n_trainings" ]] && n_gpus="$n_trainings"
 
+    # with --slots-per-gpu, at most that many trainings per GPU at a time
+    local max_parallel="$n_trainings"
+    if [[ "$SLOTS_PER_GPU" -gt 0 && $(( n_gpus * SLOTS_PER_GPU )) -lt "$n_trainings" ]]; then
+        max_parallel=$(( n_gpus * SLOTS_PER_GPU ))
+    fi
+
     # Split the CPUs among the parallel trainings, so that the torch/numpy
     # threads of the different processes do not oversubscribe the cores
     local n_cpus="${SLURM_CPUS_PER_TASK:-$SLURM_CPUS}"
-    local cpus_per_training=$(( n_cpus / n_trainings ))
+    local cpus_per_training=$(( n_cpus / max_parallel ))
     [[ "$cpus_per_training" -lt 1 ]] && cpus_per_training=1
     export OMP_NUM_THREADS="$cpus_per_training"
     export MKL_NUM_THREADS="$cpus_per_training"
@@ -671,10 +789,45 @@ launch_trainings() {
     # (see data_on_gpu in the config)
     local num_workers=$(( cpus_per_training - 1 ))
 
-    echo "Launching ${n_trainings} training(s) (seeds/folds ${seeds[*]}) in parallel on ${n_gpus} GPU(s), ${cpus_per_training} CPU(s) per training"
     local i
+    if [[ "$max_parallel" -ge "$n_trainings" ]]; then
+        echo "Launching ${n_trainings} training(s) (seeds/folds ${seeds[*]}) in parallel on ${n_gpus} GPU(s), ${cpus_per_training} CPU(s) per training"
+        for ((i=0; i<n_trainings; i++)); do
+            run_one_training "${seeds[$i]}" "$(run_path "${seeds[$i]}")" "$(( i % n_gpus ))" "$num_workers" &
+        done
+        wait
+        return
+    fi
+
+    # Dynamic scheduling: at most SLOTS_PER_GPU trainings per GPU; when one
+    # ends, the next training starts on the GPU with the fewest running ones,
+    # so no GPU stays idle while trainings are waiting
+    echo "Launching ${n_trainings} training(s) (seeds/folds ${seeds[*]}) on ${n_gpus} GPU(s), at most ${SLOTS_PER_GPU} per GPU at a time (${max_parallel} in parallel), ${cpus_per_training} CPU(s) per training"
+    local -a gpu_running=() pids=() pid_gpu=()
+    local g best pid k
+    for ((g=0; g<n_gpus; g++)); do gpu_running[$g]=0; done
     for ((i=0; i<n_trainings; i++)); do
-        run_one_training "${seeds[$i]}" "$(run_path "${seeds[$i]}")" "$(( i % n_gpus ))" "$num_workers" &
+        while [[ ${#pids[@]} -ge "$max_parallel" ]]; do
+            wait -n 2>/dev/null
+            # free the slots of the trainings that have ended
+            for k in "${!pids[@]}"; do
+                if ! kill -0 "${pids[$k]}" 2>/dev/null; then
+                    wait "${pids[$k]}" 2>/dev/null
+                    gpu_running[${pid_gpu[$k]}]=$(( gpu_running[${pid_gpu[$k]}] - 1 ))
+                    unset 'pids[k]' 'pid_gpu[k]'
+                fi
+            done
+        done
+        best=0
+        for ((g=1; g<n_gpus; g++)); do
+            [[ ${gpu_running[$g]} -lt ${gpu_running[$best]} ]] && best=$g
+        done
+        echo "Starting seed/fold ${seeds[$i]} on GPU ${best} ($(( gpu_running[best] + 1 )) running on it)"
+        run_one_training "${seeds[$i]}" "$(run_path "${seeds[$i]}")" "$best" "$num_workers" &
+        pid=$!
+        pids[$i]=$pid
+        pid_gpu[$i]=$best
+        gpu_running[$best]=$(( gpu_running[best] + 1 ))
     done
     wait
 }
@@ -760,6 +913,18 @@ if [[ "$NO_SLURM" == true && "$MODE" == train ]]; then
     elif [[ "$PREPARE_ONLY" == true ]]; then MODE=prepare_shared
     elif [[ -n "$FOLDS" ]]; then MODE=train_folds
     elif [[ "$MERGE_ONLY" == true ]]; then MODE=merge_shared
+    elif [[ "$FOLD_JOBS" == true ]]; then
+        FOLD_LIST=$(seq 0 $(( K_FOLDS - 1 )) | tr '\n' ' '); MODE=train_folds_merge
+    elif [[ "$MISSING_FOLDS" == true ]]; then
+        FOLD_LIST=""
+        for ((f=0; f<K_FOLDS; f++)); do
+            shopt -s nullglob
+            finished=("${OUT_DIR}/fold_${f}/state_dict/"model_best_epoch_*.onnx)
+            shopt -u nullglob
+            [[ ${#finished[@]} -eq 0 ]] && FOLD_LIST+="$f "
+        done
+        echo "Unfinished folds: ${FOLD_LIST:-none}"
+        LOAD_LAST=true; MODE=train_folds_merge
     fi
 fi
 
@@ -786,7 +951,7 @@ case "$MODE" in
         echo "Node ${TASK_ID}: all trainings complete."
 
         # For single-node multi-training: run postproc inline (no separate job)
-        if [[ "$N_TRAININGS" -gt 1 && "$NODES" -eq 1 ]]; then
+        if [[ "$N_TRAININGS" -gt 1 && "$NODES" -eq 1 && ( "$SEPARATE_MERGE" != true || "$NO_SLURM" == true ) ]]; then
             run_postproc
         fi
         ;;
@@ -805,7 +970,11 @@ case "$MODE" in
     train_folds)
         # k-fold in several jobs: train the folds given with --folds, or the
         # folds of this array task, from a local copy of the shared cache
-        if [[ -n "$FOLDS" ]]; then
+        if [[ -n "$FOLDS" && -n "${SLURM_ARRAY_TASK_ID:-}" ]]; then
+            # array over the folds of --folds (e.g. --missing-folds)
+            ALL_FOLDS=($FOLD_LIST)
+            JOB_FOLDS=("${ALL_FOLDS[@]:$(( SLURM_ARRAY_TASK_ID * FOLDS_PER_JOB )):${FOLDS_PER_JOB}}")
+        elif [[ -n "$FOLDS" ]]; then
             JOB_FOLDS=($FOLD_LIST)
         else
             TASK_ID="${SLURM_ARRAY_TASK_ID:-0}"
@@ -817,6 +986,20 @@ case "$MODE" in
         copy_shared_cache
         launch_trainings $(for f in "${JOB_FOLDS[@]}"; do echo $(( INIT_SEED + f )); done)
         echo "Folds ${JOB_FOLDS[*]} complete."
+        ;;
+
+    train_folds_merge)
+        # --fold-jobs / --missing-folds with --no-slurm: the folds, then the merge
+        if [[ -n "$FOLD_LIST" ]]; then
+            copy_shared_cache
+            launch_trainings $(for f in $FOLD_LIST; do echo $(( INIT_SEED + f )); done)
+        fi
+        [[ -d "$SHARED_CACHE_DIR" ]] && MERGE_CACHE_DIR="$SHARED_CACHE_DIR"
+        run_postproc || exit 1
+        if [[ "$KEEP_CACHE" != true && -d "$SHARED_CACHE_DIR" ]]; then
+            echo "Removing the shared k-fold cache ${SHARED_CACHE_DIR}"
+            rm -rf "$SHARED_CACHE_DIR"
+        fi
         ;;
 
     merge_shared)
