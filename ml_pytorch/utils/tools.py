@@ -44,10 +44,11 @@ def set_rng_state(state):
     """Restore the random number generators saved with get_rng_state."""
     random.setstate(state["python"])
     name, key, *rest = state["numpy"]
-    np.random.set_state((name, key.numpy().astype(np.uint32), *rest))
-    torch.set_rng_state(state["torch"])
+    # the checkpoint may be loaded with map_location on a GPU: move to CPU
+    np.random.set_state((name, key.cpu().numpy().astype(np.uint32), *rest))
+    torch.set_rng_state(state["torch"].cpu())
     if "cuda" in state and torch.cuda.is_available():
-        torch.cuda.set_rng_state_all(state["cuda"])
+        torch.cuda.set_rng_state_all([s.cpu() for s in state["cuda"]])
 
 
 def add_training_state(checkpoint_name, early_stopper, best_vloss, best_vaccuracy, best_epoch):

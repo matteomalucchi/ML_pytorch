@@ -503,6 +503,10 @@ def main():
                     # get line from Best epoch onwards
                     line = line.split("Best epoch")[1]
                     best_epoch = int(line.split(",")[0].split("#")[1])
+                    # when resuming, ignore the best epochs after the loaded
+                    # one (e.g. logged by a previous run with more epochs)
+                    if cfg.load_model and best_epoch > loaded_epoch:
+                        continue
                     best_vloss = float(line.split(",")[1].split(":")[1])
                     best_vaccuracy = float(line.split(",")[2].split(":")[1])
                     break
@@ -544,6 +548,9 @@ def main():
             time_epoch = time.time()
             # Turn on gradients for training
             print("\n\n\n")
+            # learning rate used in this epoch (the scheduler is stepped
+            # at the end of the training epoch)
+            lr_epoch = optimizer.param_groups[0]["lr"]
 
             # train
             avg_loss, avg_accuracy, *_ = train_val_one_epoch(
@@ -609,6 +616,7 @@ def main():
                 comet_logger.log_metric(
                     "accuracy_epoch_val", avg_vaccuracy, epoch=epoch
                 )
+                comet_logger.log_metric("learning_rate", lr_epoch, epoch=epoch)
 
             # Log the running loss averaged per batch
             # for both training and validation

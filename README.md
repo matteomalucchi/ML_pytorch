@@ -920,6 +920,8 @@ vim jobs/comet_token.key
 
 The scripts will read this file if it exists and automatically sends the information to `ml_pytorch`
 
+Per-epoch metrics logged: `loss_epoch_train`, `loss_epoch_val`, `accuracy_epoch_train`, `accuracy_epoch_val` and `learning_rate` (the learning rate used during that epoch, i.e. before the scheduler step).
+
 ### Comet workspace
 
 The **Comet workspace** is derived automatically from the name of the directory containing the config file, with underscores replaced by hyphens. For example, a config saved under `configs/hh4b_ggF_VBF/` maps to the workspace `hh4b-ggF-VBF`, accessible at:
