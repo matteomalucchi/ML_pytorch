@@ -59,8 +59,10 @@ data_dirs: [/work/mmalucch/out_hh4b/out_vbf_ggf_dnn_full/]
 
 # Parquet only: directory of the parquet files to use instead of the one in
 # the config.json of data_dirs (only with a single data_dir), e.g. the output
-# of ml_merge_parquet, which merges the many small chunks into a single file
-# per dataset/region and makes the loading much faster.
+# of merge_parquet.py of AnalysisConfigs (utils_configs/merge_parquet.py),
+# which merges the many small chunks into a single file per dataset/region and
+# makes the loading much faster. Not needed if the merged files were written
+# in the config.json (merge_parquet.py --update-config).
 parquet_dir: null
 
 # Format of the input data: coffea or parquet (root is not supported anymore).

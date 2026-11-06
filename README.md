@@ -167,7 +167,7 @@ A ready-to-edit multi-class example is provided at `configs/hh4b_sig_bkg_classif
 | `preprocess_variables_functions` | mapping `{var: [func_name, [args...]]}` resolved against `ml_pytorch/defaults/preprocess_variables_functions.py` |
 | `data_format` | `coffea`, `parquet`, or `root` |
 | `data_dirs` | list of directories containing the input files (`.coffea` files / parquet config) |
-| `parquet_dir` | parquet only: directory of the parquet files to use instead of the `save_chunk` one in the `config.json` of `data_dirs` (single `data_dir` only), e.g. the output of `ml_merge_parquet` |
+| `parquet_dir` | parquet only: directory of the parquet files to use instead of the `save_chunk` one in the `config.json` of `data_dirs` (single `data_dir` only), e.g. the output of `merge_parquet.py` of AnalysisConfigs ([Merge the parquet chunks](#merge-the-parquet-chunks)) |
 | `oversample_split`, `split_oversample`, `undersample` | binary-only class balancing strategies |
 | `eval`, `roc`, `histos`, `history`, `onnx` | toggle the post-training outputs |
 | `gpus` | comma-separated GPU indices, or unset for CPU |
@@ -839,20 +839,17 @@ ml_input_vars -c <config_file> -o <output_directory>
 
 ### Merge the parquet chunks
 
-Loading thousands of small parquet chunks from dCache (`/pnfs`) is dominated by the per-file latency (~1-2 min per dataset/region even for few MB). `ml_merge_parquet` merges them once into a single `merged.parquet` per leaf directory (e.g. `<dataset>/<region>/nominal`), keeping the directory structure and the events order. Then set `parquet_dir: <output_dir>` in the training config.
+Loading thousands of small parquet chunks from dCache (`/pnfs`) is dominated by the per-file latency (~1-2 min per dataset/region even for few MB). The chunks can be merged once into a single `merged.parquet` per leaf directory (e.g. `<dataset>/<region>/nominal`), keeping the directory structure and the events order, with `merge_parquet.py`, which is now in [AnalysisConfigs](https://github.com/matteomalucchi/AnalysisConfigs) (`utils_configs/merge_parquet.py`, see the [AnalysisConfigs HH4b README](https://github.com/matteomalucchi/AnalysisConfigs/blob/main/configs/HH4b_common/README.md#merge-the-parquet-chunks) for all the options). It can run automatically at the end of the PocketCoffea run (`run_pocket_coffea ... --merge-parquet`) or by hand:
 
 ```bash
-# -i: PocketCoffea output dir (parquet location read from config.json) or the parquet_files dir
-ml_merge_parquet -i <data_dir> -o /work/$USER/merged_parquet/<name> [-j 32] [--files-per-step 256] [--overwrite]
-
-# the merged files cannot be written directly on /pnfs: merge on /work, copy to /pnfs and remove from /work
-ml_merge_parquet -i <data_dir> -o /work/$USER/merged_parquet/<name> --copy-to /pnfs/psi.ch/cms/trivcat/store/user/$USER/merged_parquet/<name>
+# in AnalysisConfigs; by default the merged files are written in <...>/merged_parquet_files next to <...>/parquet_files
+python utils_configs/merge_parquet.py -i <data_dir> [-o <merged_dir>] [--tmp-dir <tmp_dir>] [--update-config]
 ```
 
-* `-j/--threads`: number of threads reading the files in parallel (default 32)
-* `--files-per-step`: number of files kept in memory at the same time (default 256)
-* `--overwrite`: re-merge directories already merged (skipped by default)
-* `--copy-to`: after each merge, copy the merged file to this directory (e.g. on `/pnfs`) keeping the directory structure, check the copy (size, adler32 checksum, number of events) and remove the file (and the directories left empty) from the `-o` directory. If the check fails the copy is removed, the original is kept and the script stops; a rerun reuses the merged file left in `-o`. Use the `--copy-to` directory as `parquet_dir`
+Then either:
+
+* set `parquet_dir: <merged_dir>` (e.g. `<...>/merged_parquet_files`) in the training config, or
+* merge with `--update-config` (`run_pocket_coffea ... --merge-parquet-update-config`), which overwrites the parquet path (`save_chunk` and `dump_columns_as_arrays_per_chunk`) in the `config.json` of `data_dir` with the merged directory: the merged files are then read without setting `parquet_dir`
 
 ## Input variable distributions
 
