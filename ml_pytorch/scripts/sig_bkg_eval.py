@@ -83,53 +83,34 @@ def my_roc_auc(
     """
     # based on https://github.com/SiLiKhon/my_roc_auc/blob/master/my_roc_auc.py
 
+    classes = np.asarray(classes)
+    predictions = np.asarray(predictions)
     if sample_weight is None:
-        sample_weight = np.ones_like(predictions)
+        sample_weight = np.ones(len(predictions))
+    # the cumulative sums run over all the events: in float32 they lose
+    # precision for large datasets (O(10^7) events) and bias the AUC
+    sample_weight = np.asarray(sample_weight, dtype=np.float64)
 
     assert len(classes) == len(predictions) == len(sample_weight)
     assert classes.ndim == predictions.ndim == sample_weight.ndim == 1
     class0, class1 = sorted(np.unique(classes))
 
-    data = np.empty(
-        shape=len(classes),
-        dtype=[
-            ("c", classes.dtype),
-            ("p", predictions.dtype),
-            ("w", sample_weight.dtype),
-        ],
-    )
-    data["c"], data["p"], data["w"] = classes, predictions, sample_weight
+    # sort by prediction, with class0 before class1 for equal predictions
+    order = np.lexsort((classes, predictions))
+    p = predictions[order]
+    c = classes[order]
+    w = sample_weight[order]
 
-    data = data[np.argsort(data["c"])]
-    data = data[
-        np.argsort(data["p"], kind="mergesort")
-    ]  # here we're relying on stability as we need class orders preserved
-
-    correction = 0.0
-    # mask1 - bool mask to highlight collision areas
-    # mask2 - bool mask with collision areas' start points
-    mask1 = np.empty(len(data), dtype=bool)
-    mask2 = np.empty(len(data), dtype=bool)
-    mask1[0] = mask2[-1] = False
-    mask1[1:] = data["p"][1:] == data["p"][:-1]
-    if mask1.any():
-        mask2[:-1] = ~mask1[:-1] & mask1[1:]
-        mask1[:-1] |= mask1[1:]
-        (ids,) = mask2.nonzero()
-        correction = (
-            sum(
-                [
-                    ((dsplit["c"] == class0) * dsplit["w"] * msplit).sum()
-                    * ((dsplit["c"] == class1) * dsplit["w"] * msplit).sum()
-                    for dsplit, msplit in zip(np.split(data, ids), np.split(mask1, ids))
-                ]
-            )
-            * 0.5
-        )
-
-    weights_0 = data["w"] * (data["c"] == class0)
-    weights_1 = data["w"] * (data["c"] == class1)
+    weights_0 = w * (c == class0)
+    weights_1 = w * (c == class1)
     cumsum_0 = weights_0.cumsum()
+
+    # events with equal predictions count 1/2: cumsum_0 includes all the
+    # class0 events of the tie, so half of their product with class1 is removed
+    _, tie_start = np.unique(p, return_index=True)
+    correction = 0.5 * np.sum(
+        np.add.reduceat(weights_0, tie_start) * np.add.reduceat(weights_1, tie_start)
+    )
 
     return ((cumsum_0 * weights_1).sum() - correction) / (
         weights_1.sum() * cumsum_0[-1]
