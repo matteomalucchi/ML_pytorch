@@ -1,9 +1,12 @@
 import datetime
 import importlib
 import importlib.util
+import json
 import os
 import shutil
+import subprocess
 import sys
+import tempfile
 import time
 
 import numpy as np
@@ -13,16 +16,24 @@ from ml_pytorch.utils.args_train import args
 
 # PyTorch TensorBoard support
 # from torch.utils.tensorboard import SummaryWriter
-from ml_pytorch.utils.dataset import load_data
+from ml_pytorch.utils.dataset import (
+    check_kfold_onnx_cfg,
+    kfold_test_info,
+    load_data,
+    loaders_to_device,
+)
 from ml_pytorch.utils.early_stopper import EarlyStopper
 from ml_pytorch.utils.lumitext import get_lumitext
 from ml_pytorch.utils.setup_logger import setup_logger
 from ml_pytorch.utils.tools import (
-    create_DNN_columns_list,
     eval_model,
+    add_training_state,
     export_onnx,
+    kfold_weights_seed,
+    resolve_input_variables,
     get_model_parameters_number,
     save_pytorch_model,
+    set_rng_state,
     set_seed,
     train_val_one_epoch,
 )
@@ -32,6 +43,111 @@ if args.comet_token:
     from comet_ml.integration.pytorch import log_model
 
 import torch
+
+
+def make_output_dir(main_dir, overwrite):
+    try:
+        os.makedirs(main_dir)
+    except FileExistsError:
+        # ask the user if they want to overwrite the directory
+        print(f"Directory {main_dir} already exists")
+        if overwrite:
+            print("Overwriting...")
+            os.system(f"rm -rf {main_dir}")
+            os.makedirs(main_dir)
+        else:
+            print("Do you want to overwrite it? (y/n)")
+            answer = input()
+            if answer == "y":
+                os.system(f"rm -rf {main_dir}")
+                os.makedirs(main_dir)
+            else:
+                print("Exiting...")
+                sys.exit(0)
+
+
+def prepare_kfold_cache(cfg):
+    """Load the events once, shuffle them, assign them to the folds and save
+    them in the k-fold cache (cfg.kfold_cache), which all the folds then
+    memory-map instead of loading the events again."""
+    if not cfg.kfold_cache:
+        raise ValueError("--kfold-prepare needs --kfold-cache")
+    os.makedirs(cfg.kfold_cache, exist_ok=True)
+    logger = setup_logger(f"{cfg.kfold_cache}/logger_kfold_cache.log", cfg.verbosity)
+    logger.info(f"Preparing the k-fold cache in {cfg.kfold_cache}")
+    resolve_input_variables(cfg)
+    set_seed(cfg.seed, cfg.deterministic)
+    load_data(cfg, cfg.seed)
+
+
+def kfold_subprocess_cmd(*extra_args):
+    # the options given later override the earlier ones
+    return [sys.executable, "-m", "ml_pytorch.scripts.train", *sys.argv[1:], *extra_args]
+
+
+def run_all_folds(cfg, main_dir):
+    """Train all the folds of the k-fold training one after the other, each
+    in its own ml_train process with the output in <main_dir>/fold_<k>, and
+    then merge them."""
+    from ml_pytorch.scripts.kfold_merge import merge_kfold
+
+    if cfg.load_model or cfg.eval_model:
+        raise ValueError(
+            "--load-model and --eval-model with k_folds >= 2 need --fold to "
+            "select the fold"
+        )
+    make_output_dir(main_dir, cfg.overwrite)
+    setup_logger(f"{main_dir}/logger_kfold.log", cfg.verbosity)
+    os.system(f"cp {args.config} {main_dir}")
+    # the events are loaded only once, in the k-fold cache, which by default
+    # is a temporary directory (not to fill the output disk), removed at the
+    # end; only the record of the split is kept in the output directory
+    temp_cache = not cfg.kfold_cache
+    cache_dir = cfg.kfold_cache or tempfile.mkdtemp(
+        prefix="ml_kfold_cache_", dir=os.environ.get("TMPDIR")
+    )
+    split_dir = cfg.kfold_split_dir or f"{main_dir}/kfold_split"
+    cfg.kfold_cache = cache_dir
+    cfg.kfold_split_dir = split_dir
+    OmegaConf.save(cfg, f"{main_dir}/config_parameters.yml")
+    try:
+        run_folds(cfg, main_dir, cache_dir, split_dir)
+        merge_kfold(main_dir, cfg)
+    finally:
+        if temp_cache:
+            print(f"Removing the k-fold cache {cache_dir}")
+            shutil.rmtree(cache_dir, ignore_errors=True)
+
+
+def run_folds(cfg, main_dir, cache_dir, split_dir):
+    cmd = kfold_subprocess_cmd(
+        "--k-folds",
+        str(cfg.k_folds),
+        "--kfold-cache",
+        cache_dir,
+        "--kfold-split-dir",
+        split_dir,
+        "--kfold-prepare",
+    )
+    print(" ".join(cmd))
+    subprocess.run(cmd, check=True)
+
+    for fold in range(cfg.k_folds):
+        fold_dir = f"{main_dir}/fold_{fold}"
+        print(f"\n\n\n=== Training fold {fold} of {cfg.k_folds} -> {fold_dir}")
+        cmd = kfold_subprocess_cmd(
+            "--k-folds",
+            str(cfg.k_folds),
+            "--fold",
+            str(fold),
+            "--kfold-cache",
+            cache_dir,
+            "-o",
+            fold_dir,
+            "--overwrite",
+        )
+        print(" ".join(cmd))
+        subprocess.run(cmd, check=True)
 
 
 def main():
@@ -69,7 +185,7 @@ def main():
 
     if cfg.histos or cfg.roc:
         from ml_pytorch.scripts.sig_bkg_eval import (
-            plot_kl_distributions,
+            plot_kl_distributions_with_fallback,
         )
     if cfg.history:
         from ml_pytorch.scripts.plot_history import plot_history, plot_lr, read_from_txt
@@ -91,6 +207,29 @@ def main():
             f"{base_dir}/{os.path.basename(cfg_file_name).replace('.yml', '')}"
         )
     main_dir = cfg.output_dir
+
+    k_folds = cfg.k_folds or 0
+    if k_folds >= 2:
+        # fail before training if the final ONNX model cannot be built
+        check_kfold_onnx_cfg(cfg)
+    if cfg.kfold_prepare:
+        prepare_kfold_cache(cfg)
+        return
+    if k_folds >= 2 and cfg.fold is None:
+        run_all_folds(cfg, main_dir)
+        return
+    if k_folds >= 2:
+        if not 0 <= cfg.fold < k_folds:
+            raise ValueError(
+                f"fold must be between 0 and k_folds - 1 = {k_folds - 1}, got {cfg.fold}"
+            )
+        # the fold is evaluated on its test events (the scores are saved only
+        # with --save-numpy, the merge evaluates the models again in memory)
+        cfg.eval = True
+    elif cfg.fold is not None:
+        raise ValueError("fold is set but k_folds < 2")
+    fold_tag = f"_fold{cfg.fold}" if k_folds >= 2 else ""
+
     # text with the years of the datasets used in the training, shown on the plots
     lumitext = get_lumitext(cfg)
 
@@ -130,24 +269,7 @@ def main():
         # ML_model = importlib.import_module(f"ml_pytorch.models.{cfg.ML_model}")
     else:
         ML_model = importlib.import_module(f"ml_pytorch.models.{cfg.ML_model}")
-        try:
-            os.makedirs(main_dir)
-        except FileExistsError:
-            # ask the user if they want to overwrite the directory
-            print(f"Directory {main_dir} already exists")
-            if cfg.overwrite:
-                print("Overwriting...")
-                os.system(f"rm -rf {main_dir}")
-                os.makedirs(main_dir)
-            else:
-                print("Do you want to overwrite it? (y/n)")
-                answer = input()
-                if answer == "y":
-                    os.system(f"rm -rf {main_dir}")
-                    os.makedirs(main_dir)
-                else:
-                    print("Exiting...")
-                    sys.exit(0)
+        make_output_dir(main_dir, cfg.overwrite)
 
     ML_model_path = f"{file_dir}/../models/{cfg.ML_model}.py"
     # writer = SummaryWriter(f"runs/DNN_trainer_{timestamp}")
@@ -177,16 +299,7 @@ def main():
     logger.info("configs")
     logger.info("cfg:\n - %s", "\n - ".join(str(it) for it in cfg.items()))
 
-    if isinstance(cfg.input_variables, str):
-        logger.info("Get Input variables from dnn_inputs")
-        logger.info(cfg.input_variables)
-        dnn_input_variables_file = importlib.import_module(
-            f"ml_pytorch.defaults.{cfg.input_variables}"
-        )
-
-        cfg.input_variables = create_DNN_columns_list(
-            cfg.run2, dnn_input_variables_file.dnn_input_variables
-        )
+    resolve_input_variables(cfg)
 
     input_variables = cfg.input_variables
     logger.info(input_variables)
@@ -214,8 +327,11 @@ def main():
             logger.info("No 'comet_token' key found in dictionary")
         logger.info(f"Recording tags {args.comet_tags}")
         comet_logger.log_parameters(cfg_dict)
-        comet_logger.add_tags([*args.comet_tags, name_configuration, f"s{cfg.seed}"])
-        comet_logger.set_name(f"{name_configuration}_s{cfg.seed}")
+        comet_logger.add_tags(
+            [*args.comet_tags, name_configuration, f"s{cfg.seed}"]
+            + ([f"fold{cfg.fold}"] if fold_tag else [])
+        )
+        comet_logger.set_name(f"{name_configuration}_s{cfg.seed}{fold_tag}")
     else:
         comet_logger = None
 
@@ -234,8 +350,27 @@ def main():
         class_info,
     ) = load_data(cfg, cfg.seed)
 
-    # plot the input variable distributions of signal and background before training
-    if cfg.input_plots:
+    if k_folds >= 2 and hasattr(test_loader, "event_rows"):
+        # small record of the split of this fold, checked by the merge
+        fold_info = dict(
+            kfold_test_info(test_loader.event_rows, test_loader.n_events_total),
+            fold=int(cfg.fold),
+            k_folds=k_folds,
+            n_train=int(training_loader.num_events),
+            n_val=int(val_loader.num_events) if val_loader is not None else 0,
+            seed=int(cfg.seed),
+            weights_seed=kfold_weights_seed(cfg.seed, cfg.fold),
+        )
+        with open(f"{main_dir}/kfold_fold_info.json", "w") as f:
+            json.dump(fold_info, f, indent=2)
+
+    # plot the input variable distributions of signal and background before
+    # training. With the k-fold cache the events are the same for all the
+    # folds, so they are plotted only for fold 0 (the plots copy the events
+    # in memory)
+    if cfg.input_plots and k_folds >= 2 and cfg.kfold_cache and cfg.fold != 0:
+        logger.info("Input variable distributions plotted only for fold 0")
+    elif cfg.input_plots:
         logger.info("\n\n\n")
         logger.info("Plotting the input variable distributions")
         input_plots_dir = plot_input_variables_from_loaders(
@@ -258,6 +393,32 @@ def main():
         gpus = None
         device = torch.device("cpu")
     logger.info(f"Using {device} device")
+
+    if device.type == "cuda":
+        if cfg.tf32 and not cfg.deterministic:
+            # TensorFloat-32 matmuls on Ampere (and newer) GPUs
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+        if not cfg.deterministic:
+            torch.backends.cudnn.benchmark = True
+
+    if cfg.data_on_gpu:
+        # copy the whole datasets to the GPU once instead of transferring
+        # every batch (no effect on CPU or if they don't fit in memory)
+        training_loader, val_loader, test_loader = loaders_to_device(
+            [training_loader, val_loader, test_loader], device
+        )
+
+    if k_folds >= 2:
+        # the events and the folds are the same for all the folds (seed), while
+        # the weight initialisation (and dropout) of every fold uses its own,
+        # independent random stream
+        weights_seed = kfold_weights_seed(cfg.seed, cfg.fold)
+        logger.info(
+            f"Fold {cfg.fold}: seed {cfg.seed} for the events, seed "
+            f"{weights_seed} for the weight initialisation"
+        )
+        set_seed(weights_seed, cfg.deterministic)
 
     # Get validation evaluator (if best model by loss or accuracy)
     eval_param = cfg.eval_param
@@ -306,6 +467,11 @@ def main():
     logger.info(f"Number of parameters: {num_parameters}")
 
     if gpus is not None and len(gpus) > 1:
+        logger.warning(
+            "Using DataParallel on %d GPUs: for small models it is usually "
+            "slower than a single GPU, it is better to run one training per GPU "
+            "(see jobs/run_training.sh --gpus-per-node)" % len(gpus)
+        )
         # model becomes `torch.nn.DataParallel` w/ model.module being the original `torch.nn.Module`
         model = torch.nn.DataParallel(model, device_ids=gpus)
 
@@ -316,6 +482,19 @@ def main():
         model.load_state_dict(checkpoint["state_dict"])
         optimizer.load_state_dict(checkpoint["optimizer"])
         loaded_epoch = checkpoint["epoch"]
+        # restore the learning rate scheduler, so that the schedule continues
+        # from the loaded epoch instead of restarting from epoch 0
+        if "scheduler" in checkpoint:
+            scheduler.load_state_dict(checkpoint["scheduler"])
+        else:
+            # older checkpoints without the scheduler state: the checkpoint is
+            # saved after the scheduler step of the epoch, so the scheduler is
+            # at loaded_epoch + 1 (the optimizer lr is already restored)
+            scheduler.last_epoch = loaded_epoch + 1
+        logger.info(
+            "Learning rate scheduler at epoch %d, learning rate: %.3e"
+            % (scheduler.last_epoch, optimizer.param_groups[0]["lr"])
+        )
         best_model_name = cfg.load_model if cfg.load_model else cfg.eval_model
 
         with open(logger_file, "r") as f:
@@ -324,9 +503,37 @@ def main():
                     # get line from Best epoch onwards
                     line = line.split("Best epoch")[1]
                     best_epoch = int(line.split(",")[0].split("#")[1])
+                    # when resuming, ignore the best epochs after the loaded
+                    # one (e.g. logged by a previous run with more epochs)
+                    if cfg.load_model and best_epoch > loaded_epoch:
+                        continue
                     best_vloss = float(line.split(",")[1].split(":")[1])
                     best_vaccuracy = float(line.split(",")[2].split(":")[1])
                     break
+        # when resuming, the best model is the checkpoint of the best epoch,
+        # not the loaded (latest) one
+        best_ckpt = f"{main_dir}/state_dict/model_{best_epoch}_state_dict.pt"
+        if cfg.load_model and os.path.exists(best_ckpt):
+            best_model_name = best_ckpt
+        if cfg.load_model and "training_state" in checkpoint:
+            # continue exactly as the interrupted training: random generators,
+            # early stopper and exact best metrics of the loaded epoch
+            training_state = checkpoint["training_state"]
+            set_rng_state(training_state["rng"])
+            early_stopper.counter = training_state["early_stopper"]["counter"]
+            early_stopper.min_validation = training_state["early_stopper"]["min_validation"]
+            best_vloss = training_state["best_vloss"]
+            best_vaccuracy = training_state["best_vaccuracy"]
+            best_epoch = training_state["best_epoch"]
+            logger.info(
+                "Restored the random generators and the early stopper of epoch %d"
+                % loaded_epoch
+            )
+        elif cfg.load_model:
+            logger.warning(
+                "Checkpoint without the training state (older version): the "
+                "resumed training is not identical to an uninterrupted one"
+            )
         logger.info(
             "Loaded model from %s, epoch %d, best val loss: %.4f, best val accuracy: %.4f"
             % (best_model_name, loaded_epoch, best_vloss, best_vaccuracy)
@@ -341,6 +548,9 @@ def main():
             time_epoch = time.time()
             # Turn on gradients for training
             print("\n\n\n")
+            # learning rate used in this epoch (the scheduler is stepped
+            # at the end of the training epoch)
+            lr_epoch = optimizer.param_groups[0]["lr"]
 
             # train
             avg_loss, avg_accuracy, *_ = train_val_one_epoch(
@@ -377,7 +587,7 @@ def main():
                 optimizer,
                 device,
                 time_epoch,
-                None,
+                scheduler,  # not stepped in validation, saved in the checkpoint
                 cfg,
                 main_dir,
                 best_vloss,
@@ -406,6 +616,7 @@ def main():
                 comet_logger.log_metric(
                     "accuracy_epoch_val", avg_vaccuracy, epoch=epoch
                 )
+                comet_logger.log_metric("learning_rate", lr_epoch, epoch=epoch)
 
             # Log the running loss averaged per batch
             # for both training and validation
@@ -427,6 +638,12 @@ def main():
             if early_stopping and early_stopper.early_stop(validator, epoch):
                 logger.info("Stopping early")
                 stop_training = True
+            if best_epoch == epoch:
+                # checkpoint saved at this epoch: add the state needed to resume
+                # from it reproducibly (random generators, early stopper)
+                add_training_state(
+                    best_model_name, early_stopper, best_vloss, best_vaccuracy, best_epoch
+                )
             if epoch == n_epochs - 1:
                 stop_training = True
 
@@ -437,11 +654,15 @@ def main():
             epoch += 1
 
         # save the last model
-        save_pytorch_model(
+        last_model_name = save_pytorch_model(
             main_dir,
             epoch,
             model,
             optimizer,
+            scheduler=scheduler,
+        )
+        add_training_state(
+            last_model_name, early_stopper, best_vloss, best_vaccuracy, best_epoch
         )
         model.to("cpu")
 
@@ -561,7 +782,19 @@ def main():
             "Eval epoch # %d,  acc train: %.4f,  acc test: %.4f"
             % (eval_epoch, accuracy_eval_train, accuracy_eval_test)
         )
-        train_test_fractions = np.array([cfg.train_fraction, cfg.test_fraction])
+        if k_folds >= 2:
+            # fractions of the events in the training and test datasets
+            train_test_fractions = np.array(
+                [
+                    (k_folds - 1)
+                    / k_folds
+                    * cfg.train_fraction
+                    / (cfg.train_fraction + cfg.val_fraction),
+                    1 / k_folds,
+                ]
+            )
+        else:
+            train_test_fractions = np.array([cfg.train_fraction, cfg.test_fraction])
 
         if args.save_numpy:
             # save the score and label arrays
@@ -574,6 +807,16 @@ def main():
                 train_test_fractions=train_test_fractions,
                 num_classes=np.array(num_classes),
                 class_info=np.array(class_info, dtype=object),
+                # k-fold: rows of the test events and number of events, to
+                # check that the test folds are disjoint and cover all the events
+                **(
+                    {
+                        "event_rows_test": test_loader.event_rows,
+                        "n_events_total": np.array(test_loader.n_events_total),
+                    }
+                    if hasattr(test_loader, "event_rows")
+                    else {}
+                ),
             )
 
         # plot the signal and background distributions
@@ -586,33 +829,15 @@ def main():
                 lumitext=lumitext,
                 dataset_idx_train=dataset_idx_train,
                 dataset_idx_test=dataset_idx_test,
+                save_roc=bool(cfg.save_roc),
             )
-            try:
-                plot_kl_distributions(
-                    score_lbl_array_train,
-                    score_lbl_array_test,
-                    main_dir,
-                    ["all", 1.0],
-                    train_test_fractions[1],
-                    **plot_kwargs,
-                )
-            except ValueError as e:
-                # e.g. no background events with kl = 1
-                logger.warning(
-                    f"Plotting for background kl = 1 failed ({type(e).__name__}: {e}). "
-                    "Plotting only for all the background kl values."
-                )
-                # remove the incomplete plots of the failed kl = 1 attempt
-                for prefix in ["sig_bkg", "roc", "calibration"]:
-                    shutil.rmtree(f"{main_dir}/{prefix}_bkgkl_1.00", ignore_errors=True)
-                plot_kl_distributions(
-                    score_lbl_array_train,
-                    score_lbl_array_test,
-                    main_dir,
-                    ["all"],
-                    train_test_fractions[1],
-                    **plot_kwargs,
-                )
+            plot_kl_distributions_with_fallback(
+                score_lbl_array_train,
+                score_lbl_array_test,
+                main_dir,
+                train_test_fractions[1],
+                **plot_kwargs,
+            )
 
     # remove ML_model_loaded.py
     # if cfg.load_model or cfg.eval_model:

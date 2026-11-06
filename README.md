@@ -167,11 +167,12 @@ A ready-to-edit multi-class example is provided at `configs/hh4b_sig_bkg_classif
 | `preprocess_variables_functions` | mapping `{var: [func_name, [args...]]}` resolved against `ml_pytorch/defaults/preprocess_variables_functions.py` |
 | `data_format` | `coffea`, `parquet`, or `root` |
 | `data_dirs` | list of directories containing the input files (`.coffea` files / parquet config) |
-| `parquet_dir` | parquet only: directory of the parquet files to use instead of the `save_chunk` one in the `config.json` of `data_dirs` (single `data_dir` only), e.g. the output of `ml_merge_parquet` |
+| `parquet_dir` | parquet only: directory of the parquet files to use instead of the `save_chunk` one in the `config.json` of `data_dirs` (single `data_dir` only), e.g. the output of `merge_parquet.py` of AnalysisConfigs ([Merge the parquet chunks](#merge-the-parquet-chunks)) |
 | `oversample_split`, `split_oversample`, `undersample` | binary-only class balancing strategies |
 | `eval`, `roc`, `histos`, `history`, `onnx` | toggle the post-training outputs |
 | `gpus` | comma-separated GPU indices, or unset for CPU |
-| `seed` | seed for both event shuffling and weight initialisation (python, numpy and torch, also on GPU) |
+| `seed` | seed of all the randomness (python, numpy and torch, also on GPU): event shuffling, splits, folds, oversampling, weight initialisation and dropout. Resumed trainings (`--load-model`) continue exactly as uninterrupted ones, since the checkpoints store the random generator, scheduler and early-stopper states. Bitwise identical on CPU; on GPU also needs `deterministic` |
+| `k_folds`, `fold`, `kfold_split`, `kfold_event_column`, `kfold_onnx`, `onnx_ratio`, `kfold_cache` | k-fold training, see [K-fold training](#k-fold-training) |
 | `deterministic` | use only deterministic algorithms, so that trainings with the same seed are identical also on GPU (slower) |
 | `pad_value` | value marking padded entries (missing objects); must match the PocketCoffea fill value. Used to pad the missing objects and the `None` values of the inputs when loading the dataset, to not count padded objects when creating a missing `<collection>_N` from parquet files and, in `MaskedBatchNorm1d`, to exclude padded entries from the normalisation statistics |
 | `pad_fill_value` | `MaskedBatchNorm1d` only: value assigned to padded entries at the output of the layer, or `"learn"` for a learnable per-feature value. The real values there are standardised and then scaled/shifted by the learnable weight and bias, so 0 corresponds to the mean of the real values only at initialisation; a fixed value does not follow the learned scale/shift |
@@ -289,10 +290,22 @@ ml_train [OPTIONS]
   -s, --seed STR               Seed for shuffling and weight initialisation
   -g, --gpus STR               GPU indices, comma-separated (e.g. "0,1")
 
+K-fold training (see K-fold training)
+  -k, --k-folds INT            Number of folds (0 or 1: no k-folding)
+  -f, --fold INT               Train only this fold (default: all the folds, then merge)
+  --kfold-split {random,event} Assign the folds randomly or by event number % k_folds
+  --onnx-ratio                 Also build the average-of-ratios k-fold ONNX model
+  --kfold-cache DIR            Load the events once in DIR and memory-map them in all the folds
+  --kfold-prepare              Only prepare the k-fold cache and exit
+  --kfold-onnx {average,event} Final k-fold ONNX model: average over the folds or fold event % k_folds
+
 Evaluation / output
   -ev, --eval                  Evaluate the model on the test set (no training)
   -em, --eval-model PATH       Path to an existing model to evaluate instead of training
-  -l,  --load-model PATH       Load a checkpoint and continue training from it
+  -l,  --load-model PATH       Load a checkpoint and continue training from it (model,
+                                optimizer and learning rate scheduler state; for older
+                                checkpoints without the scheduler state the schedule is
+                                continued from the checkpoint epoch)
   -mp, --ml-model-path PATH    Path to the ML_model.py file used with --load-model/--eval-model
                                 (default: <output_dir>/ML_model.py)
   --onnx                       Export the best model to ONNX format after training
@@ -316,6 +329,10 @@ Comet ML logging
   -cw,  --comet-workspace STR  Comet workspace (overrides auto-derived name)
   -ctg, --comet-tags TAG […]   Comet experiment tags
   --pin-memory                 Pin memory for faster GPU data transfer
+
+Performance
+  --data-on-gpu                Keep the whole datasets on the GPU (default: on)
+  --no-data-on-gpu             Use the standard DataLoaders (copy every batch to the GPU)
 ```
 
 ### Run only evaluation (no training)
@@ -336,6 +353,165 @@ ml_train -c configs/example_DNN_config_ggF_VBF.yml \
 
 `-ev` skips all training epochs; `-em` points to the saved state-dict (`.pt` file). The config file is still required to reconstruct the model architecture and locate the test data.
 
+## K-fold training
+
+With `k_folds: K` (K ≥ 2, or `-k K`) the events are split into K folds and K models are trained: the model of fold `k` is **tested on fold `k`** and trained/validated on all the other events. Every event therefore gets an unbiased (out-of-fold) score, and the K models can be combined into a single ONNX model.
+
+```yaml
+k_folds: 5
+kfold_split: random          # or: event
+kfold_event_column: event    # used with kfold_split: event
+onnx_ratio: False            # also build the average-of-ratios ONNX (reweighting)
+kfold_onnx: average          # final ONNX model: average | event (see Outputs)
+train_fraction: 0.8          # the non-test events are split into training and
+val_fraction: 0.2            # validation with the ratio train : val
+```
+
+* **Splitting.** With `kfold_split: random` the events are assigned randomly to the folds, after the seeded shuffle. With `kfold_split: event` the fold of an event is `event % K`, computed from the `kfold_event_column` column (it must be saved in the input files). With `K = 2` this is the even/odd split. `test_fraction` is not used; the sum of the three fractions is still the fraction of the events read from the files.
+* **Seeds.** The event shuffle and the folds depend only on `seed`, so they are identical for all the folds (and for folds trained in separate jobs). The weight initialisation and dropout of fold `k` use their own random stream, seeded with numpy's `SeedSequence([seed, k])`. The streams are statistically independent and different for every fold and every seed, so every fold starts from different, independently drawn weights.
+* **Oversampling.** The test fold is never oversampled, so every event gets exactly one out-of-fold score; its events get the class-balancing weights instead. The events of the other folds are oversampled in one of two orders:
+  * `oversample_split`: oversample first, then split into training and validation. Copies of the same event can therefore be in both training and validation.
+  * `split_oversample`: split into training and validation first, then oversample each of them separately.
+
+  `undersample` drops events before the split, as usual. For every dataset the number of events (and of distinct events), the sums of the weights and the class weights of each class are printed, together with the number of events shared between training, validation and test.
+
+### Running
+
+```bash
+# all the folds one after the other, then merged
+ml_train -c configs/hh4b_sig_bkg_classifier/example_DNN_config_kfold.yml -k 5 -o out/kfold
+
+# a single fold (e.g. in a separate job), then merge the folds
+ml_train -c config.yml -k 5 --fold 3 -o out/kfold/fold_3
+ml_kfold_merge -i out/kfold -c config.yml -k 5 [--ratio]
+
+# Slurm: the folds in parallel (here on 1 node) and merged at the end
+./jobs/run_training.sh -c /full/path/config.yml -o /full/path/out/kfold -k 5 [--ratio] [-p NODES]
+```
+
+All the folds use the same `seed`. `--load-model`/`--eval-model` work for one fold at a time (with `--fold`).
+
+**K-fold cache.** With `kfold_cache: <dir>` (`--kfold-cache`), the events are loaded, shuffled and assigned to the folds only once (`ml_train --kfold-prepare`). They are saved in `<dir>` as `.npy` files, and every fold memory-maps them. The pages of a memory-mapped file are shared by all the processes of a node, so the events take the RAM once however many folds run in parallel. Each fold only holds the indices of its training, validation and test events; oversampling repeats indices, not events.
+
+`ml_train -k K` and `run_training.sh --k-folds K` use the cache automatically (`--no-kfold-cache` to disable it in the script).
+* **Where it lives:** in a temporary directory (`$TMPDIR`, node-local on the batch nodes). It is not written to the output disk, and it is removed when the training ends. In `run_training.sh` every job or array task prepares its own cache on its node.
+* **What is kept in the output directory:** only the record of the split in `<output dir>/kfold_split/`, which holds `k.npy` (kl, dataset index and fold of every event) and the metadata. This is for reproducibility.
+* **Reuse:** a cache given with `kfold_cache` is reused only if it was made with the same data, fractions, oversampling, seed, `k_folds` and `kfold_split`; otherwise `ml_train` stops. The batches are exactly the same as without the cache.
+
+**Out-of-fold scores without files.** The fold trainings don't save any score arrays. The merge evaluates the best ONNX model of every fold on its test events in memory, using the cache if it still exists or loading the events again into a temporary directory. It does the same on a random 1/(K-1) of each fold's training events, for the train/test comparison in the plots.
+
+With `-s-n/--save-numpy` all the scores are saved: `fold_<k>/score_lbl_array.npz` by every fold, and `kfold/score_lbl_array_oof.npz` by the merge. Without it, none are written.
+
+**Checks of the split.** The merge stops with an error if any of these fails:
+* every fold directory is the right fold of the same split (same data, fractions, oversampling, seed, `k_folds` and `kfold_split`);
+* every fold was trained with the test events expected from the split. Each fold writes the number and a sha256 fingerprint of its test events to `fold_<k>/kfold_fold_info.json`;
+* the test folds are disjoint and together contain every event exactly once.
+
+The weight initialisation of every fold is independent (seed `SeedSequence([seed, fold])`, recorded as `weights_seed` in `kfold_fold_info.json`).
+
+### K-fold in several jobs
+
+A single job with all the folds needs a whole node to be free. To start the folds as GPUs become available instead, split the work into several jobs. `run_training.sh` then works in three steps:
+
+1. **Prepare (CPU, no GPU).** A job on the CPU queue (`-p standard --account=t3` by default, `--cpu-partition`/`--cpu-account` to change them) loads the events once and makes the fold split. The events go into a shared cache, `<outdir>/kfold_cache_shared` (`--cache-dir` to change it), which has to be on a disk that all the nodes see. The record of the split goes to `<outdir>/kfold_split`.
+2. **Train the folds (GPU).** Each fold job copies the shared cache to its node-local `$TMPDIR`, memory-maps it, and trains its folds on its GPUs, as above. The local copy is removed when the job ends. Since the events are loaded only once, a fold job needs only about one copy of the events in RAM plus a few GB per fold.
+3. **Merge (CPU, no GPU).** A job on the CPU queue merges the folds, with the out-of-fold scores, the checks and the ONNX models, and then removes the shared cache (`--keep-cache` to keep it).
+
+Automatic: submit the three steps at once, chained with Slurm dependencies. The fold jobs are an array with `--folds-per-job` folds each, and Slurm starts every task as soon as its GPUs are free:
+
+```bash
+# 20 jobs of 1 fold on 1 GPU each
+./run_training.sh -c /full/path/config.yml -o /full/path/out -k 20 --prepare-job -g 1 --cpus 4 --mem-per-cpu 6000 \
+  --cpu-cpus 8 --cpu-mem-per-cpu 16000
+
+# 5 jobs of 4 folds on 2 GPUs each
+./run_training.sh -c /full/path/config.yml -o /full/path/out -k 20 --prepare-job --folds-per-job 4 -g 2 --cpus 8
+```
+
+By hand: prepare once, then submit the folds in as many pieces as you want (`--folds` takes ranges and lists), and merge when they are all done:
+
+```bash
+./run_training.sh -c /full/path/config.yml -o /full/path/out -k 20 --prepare-only
+./run_training.sh -c /full/path/config.yml -o /full/path/out -k 20 --folds 0-7 -g 8 --cpus 32
+./run_training.sh -c /full/path/config.yml -o /full/path/out -k 20 --folds 8-11,15 -g 2 --cpus 8
+./run_training.sh -c /full/path/config.yml -o /full/path/out -k 20 --folds 12-14,16-19 -g 4 --cpus 16
+./run_training.sh -c /full/path/config.yml -o /full/path/out -k 20 --merge-only
+```
+
+**Freeing the GPUs fold by fold.** Slurm cannot give back part of the GPUs of a running job: a job with 8 GPUs keeps all 8 until its last training ends. To have each GPU freed as soon as its folds are done, run the folds as separate jobs, e.g. one job of 1 GPU per fold. The automatic workflows below do this:
+
+```bash
+# everything in one command: prepare (CPU) -> 20 one-fold GPU jobs -> merge (CPU)
+./run_training.sh -c /full/path/config.yml -o /full/path/out -k 20 --prepare-job -g 1 --cpus 4 --mem-per-cpu 6000
+
+# or: prepare first (here on a GPU node), then all the fold jobs and the merge after it
+./run_training.sh -c /full/path/config.yml -o /full/path/out -k 20 --prepare-only --prepare-gpu   # -> job id P
+./run_training.sh -c /full/path/config.yml -o /full/path/out -k 20 --fold-jobs --after P -g 1 --cpus 4 --mem-per-cpu 6000
+```
+
+`--fold-jobs` submits the fold jobs as an array (`--folds-per-job` folds each) and the merge after them, from an existing shared cache or after the prepare job given with `--after`. Each array task is a separate Slurm job: it starts when its GPUs are free and frees them when it ends.
+
+If one big job is still preferred, `--slots-per-gpu S` keeps the GPUs busy until the queue of folds is empty. It runs at most `S` trainings per GPU, and each time one ends, the next fold starts on the GPU that just freed up, instead of a fixed round-robin assignment. `--separate-merge` runs the merge as a separate CPU job, so the GPUs are released as soon as the last fold ends. For example, 20 folds on one 8-GPU node:
+
+```bash
+./run_training.sh -c /full/path/config.yml -o /full/path/out -k 20 -g 8 --cpus 40 --mem-per-cpu 6000 --slots-per-gpu 2 --separate-merge
+```
+
+**When something goes wrong.** The merge waits for all the fold jobs to succeed (`afterok`). If a fold job fails or hits its time limit, the merge stays pending forever (`squeue` shows `DependencyNeverSatisfied`).
+1. Find the failed folds with `sacct -j <array id>` or the `slurm-<id>_<task>.out` logs in the output directory.
+2. Cancel the blocked merge with `scancel <merge id>`; the job ids are printed at submission.
+3. Resubmit the unfinished folds and the merge:
+
+   ```bash
+   ./run_training.sh -c /full/path/config.yml -o /full/path/out -k 20 --missing-folds -g 1 --cpus 4 --mem-per-cpu 6000
+   ```
+
+   `--missing-folds` finds the folds without a finished best model (`fold_<k>/state_dict/model_best_epoch_*.onnx`) and resubmits only those, with `--load-last`, so an interrupted fold resumes from its last checkpoint exactly as if it had not stopped. It then submits the merge after them. If all the folds are done, it submits only the merge.
+
+   The shared cache is still there because the merge has not run. If it is gone, prepare it again with `--prepare-only`: the same config and seed give exactly the same split. Then use `--missing-folds --after <prepare id>`.
+
+For full manual control, `--folds LIST` (with `--load-last` to resume) trains given folds, and `--merge-only` merges. Both accept `--after`.
+
+**The prepare job on a GPU node.** `--prepare-gpu` runs the prepare job on the GPU partition (`-p gpu --account=gpu_gres`, 1 GPU), e.g. when the CPU queue is busy or its nodes have too little memory. The preparation is CPU and I/O work, so the GPU stays idle during it. `--merge-gpu` does the same for the merge.
+
+**By hand,** e.g. to resubmit one specific fold: `--folds LIST --after <id>` submits one job with these folds, waiting for the given jobs. `--merge-only --after <id1>:<id2>:...` submits the merge after them.
+
+Notes:
+* **Same options everywhere:** use the same config, `-s`, `-k` and extra `ml_train` options in all the steps. A fold job refuses a shared cache made with a different config, and the merge checks that the folds are the folds of the same split.
+* **Resources:** `--time`, `--mem-per-cpu`, `--cpus` and `-g` set the resources of the fold jobs; `--cpu-time`, `--cpu-mem-per-cpu` and `--cpu-cpus` those of the prepare and merge jobs. The prepare job needs the memory of loading all the events, about what a single fold needed before the cache.
+* **Other options:** `--ratio`, `--alpha`, `--save-roc` and `--load-last` work as for the single job. With `--load-last`, a `--folds` job skips the folds that are already finished and resumes the others.
+* **Same results:** they are identical to the single job. In the tests, the fold checkpoints were bit-identical with the same seed and the same number of threads per fold.
+* **Disk:** the shared cache takes one copy of the events (≈ 15 GB for the 2024 parking config) until the merge removes it.
+
+### Outputs
+
+* `fold_<k>/`: a normal training output for each fold, plus `kfold_fold_info.json`. The test scores (plots, and `score_lbl_array.npz` with `--save-numpy`) are the scores of the events of fold `k`, with no event dropped.
+* `kfold_split/`: the record of the split (`k.npy` and the metadata).
+* `kfold/kfold_summary.yml`: best epoch and validation/test loss and accuracy of each fold, with their mean and standard deviation.
+* `kfold/`: the histograms, ROC and calibration curves of the out-of-fold scores of all the events. With `--save-numpy` it also holds `score_lbl_array_oof.npz`, which contains `score_lbl_array_test`, `fold_test` (the fold of each event) and the training scores.
+* `kfold_onnx/folds/model_fold<k>.onnx`: the best model of each fold.
+* `kfold_onnx/kfold_<type>_<combination>.onnx`: the combined models. The type says what the model computes:
+
+  | type | output | built |
+  | --- | --- | --- |
+  | `classifier` | the scores of the classifier | always |
+  | `morphing_ratio` | the ratio of the outputs, `p/(1-p)` for one output node or `p1/p0` for two, for the binary background reweighting (equivalent to `ml_onnx -ar`) | with `onnx_ratio: True` or `--ratio` |
+  | `morphing_ttbar_subtracted` | the 4-node multiclass morphing weight with the ttbar subtraction, `relu(r0 - alpha r2) / relu(r1 - alpha_den r3)` (equivalent to `ml_onnx -ar -mc`, see [Boosted HH4b: multiclass background morphing](#boosted-hh4b-multiclass-background-morphing)) | with `morphing_alpha` (`--alpha`) |
+
+  The combination says how the folds are combined:
+
+  | combination | inputs | outputs |
+  | --- | --- | --- |
+  | `average` | `args_0`, the input variables `(N, n_features)` float32 | the average over the folds (`avg_score` or `avg_w`); for the morphing, the numerators and denominators are averaged before the relu and the division, as `ml_onnx -ar -mc` does. Use it for events that were not used in the training |
+  | `all_folds` | `args_0` | the output of every fold separately, not averaged (`score_fold_<k>` or `w_fold_<k>`) |
+  | `event_fold` | `args_0` and `event`, the event number `(N,)` int64 | the output of the fold `event % K`, the model that was **not** trained on the event. Use it for the events that were used in the training (e.g. the training regions); only with `kfold_split: event` |
+
+* **The final model** is the combined model chosen with `kfold_onnx`: `kfold_<type>_average.onnx` or `kfold_<type>_event_fold.onnx`, with type `morphing_ttbar_subtracted` with `morphing_alpha`, `morphing_ratio` with `onnx_ratio`, otherwise `classifier`. It is recorded, with its inputs, in `kfold/kfold_summary.yml` (`final_onnx`); no extra copy is written.
+  * `kfold_onnx: average` (default) gives the average over the folds. Use it when the model is applied to events that were not used in the training, e.g. the background reweighting applied in a separate region.
+  * `kfold_onnx: event` gives the event-number-aware model and needs `kfold_split: event`. Use it when the model is also applied to the training events, e.g. the sig/bkg or ggF/VBF classifiers. Events whose number was never seen in the training can be evaluated by any fold, so the same model works for them too.
+
+The combined models are checked against the per-fold models with onnxruntime when they are built. To use the per-fold models by hand with `K = 2`, apply `model_fold0.onnx` to the **even** events and `model_fold1.onnx` to the **odd** events.
+
 ## Training on a cluster with Slurm
 
 ### Generic training script (recommended)
@@ -354,7 +530,30 @@ Optional:
   -p, --nodes INT         Number of parallel Slurm nodes/array jobs (default: 1)
   -s, --init-seed INT     Starting random seed (default: 0)
   --ratio                 Average-ratio ONNX aggregation (ml_onnx -ar), e.g. for bkg reweighting
+  -k, --k-folds INT       K-fold training: one training per fold (same seed), in OUTDIR/fold_<k>,
+                          merged with ml_kfold_merge (see K-fold training); the events are
+                          loaded once in OUTDIR/kfold_cache and shared by the folds
+  --no-kfold-cache        K-fold: every fold loads the events itself
+  --prepare-job           K-fold in several jobs: CPU prepare job, array of GPU fold jobs
+                          (--folds-per-job folds each), CPU merge job, chained
+  --prepare-only / --folds LIST / --merge-only
+                          the same steps submitted one at a time (see "K-fold in several jobs")
+  --cache-dir DIR         shared k-fold cache (default OUTDIR/kfold_cache_shared), --keep-cache
+  --cpu-partition / --cpu-account / --cpu-cpus / --cpu-mem-per-cpu / --cpu-time
+                          resources of the CPU jobs (default -p standard --account=t3)
+  --prepare-gpu / --merge-gpu
+                          run the prepare / merge job on the GPU partition (1 GPU)
+  --after JOBIDS          with --folds / --merge-only / --fold-jobs / --missing-folds:
+                          wait for these jobs (colon-separated)
+  --fold-jobs             all the fold jobs (array) + the merge, after --after or from the shared cache
+  --missing-folds         resubmit only the unfinished folds (resuming) + the merge
+  --slots-per-gpu INT     at most INT trainings per GPU at a time, the others start when a GPU frees up
+  --separate-merge        merge / post-process in a separate CPU job, releasing the GPUs earlier
   --load-last             Resume from latest checkpoint
+  --time HH:MM:SS         Slurm wall-clock time limit
+  --mem-per-cpu MB        Slurm memory per CPU in MB (default: 4000)
+  --cpus INT              Slurm CPUs per node/array job (default: 4)
+  -g, --gpus-per-node INT GPUs per node/array job (default: 1)
   --no-slurm              Run directly without Slurm (for local testing)
   -- EXTRA                Extra arguments forwarded to ml_train
 ```
@@ -371,6 +570,10 @@ cd jobs/
 ./run_training.sh -c /full/path/DNN_config_bkg_reweighting.yml -o /full/path/out/bkg_rew \
   -n 20 -p 4 --ratio
 
+# 20 trainings on 1 node with 4 GPUs (5 per GPU in parallel)
+./run_training.sh -c /full/path/DNN_config_bkg_reweighting.yml -o /full/path/out/bkg_rew \
+  -n 20 -g 4 --cpus 8 --ratio
+
 # 5 trainings on 1 node, plain ONNX averaging (no ratio)
 ./run_training.sh -c /full/path/DNN_config_sig_bkg.yml -o /full/path/out/sig_bkg -n 5
 
@@ -383,6 +586,18 @@ cd jobs/
 - **`NODES=1`**: submits a single Slurm job; trainings run in parallel on one GPU node, then ONNX post-processing runs inline.
 - **`NODES>1`**: submits a Slurm array job (one element per node) plus a dependent post-processing job that runs after all array tasks succeed.
 - Each node runs its share of trainings (`N_TRAININGS / NODES`) in parallel using background processes.
+- With `--gpus-per-node N` each node/array job requests `--gres=gpu:N` and the trainings of the node are distributed round-robin over its GPUs (training `i` runs on GPU `i % N`). The CPUs of the job are split among the parallel trainings (`OMP_NUM_THREADS`, DataLoader workers), so the processes do not oversubscribe the cores.
+
+### Speed tips
+
+The models are small DNNs, so the training is limited by the data loading and the Python overhead rather than by the GPU compute:
+
+- `data_on_gpu: True` (default) copies the whole datasets to the GPU once and takes the batches as slices of it, removing the DataLoader workers and the per-batch host-to-device copies. If the datasets take more than half of the free GPU memory (e.g. tens of millions of events on an 11 GB GPU), they are kept in RAM: the batches are sliced there and copied to the GPU one by one. This is still much faster than the DataLoaders, which index and collate the events one at a time. `--no-data-on-gpu` uses the standard DataLoaders.
+- The loss and accuracy are accumulated on the GPU (no synchronisation at every batch) and the validation/evaluation run without building the autograd graph.
+- A larger `batch_size` (e.g. 2048-8192) is the biggest further speed-up, but it changes the training dynamics: scale the learning rate accordingly.
+- `tf32: True` (default) speeds up the matrix multiplications on Ampere or newer GPUs.
+- Multiple GPUs: one GPU is enough to saturate a single small training, and `--gpus 0,1` (DataParallel) is usually *slower*. Use the GPUs to run several trainings (seeds) at the same time with `run_training.sh --gpus-per-node`. Several trainings can also share one GPU.
+- K-fold with large datasets: every fold is a separate process that loads all the events into RAM. The number of folds that can run at the same time on a node is usually limited by its RAM, not by its GPUs. With the k-fold cache (the default in `run_training.sh`) the events are loaded once and shared, so all the folds can run on one node. For example, `-k 20 -g 8 --cpus 40 --mem-per-cpu 6000` runs 20 folds on one 8-GPU node; see `configs/hh4b_bkg_reweighting/DNN_12_01_03_*_kfold20.yml`. Measure the memory with `sacct -j <job id> --format=MaxRSS`.
 - After all trainings finish, the best ONNX model from each run is copied to `best_models/` and `ml_onnx` is called to aggregate them. With `--ratio` the `-ar` flag is passed (average ratio, used for background reweighting); without it, a plain aggregation is performed.
 - The input variable name is read automatically from the training config YAML (`input_variables` field).
 - If `jobs/comet_token.key` exists, Comet ML logging is enabled automatically (see [COMET integration](#comet-integration)).
@@ -519,6 +734,24 @@ boosted_control_sideband_region_A 545355      60568.0    0.1111    0.0002
 The value needed is the `alpha` of the numerator region: region C for the TXbb direction (here `0.1078`),
 region B for the mass direction.
 
+`ml_alpha -c <config>` reads the directory and the regions from the training config. The directory is the first
+`data_dirs`; the numerator and denominator are the regions of the classes with `lbl` 0 and 1. It prints the table
+and the two alphas, and `--json <file>` saves them.
+
+**Automatically with `run_training.sh`.** With `--alpha`, the post-processing computes alpha with `ml_alpha` (saved
+in `<outdir>/alpha.json`) and passes it to the conversion:
+* `ml_onnx -ar -mc -al <alpha> -ald <alpha_den>` for the trainings with several seeds;
+* `ml_kfold_merge --alpha <alpha> --alpha-den <alpha_den>` with `--k-folds`. The final model,
+  `kfold_onnx/kfold_morphing_ttbar_subtracted_average.onnx`, is then the morphing weight averaged over the folds.
+
+`alpha_den` is `0.0` (no ttbar subtraction in the denominator) unless `--alpha-den-computed` is given; then the
+computed alpha of the denominator region is used.
+
+```bash
+./run_training.sh -c /full/path/boosted_vbf/<config>.yml -o /full/path/out -n 20 -p 4 --alpha
+./run_training.sh -c /full/path/boosted_vbf/<config>.yml -o /full/path/out -k 20 -g 8 --cpus 40 --alpha
+```
+
 ### Merge the 20 models with the ttbar subtraction
 
 Run `ml_onnx` in multiclass mode inside the `best_models` folder of the training output:
@@ -579,6 +812,7 @@ Each training run writes to `${output_dir}` (default `/work/$USER/out_ML_pytorch
   * `score_lbl_array_train`, `score_lbl_array_test`: `[scores..., label, weight, kl]` per event. For binary the score block is a single column, for multi-class it has `num_classes` columns.
   * `train_test_fractions`, `num_classes`, `class_info` (list of `{name, lbl, class_idx}` dicts).
 * Plots: `sig_bkg_distributions_*`, `roc_curve_*`, training history, etc.
+* Calibration curves (`calibration_bkgkl_*/`): they are computed on class-normalised histograms. The event weights of each class are scaled to unit area, so the curves don't depend on the relative number of events of the classes in the test dataset, and a classifier trained on balanced classes lies on the diagonal when it is well calibrated. Each class is normalised for one-vs-rest, and the two classes of the pair for the pairwise curves. The Brier score uses the same weights. `sklearn.calibration.calibration_curve` has no event weights, so a weighted histogram is used instead.
 
 ## Additional scripts
 
@@ -605,20 +839,17 @@ ml_input_vars -c <config_file> -o <output_directory>
 
 ### Merge the parquet chunks
 
-Loading thousands of small parquet chunks from dCache (`/pnfs`) is dominated by the per-file latency (~1-2 min per dataset/region even for few MB). `ml_merge_parquet` merges them once into a single `merged.parquet` per leaf directory (e.g. `<dataset>/<region>/nominal`), keeping the directory structure and the events order. Then set `parquet_dir: <output_dir>` in the training config.
+Loading thousands of small parquet chunks from dCache (`/pnfs`) is dominated by the per-file latency (~1-2 min per dataset/region even for few MB). The chunks can be merged once into a single `merged.parquet` per leaf directory (e.g. `<dataset>/<region>/nominal`), keeping the directory structure and the events order, with `merge_parquet.py`, which is now in [AnalysisConfigs](https://github.com/matteomalucchi/AnalysisConfigs) (`utils_configs/merge_parquet.py`, see the [AnalysisConfigs HH4b README](https://github.com/matteomalucchi/AnalysisConfigs/blob/main/configs/HH4b_common/README.md#merge-the-parquet-chunks) for all the options). It can run automatically at the end of the PocketCoffea run (`run_pocket_coffea ... --merge-parquet`) or by hand:
 
 ```bash
-# -i: PocketCoffea output dir (parquet location read from config.json) or the parquet_files dir
-ml_merge_parquet -i <data_dir> -o /work/$USER/merged_parquet/<name> [-j 32] [--files-per-step 256] [--overwrite]
-
-# the merged files cannot be written directly on /pnfs: merge on /work, copy to /pnfs and remove from /work
-ml_merge_parquet -i <data_dir> -o /work/$USER/merged_parquet/<name> --copy-to /pnfs/psi.ch/cms/trivcat/store/user/$USER/merged_parquet/<name>
+# in AnalysisConfigs; by default the merged files are written in <...>/merged_parquet_files next to <...>/parquet_files
+python utils_configs/merge_parquet.py -i <data_dir> [-o <merged_dir>] [--tmp-dir <tmp_dir>] [--update-config]
 ```
 
-* `-j/--threads`: number of threads reading the files in parallel (default 32)
-* `--files-per-step`: number of files kept in memory at the same time (default 256)
-* `--overwrite`: re-merge directories already merged (skipped by default)
-* `--copy-to`: after each merge, copy the merged file to this directory (e.g. on `/pnfs`) keeping the directory structure, check the copy (size, adler32 checksum, number of events) and remove the file (and the directories left empty) from the `-o` directory. If the check fails the copy is removed, the original is kept and the script stops; a rerun reuses the merged file left in `-o`. Use the `--copy-to` directory as `parquet_dir`
+Then either:
+
+* set `parquet_dir: <merged_dir>` (e.g. `<...>/merged_parquet_files`) in the training config, or
+* merge with `--update-config` (`run_pocket_coffea ... --merge-parquet-update-config`), which overwrites the parquet path (`save_chunk` and `dump_columns_as_arrays_per_chunk`) in the `config.json` of `data_dir` with the merged directory: the merged files are then read without setting `parquet_dir`
 
 ## Input variable distributions
 
@@ -665,7 +896,7 @@ When `ml_sb` (the `sig_bkg_eval` script) detects more than one score column in `
 * `roc_curve_one_vs_rest.{png,pdf}` — for each class *i*, the ROC of "is class *i*" using the score of output node *i*.
 * `roc_curve_one_vs_one.{png,pdf}` — for each ordered pair `(a, b)`, the ROC of "class *a* vs class *b*" using events with true label `∈ {a, b}` and the score of node *a*.
 * `score_distribution_class_<i>.{png,pdf}` (+ `_log`) — distribution of output node *i*'s score, split by true class, for train and test.
-* `tpr_fpr_multiclass.npz` — the saved (`tpr`, `fpr`, `auc`) arrays so that arbitrary class combinations can be replotted later.
+* with `--save-roc` (`save_roc: True`), the saved ROC points (`tpr_fpr*.npz`: `tpr`, `fpr`, `auc`), so that arbitrary class combinations can be replotted later.
 
 The binary path (single score column) is unchanged and still produces `sig_bkg_distributions_kl_*` and `roc_curve_kl_*`.
 
@@ -685,6 +916,8 @@ vim jobs/comet_token.key
 ```
 
 The scripts will read this file if it exists and automatically sends the information to `ml_pytorch`
+
+Per-epoch metrics logged: `loss_epoch_train`, `loss_epoch_val`, `accuracy_epoch_train`, `accuracy_epoch_val` and `learning_rate` (the learning rate used during that epoch, i.e. before the scheduler step).
 
 ### Comet workspace
 
