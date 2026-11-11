@@ -1245,10 +1245,12 @@ def make_loaders(
     val_loader = None
     test_loader = None
 
+    # with shuffle the RandomSampler draws the permutation of every epoch from
+    # the global torch generator, seeded with cfg.seed (set_seed)
     training_loader = torch.utils.data.DataLoader(
         train_dataset,
         batch_size=batch_size,
-        shuffle=False,
+        shuffle=cfg.shuffle_train,
         num_workers=cfg.num_workers,
         drop_last=True,
         pin_memory=cfg.pin_memory,
@@ -1539,7 +1541,9 @@ def make_kfold_loaders(cfg, arrays, meta, seed):
     # they are never oversampled
     test_sources = [arrays["fts"], arrays["lbl"], arrays["clsw_bal"], arrays["k"]]
 
-    training_loader = IndexedBatchLoader(sources, train_idx, batch_size, drop_last=True)
+    training_loader = IndexedBatchLoader(
+        sources, train_idx, batch_size, drop_last=True, shuffle=cfg.shuffle_train
+    )
     logger.info("Training loader size: %d", len(training_loader))
     val_loader = None
     if not cfg.eval_model:
@@ -1769,14 +1773,17 @@ class IndexedBatchLoader:
     Used by the k-fold training, where the events of a fold are a subset (with
     repetitions when oversampling) of all the events: the events are not
     copied, only gathered batch by batch. The next batch is prepared in a
-    background thread while the current one is used.
+    background thread while the current one is used. With ``shuffle`` the
+    order of the events is permuted at every epoch with the global torch
+    generator (seeded with the seed of the training).
     """
 
-    def __init__(self, sources, indices, batch_size, drop_last=True):
+    def __init__(self, sources, indices, batch_size, drop_last=True, shuffle=False):
         self.sources = sources
         self.indices = np.asarray(indices, dtype=np.int64)
         self.batch_size = batch_size
         self.drop_last = drop_last
+        self.shuffle = shuffle
         self.num_events = len(self.indices)
 
     def __len__(self):
@@ -1807,18 +1814,23 @@ class IndexedBatchLoader:
         """The events of the loader as a TensorDataset (copied in memory)."""
         return torch.utils.data.TensorDataset(*self.gather())
 
-    def _batches(self):
+    def _batches(self, indices):
         for i in range(len(self)):
             start = i * self.batch_size
-            yield self._take(self.indices[start : start + self.batch_size])
+            yield self._take(indices[start : start + self.batch_size])
 
     def __iter__(self):
+        indices = self.indices
+        if self.shuffle:
+            # drawn here (main thread) so that the generator state does not
+            # depend on the background thread
+            indices = indices[torch.randperm(self.num_events).numpy()]
         batches = queue.Queue(maxsize=2)
         done = object()
 
         def produce():
             try:
-                for batch in self._batches():
+                for batch in self._batches(indices):
                     batches.put(batch)
             except BaseException as e:
                 batches.put(e)
@@ -1847,14 +1859,17 @@ class DeviceBatchLoader:
     slices of the tensors in RAM, copied to the GPU in the training loop: this
     avoids the per-event indexing and collation of the DataLoader, which
     dominate with large batches. The batches have the same order and the same
-    drop_last behaviour as the DataLoader with shuffle=False.
+    drop_last behaviour as the DataLoader with shuffle=False. With ``shuffle``
+    the events are permuted at every epoch with the global torch generator
+    (seeded with the seed of the training).
     """
 
-    def __init__(self, dataset, batch_size, device, drop_last=True):
+    def __init__(self, dataset, batch_size, device, drop_last=True, shuffle=False):
         # the dataset itself is not kept, so that the original tensors (e.g.
         # of a Subset, which are copied here) can be freed
         self.batch_size = batch_size
         self.drop_last = drop_last
+        self.shuffle = shuffle
         self.tensors = [t.to(device) for t in _dataset_tensors(dataset)]
         self.num_events = self.tensors[0].shape[0]
 
@@ -1864,9 +1879,23 @@ class DeviceBatchLoader:
         return math.ceil(self.num_events / self.batch_size)
 
     def __iter__(self):
+        perm = None
+        if self.shuffle:
+            perm = torch.randperm(self.num_events).to(self.tensors[0].device)
         for i in range(len(self)):
             start = i * self.batch_size
-            yield tuple(t[start : start + self.batch_size] for t in self.tensors)
+            if perm is None:
+                yield tuple(t[start : start + self.batch_size] for t in self.tensors)
+            else:
+                idx = perm[start : start + self.batch_size]
+                yield tuple(t[idx] for t in self.tensors)
+
+
+def _loader_shuffle(loader):
+    """Whether the loader reshuffles the events at every epoch."""
+    if isinstance(loader, torch.utils.data.DataLoader):
+        return isinstance(loader.sampler, torch.utils.data.RandomSampler)
+    return getattr(loader, "shuffle", False)
 
 
 def loaders_to_device(loaders, device, max_memory_fraction=0.5):
@@ -1914,6 +1943,7 @@ def loaders_to_device(loaders, device, max_memory_fraction=0.5):
             loader.batch_size,
             device,
             drop_last=loader.drop_last,
+            shuffle=_loader_shuffle(loader),
         )
         # keep the rows of the test events of the k-fold training
         for attr in ["event_rows", "n_events_total"]:
