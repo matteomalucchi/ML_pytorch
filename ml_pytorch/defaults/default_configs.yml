@@ -273,6 +273,11 @@ min_delta: 1e-5
 # loss (validation loss) or acc (validation accuracy).
 eval_param: "loss"
 
+# Number of best-epoch checkpoints (state_dict/model_<epoch>_state_dict.pt)
+# kept on disk: when a new best epoch is saved, the oldest ones are removed.
+# The checkpoint of the last epoch is always kept. 0 keeps all of them.
+n_best_checkpoints: 5
+
 # ---------------------------------------------------------------------------
 # Resources
 # ---------------------------------------------------------------------------

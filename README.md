@@ -100,7 +100,7 @@ data_dirs: [/path/to/coffea/output/]
 batch_size: 512
 epochs: 50
 learning_rate: 1e-3
-learning_rate_schedule: e5_drop75              # see ml_pytorch/utils/learning_rate_schedules.py
+learning_rate_schedule: e5_drop75              # constant, linear, eX_dropYY or wX_cosineYY (warm-up + cosine decay, e.g. w5_cosine01), see ml_pytorch/utils/learning_rate_schedules.py and ml_pytorch/defaults/default_configs.yml
 
 train_fraction: 0.7
 val_fraction: 0.2
@@ -173,6 +173,8 @@ A ready-to-edit multi-class example is provided at `configs/hh4b_sig_bkg_classif
 | `gpus` | comma-separated GPU indices, or unset for CPU |
 | `seed` | seed of all the randomness (python, numpy and torch, also on GPU): event shuffling, splits, folds, oversampling, weight initialisation and dropout. Resumed trainings (`--load-model`) continue exactly as uninterrupted ones, since the checkpoints store the random generator, scheduler and early-stopper states. Bitwise identical on CPU; on GPU also needs `deterministic` |
 | `k_folds`, `fold`, `kfold_split`, `kfold_event_column`, `kfold_onnx`, `onnx_ratio`, `kfold_cache` | k-fold training, see [K-fold training](#k-fold-training) |
+| `shuffle_train` | reshuffle the training events at every epoch (default `False`; also with `data_on_gpu` and k-fold). The permutations come from the torch generator seeded with `seed`, so they are reproducible, also for resumed trainings. Validation and test are never shuffled |
+| `n_best_checkpoints` | number of best-epoch checkpoints (`state_dict/model_<epoch>_state_dict.pt`) kept on disk (default `5`): when a new best epoch is saved the oldest ones are removed. The last-epoch checkpoint is always kept as well. `0` keeps all of them |
 | `deterministic` | use only deterministic algorithms, so that trainings with the same seed are identical also on GPU (slower) |
 | `pad_value` | value marking padded entries (missing objects); must match the PocketCoffea fill value. Used to pad the missing objects and the `None` values of the inputs when loading the dataset, to not count padded objects when creating a missing `<collection>_N` from parquet files and, in `MaskedBatchNorm1d`, to exclude padded entries from the normalisation statistics |
 | `pad_fill_value` | `MaskedBatchNorm1d` only: value assigned to padded entries at the output of the layer, or `"learn"` for a learnable per-feature value. The real values there are standardised and then scaled/shifted by the learnable weight and bias, so 0 corresponds to the mean of the real values only at initialisation; a fixed value does not follow the learned scale/shift |
@@ -806,7 +808,7 @@ Each training run writes to `${output_dir}` (default `/work/$USER/out_ML_pytorch
 * `config_parameters.yml` — full resolved config (defaults + CLI + YAML) snapshot.
 * `ML_model.py` — copy of the model file used, so a saved run can be re-loaded with `-l`/`--load-model` even after the file in `ml_pytorch/models/` changes.
 * `logger_<name>.log` — training log with epoch-by-epoch loss / accuracy / learning rate.
-* `state_dict/model_<epoch>_state_dict.pt` — best-epoch checkpoint(s).
+* `state_dict/model_<epoch>_state_dict.pt` — checkpoints of the last `n_best_checkpoints` (default 5) best epochs and of the last epoch; older best-epoch checkpoints are removed automatically.
 * `state_dict/model_best_epoch_<n>.onnx` — ONNX export of the best model (and one for the last epoch).
 * `score_lbl_array.npz` — saved with `--save-numpy`. Contains:
   * `score_lbl_array_train`, `score_lbl_array_test`: `[scores..., label, weight, kl]` per event. For binary the score block is a single column, for multi-class it has `num_classes` columns.

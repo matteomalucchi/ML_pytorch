@@ -32,6 +32,7 @@ from ml_pytorch.utils.tools import (
     kfold_weights_seed,
     resolve_input_variables,
     get_model_parameters_number,
+    prune_checkpoints,
     save_pytorch_model,
     set_rng_state,
     set_seed,
@@ -644,6 +645,8 @@ def main():
                 add_training_state(
                     best_model_name, early_stopper, best_vloss, best_vaccuracy, best_epoch
                 )
+                # keep only the most recent best-epoch checkpoints
+                prune_checkpoints(main_dir, cfg.n_best_checkpoints)
             if epoch == n_epochs - 1:
                 stop_training = True
 
@@ -664,6 +667,8 @@ def main():
         add_training_state(
             last_model_name, early_stopper, best_vloss, best_vaccuracy, best_epoch
         )
+        # keep the last epoch and the most recent best-epoch checkpoints
+        prune_checkpoints(main_dir, cfg.n_best_checkpoints, keep_names=[last_model_name])
         model.to("cpu")
 
         model_dir = f"{main_dir}/state_dict/"

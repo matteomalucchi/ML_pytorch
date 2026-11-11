@@ -70,6 +70,30 @@ def add_training_state(checkpoint_name, early_stopper, best_vloss, best_vaccurac
     torch.save(checkpoint, checkpoint_name)
 
 
+def prune_checkpoints(main_dir, n_keep, keep_names=()):
+    """Remove the oldest checkpoints in state_dict/, keeping only the n_keep
+    with the highest epoch plus the checkpoints in keep_names (e.g. the last
+    epoch). n_keep <= 0 keeps all the checkpoints."""
+    if n_keep <= 0:
+        return
+    state_dict_dir = f"{main_dir}/state_dict"
+    keep_names = {os.path.abspath(name) for name in keep_names}
+    checkpoints = []
+    for file_name in os.listdir(state_dict_dir):
+        if not (file_name.startswith("model_") and file_name.endswith("_state_dict.pt")):
+            continue
+        epoch_str = file_name[len("model_") : -len("_state_dict.pt")]
+        if not epoch_str.isdigit():
+            continue
+        path = os.path.abspath(f"{state_dict_dir}/{file_name}")
+        if path not in keep_names:
+            checkpoints.append((int(epoch_str), path))
+    checkpoints.sort()
+    for _, path in checkpoints[:-n_keep]:
+        os.remove(path)
+        logger.info(f"Removed old checkpoint {path}")
+
+
 def set_seed(seed, deterministic=False):
     """Seed the python, numpy and torch (CPU and GPU) random number generators.
 
