@@ -551,6 +551,8 @@ Optional:
   --missing-folds         resubmit only the unfinished folds (resuming) + the merge
   --slots-per-gpu INT     at most INT trainings per GPU at a time, the others start when a GPU frees up
   --separate-merge        merge / post-process in a separate CPU job, releasing the GPUs earlier
+  --monitor-interval SEC  seconds between the samples of the resource monitor (default: 10)
+  --no-monitor            do not run the resource monitor (see "Resource usage monitor")
   --load-last             Resume from latest checkpoint
   --time HH:MM:SS         Slurm wall-clock time limit
   --mem-per-cpu MB        Slurm memory per CPU in MB (default: 4000)
@@ -589,6 +591,24 @@ cd jobs/
 - **`NODES>1`**: submits a Slurm array job (one element per node) plus a dependent post-processing job that runs after all array tasks succeed.
 - Each node runs its share of trainings (`N_TRAININGS / NODES`) in parallel using background processes.
 - With `--gpus-per-node N` each node/array job requests `--gres=gpu:N` and the trainings of the node are distributed round-robin over its GPUs (training `i` runs on GPU `i % N`). The CPUs of the job are split among the parallel trainings (`OMP_NUM_THREADS`, DataLoader workers), so the processes do not oversubscribe the cores.
+
+### Resource usage monitor
+
+Every job of `run_training.sh` (training, array task, prepare, merge, also with `--no-slurm`) runs `jobs/resource_monitor.py` in the background. Every `--monitor-interval` seconds (default 10) it samples:
+
+- the CPU cores and memory of the whole job, from the Slurm cgroup of the job (exact, includes all the processes);
+- every GPU of the job with `nvidia-smi`: utilisation, memory, power, and which trainings are on it;
+- every training (`run<NN>` / `fold_<k>`, including its DataLoader workers) and step (`kfold_prepare`, `ml_kfold_merge`, `ml_onnx`, `ml_alpha`): CPU cores, RSS, GPU memory and SM utilisation of its processes.
+
+The results go to `<outdir>/resource_usage/<mode>_<jobid>[_<array task>]_*`:
+
+| File | Content |
+|---|---|
+| `*_summary.txt` / `*_summary.json` | time occupancy (elapsed vs time limit, time in every phase, wall time of every training), CPU and memory used vs allocated, per-GPU busy/unused time and utilisation, per-training table, and suggested `--cpus`, `--mem-per-cpu`, `--time`, trainings per GPU / `-g` |
+| `*_job.csv`, `*_gpu.csv`, `*_trainings.csv` | the time series of the job, of every GPU and of every training |
+| `*_phases.txt`, `*_monitor.log` | phase markers written by the script, monitor log |
+
+The summary is printed at the end of the Slurm log, and is rewritten every 5 minutes during the job, so it is there also if the job hits its time limit. The suggestions are heuristics: the memory one uses the non-reclaimable peak (anon + shmem + mapped files) +20% +1 GB; "trainings per GPU" combines the peak GPU memory of a training with the GPU utilisation measured while the GPU was used. To run the monitor by hand on any process: `python jobs/resource_monitor.py --pid <PID> --outdir <dir> --tag <name> [--interval 10]`.
 
 ### Speed tips
 

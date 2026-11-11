@@ -79,6 +79,15 @@
 #   --separate-merge        Single job / -p array: merge in a separate CPU job
 #                           after the training job, so the GPUs are released
 #                           when the last training ends
+#
+# Resource monitor (jobs/resource_monitor.py): every job samples its CPU,
+# memory and GPU usage (per job, per GPU and per training) and the time spent
+# in every phase, and writes OUTDIR/resource_usage/<mode>_<jobid>[_<task>]_*
+# (CSV time series + summary.txt/json with time occupancy, usage vs the
+# requested resources and suggested --cpus/--mem-per-cpu/--time/-g). The
+# summary is also printed at the end of the Slurm log.
+#   --monitor-interval SEC  Seconds between samples (default: 10)
+#   --no-monitor            Do not run the resource monitor
 
 # ─── Defaults ─────────────────────────────────────────────────────────────────
 N_TRAININGS=1
@@ -119,6 +128,8 @@ FOLD_JOBS=false
 MISSING_FOLDS=false
 SLOTS_PER_GPU=0
 SEPARATE_MERGE=false
+MONITOR=true
+MONITOR_INTERVAL=10
 # partition and account of the GPU jobs (as in the #SBATCH lines above)
 GPU_PARTITION="gpu"
 GPU_ACCOUNT="gpu_gres"
@@ -209,6 +220,11 @@ Occupancy of a single job with several GPUs:
                           the training job, instead of inside it, so the GPUs
                           are released as soon as the last training ends
 
+Resource monitor (CPU, memory, GPU and time occupancy of every job, saved in
+OUTDIR/resource_usage/, with a summary and suggested resources):
+  --monitor-interval SEC  Seconds between samples (default: 10)
+  --no-monitor            Do not run the resource monitor
+
 Examples:
   # Single training
   $0 -c /full/path/DNN_config.yml -o /full/path/out
@@ -289,6 +305,8 @@ while [[ $# -gt 0 ]]; do
         --missing-folds)   MISSING_FOLDS=true; shift ;;
         --slots-per-gpu)   SLOTS_PER_GPU="$2"; shift 2 ;;
         --separate-merge)  SEPARATE_MERGE=true; shift ;;
+        --monitor-interval) MONITOR_INTERVAL="$2"; shift 2 ;;
+        --no-monitor)      MONITOR=false; shift ;;
         --mode)            MODE="$2"; shift 2 ;;
         -h|--help)         usage ;;
         --)                shift; EXTRA_ARGS=("$@"); break ;;
@@ -371,6 +389,10 @@ if [[ ! "$SLOTS_PER_GPU" =~ ^[0-9]+$ ]]; then
     echo "Error: --slots-per-gpu must be an integer >= 0."
     exit 1
 fi
+if [[ ! "$MONITOR_INTERVAL" =~ ^[0-9]+([.][0-9]+)?$ ]] || ! awk "BEGIN{exit !($MONITOR_INTERVAL > 0)}"; then
+    echo "Error: --monitor-interval must be a number of seconds > 0."
+    exit 1
+fi
 if [[ "$FOLDS_PER_JOB" -lt 1 ]]; then
     echo "Error: --folds-per-job must be >= 1."
     exit 1
@@ -442,6 +464,8 @@ build_submit_args() {
     [[ -n "$FOLDS" ]] && args+=(--folds "$FOLDS")
     args+=(--slots-per-gpu "$SLOTS_PER_GPU")
     [[ "$SEPARATE_MERGE" == true ]] && args+=(--separate-merge)
+    args+=(--monitor-interval "$MONITOR_INTERVAL")
+    [[ "$MONITOR" != true ]] && args+=(--no-monitor)
     [[ ${#EXTRA_ARGS[@]} -gt 0 ]] && args+=(-- "${EXTRA_ARGS[@]}")
     printf '%s\0' "${args[@]}"
 }
@@ -737,10 +761,9 @@ run_prepare() {
     )
     [[ ${#EXTRA_ARGS[@]} -gt 0 ]] && prepare_args+=("${EXTRA_ARGS[@]}")
     echo "Preparing the k-fold cache in ${cache_dir}..."
-    if [[ "$keep" != keep ]]; then
-        # remove the cache when the job ends, also if it fails
-        trap 'echo "Removing the k-fold cache ${KFOLD_CACHE_DIR}"; rm -rf "${KFOLD_CACHE_DIR}"' EXIT
-    fi
+    mark_phase kfold_prepare
+    # remove the cache when the job ends, also if it fails (see on_exit)
+    [[ "$keep" != keep ]] && REMOVE_ON_EXIT="$KFOLD_CACHE_DIR"
     ml_train "${prepare_args[@]}" || { echo "Error: k-fold cache preparation failed"; exit 1; }
 }
 
@@ -751,7 +774,8 @@ copy_shared_cache() {
         echo "Error: no k-fold cache in ${SHARED_CACHE_DIR}: run run_training.sh --prepare-only first."
         exit 1
     fi
-    trap 'echo "Removing the k-fold cache ${KFOLD_CACHE_DIR}"; rm -rf "${KFOLD_CACHE_DIR}"' EXIT
+    REMOVE_ON_EXIT="$KFOLD_CACHE_DIR"
+    mark_phase copy_cache
     echo "Copying the k-fold cache ${SHARED_CACHE_DIR} -> ${KFOLD_CACHE_DIR}..."
     mkdir -p "$KFOLD_CACHE_DIR"
     cp -r "${SHARED_CACHE_DIR}/." "$KFOLD_CACHE_DIR/" || { echo "Error: copying the k-fold cache failed"; exit 1; }
@@ -762,6 +786,7 @@ copy_shared_cache() {
 launch_trainings() {
     local seeds=("$@")
     local n_trainings=${#seeds[@]}
+    mark_phase train
 
     # GPUs actually visible to this job (Slurm sets CUDA_VISIBLE_DEVICES
     # to the allocated ones, which are then numbered 0..N-1)
@@ -835,6 +860,7 @@ launch_trainings() {
 # ─── Post-processing: collect best models + ONNX aggregation ──────────────────
 # ─── Boosted morphing: ttbar fraction alpha from the PocketCoffea outputs ─────
 compute_alpha() {
+    mark_phase alpha
     local values
     values=$(ml_alpha -c "$CONFIG_FILE" --print --json "${OUT_DIR}/alpha.json") \
         || { echo "Error: ml_alpha failed"; exit 1; }
@@ -845,6 +871,7 @@ compute_alpha() {
 
 run_postproc() {
     [[ "$ALPHA" == true ]] && compute_alpha
+    mark_phase postproc
     if [[ "$K_FOLDS" -ge 2 ]]; then
         # out-of-fold scores, summary of the folds and combined ONNX models
         # the config of the folds is read from OUT_DIR/fold_0, with the ml_train
@@ -893,6 +920,69 @@ run_postproc() {
     ml_onnx "${onnx_args[@]}" --config "$CONFIG_FILE"
 }
 
+# ─── Resource monitor ─────────────────────────────────────────────────────────
+# resource_monitor.py samples the CPU/memory/GPU usage of this job in the
+# background and writes MONITOR_DIR/<tag>_* (see the header); the phases of
+# the job (prepare, train, postproc, ...) are marked in <tag>_phases.txt
+MONITOR_DIR="${OUT_DIR}/resource_usage"
+MONITOR_PID=""
+MONITOR_PHASE_FILE=""
+REMOVE_ON_EXIT=""
+
+mark_phase() {
+    [[ -n "$MONITOR_PHASE_FILE" ]] && echo "$(date +%s) $*" >> "$MONITOR_PHASE_FILE"
+    return 0
+}
+
+start_monitor() {
+    [[ "$MONITOR" != true ]] && return
+    local job="${SLURM_ARRAY_JOB_ID:-${SLURM_JOB_ID:-local$$}}"
+    MONITOR_TAG="${MODE}_${job}${SLURM_ARRAY_TASK_ID:+_${SLURM_ARRAY_TASK_ID}}"
+    mkdir -p "$MONITOR_DIR"
+    MONITOR_PHASE_FILE="${MONITOR_DIR}/${MONITOR_TAG}_phases.txt"
+    : > "$MONITOR_PHASE_FILE"
+    python "${SCRIPT_DIR}/resource_monitor.py" --pid $$ \
+        --outdir "$MONITOR_DIR" --tag "$MONITOR_TAG" \
+        --interval "$MONITOR_INTERVAL" --phase-file "$MONITOR_PHASE_FILE" \
+        --cpus "${SLURM_CPUS_PER_TASK:-$SLURM_CPUS}" \
+        --mem-per-cpu "${SLURM_MEM_PER_CPU:-$SLURM_MEM}" \
+        > "${MONITOR_DIR}/${MONITOR_TAG}_monitor.log" 2>&1 &
+    MONITOR_PID=$!
+    # not a job of this shell: the "wait" of launch_trainings must not wait for it
+    disown "$MONITOR_PID"
+    echo "Resource monitor (every ${MONITOR_INTERVAL} s) -> ${MONITOR_DIR}/${MONITOR_TAG}_*"
+}
+
+stop_monitor() {
+    [[ -z "$MONITOR_PID" ]] && return
+    mark_phase end "$1"
+    kill -TERM "$MONITOR_PID" 2>/dev/null
+    local i
+    for ((i=0; i<120; i++)); do
+        kill -0 "$MONITOR_PID" 2>/dev/null || break
+        sleep 0.5
+    done
+    MONITOR_PID=""
+    local summary="${MONITOR_DIR}/${MONITOR_TAG}_summary.txt"
+    if [[ -f "$summary" ]]; then
+        echo
+        echo "=== Resource usage (${summary}) ==="
+        cat "$summary"
+    fi
+}
+
+# at the end of the job, also if it fails or is killed: stop the monitor
+# (final summary) and remove the node-local k-fold cache
+on_exit() {
+    local rc=$?
+    stop_monitor "$rc"
+    if [[ -n "$REMOVE_ON_EXIT" ]]; then
+        echo "Removing the k-fold cache ${REMOVE_ON_EXIT}"
+        rm -rf "$REMOVE_ON_EXIT"
+    fi
+    exit "$rc"
+}
+
 # ─── Main ─────────────────────────────────────────────────────────────────────
 echo "=== ML Training Script ==="
 echo "  Config:     ${CONFIG_FILE}"
@@ -927,6 +1017,9 @@ if [[ "$NO_SLURM" == true && "$MODE" == train ]]; then
         LOAD_LAST=true; MODE=train_folds_merge
     fi
 fi
+
+trap on_exit EXIT
+start_monitor
 
 case "$MODE" in
     train)
