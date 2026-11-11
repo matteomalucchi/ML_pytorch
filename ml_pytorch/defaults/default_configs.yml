@@ -255,6 +255,12 @@ learning_rate: 1e-2
 #                  e10_drop5  -> 10 epochs, factor 0.5
 #                  e10_drop05 -> 10 epochs, factor 0.05
 #                  e0_drop99  -> factor 0.99 from the first epoch
+#   wX_cosineYY: linear warm-up from learning_rate/X to learning_rate in the
+#                first X epochs, then cosine decay down to learning_rate * 0.YY
+#                at the last epoch (epochs - 1); wX_cosine decays down to 0.
+#                Suited to long trainings (with a patience large enough not to
+#                stop the training while the learning rate is still high):
+#                  w5_cosine01 -> 5 warm-up epochs, down to 0.01 * learning_rate
 learning_rate_schedule: linear
 
 # Stop the training if the validation metric (eval_param) does not improve
@@ -275,6 +281,12 @@ eval_param: "loss"
 num_workers: 4
 # Use pinned memory in the DataLoaders (faster transfer to GPU).
 pin_memory: False
+# Reshuffle the order of the training events at every epoch (also with
+# data_on_gpu and in the k-fold training). The permutations are drawn from the
+# torch random number generator seeded with `seed`, so trainings with the same
+# seed see the same batches (also when resumed). The validation and test
+# loaders are never shuffled.
+shuffle_train: False
 # Comma-separated list of GPU indices to use (e.g. '0' or '0,1'; more than one
 # GPU uses DataParallel), or 'cpu' to run on CPU. For the small models used
 # here DataParallel is usually slower than a single GPU: to use several GPUs
