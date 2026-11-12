@@ -1,0 +1,106 @@
+# Background morphing (2b -> 4b control region) on the 2024 ParkingHH data,
+# with the standard input variables of the background morphing DNN (no VBF
+# information), the "is real" pad indicators of MaskedBatchNorm1d and the
+# training batches reshuffled at every epoch. Version of
+# DNN_12_01_05_1e-3_e0drop95_minDelta1em5_ClassWeights_ggF_VBF_vars_NVBFjets_2024_parking_kfold20.yml
+# with a learning rate schedule for the 200 epochs (warm-up + cosine decay)
+# and a larger patience, so that the early stopping does not stop the
+# training while the learning rate is still high.
+#
+# Run the 20 folds at the same time on one full 8-GPU node (t3gpu0X: 8 GTX
+# 1080 Ti, 40 CPUs, ~245 GB) and merge them:
+#   ./jobs/run_training.sh -c <this config> -o <output dir> \
+#     -k 20 -g 8 --cpus 40 --mem-per-cpu 6000 --time 48:00:00 --ratio
+# The events are first loaded once into <output dir>/kfold_cache, which the 20
+# fold processes memory-map (the events take the RAM once, not 20 times).
+# Folds i run on GPU i % 8 (3 folds on GPUs 0-3, 2 on GPUs 4-7), with 2 CPUs
+# each.
+input_variables: bkg_morphing_dnn_input_variables
+
+run2: False
+
+signal_sample: [DATA_ParkingHH]
+background_sample: [DATA_ParkingHH]
+
+signal_region: [4b_control_region]
+background_region: [2b_control_region_preW]
+
+signal_dataset:
+  [
+    DATA_ParkingHH_2024_EraC,
+    DATA_ParkingHH_2024_EraD,
+    DATA_ParkingHH_2024_EraE,
+    DATA_ParkingHH_2024_EraF,
+    DATA_ParkingHH_2024_EraG,
+    DATA_ParkingHH_2024_EraH,
+    DATA_ParkingHH_2024_EraI,
+  ]
+background_dataset:
+  [
+    DATA_ParkingHH_2024_EraC,
+    DATA_ParkingHH_2024_EraD,
+    DATA_ParkingHH_2024_EraE,
+    DATA_ParkingHH_2024_EraF,
+    DATA_ParkingHH_2024_EraG,
+    DATA_ParkingHH_2024_EraH,
+    DATA_ParkingHH_2024_EraI,
+  ]
+
+# no oversampling: the classes are balanced with the class weights
+oversample_split: False
+
+# K-fold training: 20 folds assigned randomly (no event number needed). The
+# morphing weights are applied to the events of a separate region, so the
+# final ONNX model is the average over the folds of the ratio of the outputs
+# (kfold_onnx/kfold_morphing_ratio_average.onnx).
+k_folds: 20
+kfold_split: random
+kfold_onnx: average
+onnx_ratio: True
+
+ML_model: DNN_softmax_reweight_model_maskedBN1D
+
+data_format: parquet
+
+batch_size: 1024
+epochs: 200
+
+# 5 epochs of linear warm-up up to 1e-3, then cosine decay down to 1e-5
+# (0.01 * learning_rate) at the last epoch (199): ~8.7e-4 at epoch 50,
+# ~5.2e-4 at epoch 100, ~1.6e-4 at epoch 150
+learning_rate: 1e-3
+learning_rate_schedule: w5_cosine01
+
+# with patience 5 the training would stop in the first tens of epochs, when
+# the learning rate is still close to the maximum
+early_stopping: True
+patience: 20
+min_delta: 1e-5
+
+eval_param: "loss"
+
+# reshuffle the training events at every epoch
+shuffle_train: True
+
+# With the k-folding the test dataset is the fold (1/20 of the events) and the
+# other events are split into training and validation with the ratio
+# train_fraction : val_fraction (10% for validation is ~5.7M events). The sum
+# of the fractions is the fraction of events read, so it is kept at 1.
+train_fraction: 0.9
+val_fraction: 0.1
+test_fraction: 0.0
+
+# The datasets of a fold do not fit in the 11 GB of a GTX 1080 Ti: they are
+# then kept in RAM and the batches are sliced there and copied to the GPU
+# (much faster than the DataLoaders).
+data_on_gpu: True
+
+# padded entries (e.g. add_jet1pt in events without a 5th jet) are excluded
+# from the MaskedBatchNorm1d statistics and flagged by the pad indicators
+pad_value: -999.0
+pad_fill_value: 0.0
+pad_indicators: True
+
+parquet_dir: /pnfs/psi.ch/cms/trivcat/store/user/mmalucch/out_hh4b/VBF/12_01_01_out_ggf_vbf_DATA_AllKlambda_DetaMjjCentrality_ApplyGGFvsVBF_DNNVars_vbfregions_2024SPANetHiggsTraining_parking_presel/parquet_files/merged_parquet
+
+data_dirs: [/work/mmalucch/out_hh4b/VBF/12_01_01_out_ggf_vbf_DATA_AllKlambda_DetaMjjCentrality_ApplyGGFvsVBF_DNNVars_vbfregions_2024SPANetHiggsTraining_parking_presel]

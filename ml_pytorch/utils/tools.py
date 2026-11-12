@@ -1,3 +1,4 @@
+import importlib
 import torch
 import numpy as np
 import os
@@ -13,6 +14,84 @@ DEBUG = False
 def get_model_parameters_number(model):
     params_num = sum(p.numel() for p in model.parameters() if p.requires_grad)
     return params_num
+
+
+def kfold_weights_seed(seed, fold):
+    """Seed of the weight initialisation (and dropout) of a fold of the
+    k-fold training. It is derived from (seed, fold) with numpy's
+    SeedSequence, which hashes them into well-mixed seeds meant for
+    statistically independent random streams in parallel jobs: different for
+    every fold and for every seed, without the overlaps of consecutive
+    integer seeds (e.g. seed * k_folds + fold)."""
+    return int(np.random.SeedSequence([int(seed), int(fold)]).generate_state(1)[0])
+
+
+def get_rng_state():
+    """States of the python, numpy and torch (CPU and GPU) random number
+    generators, in a form that torch.save / torch.load (weights_only) accept."""
+    np_state = np.random.get_state()
+    state = {
+        "python": random.getstate(),
+        "numpy": [np_state[0], torch.from_numpy(np_state[1].astype(np.int64)), *np_state[2:]],
+        "torch": torch.get_rng_state(),
+    }
+    if torch.cuda.is_available():
+        state["cuda"] = torch.cuda.get_rng_state_all()
+    return state
+
+
+def set_rng_state(state):
+    """Restore the random number generators saved with get_rng_state."""
+    random.setstate(state["python"])
+    name, key, *rest = state["numpy"]
+    # the checkpoint may be loaded with map_location on a GPU: move to CPU
+    np.random.set_state((name, key.cpu().numpy().astype(np.uint32), *rest))
+    torch.set_rng_state(state["torch"].cpu())
+    if "cuda" in state and torch.cuda.is_available():
+        torch.cuda.set_rng_state_all([s.cpu() for s in state["cuda"]])
+
+
+def add_training_state(checkpoint_name, early_stopper, best_vloss, best_vaccuracy, best_epoch):
+    """Add to a checkpoint the state needed to resume the training exactly as
+    if it had not been interrupted: the random number generators (dropout of
+    the next epochs), the early stopper and the exact best validation metrics
+    (the log only has them rounded)."""
+    checkpoint = torch.load(checkpoint_name)
+    checkpoint["training_state"] = {
+        "rng": get_rng_state(),
+        "early_stopper": {
+            "counter": early_stopper.counter,
+            "min_validation": float(early_stopper.min_validation),
+        },
+        "best_vloss": float(best_vloss),
+        "best_vaccuracy": float(best_vaccuracy),
+        "best_epoch": int(best_epoch),
+    }
+    torch.save(checkpoint, checkpoint_name)
+
+
+def prune_checkpoints(main_dir, n_keep, keep_names=()):
+    """Remove the oldest checkpoints in state_dict/, keeping only the n_keep
+    with the highest epoch plus the checkpoints in keep_names (e.g. the last
+    epoch). n_keep <= 0 keeps all the checkpoints."""
+    if n_keep <= 0:
+        return
+    state_dict_dir = f"{main_dir}/state_dict"
+    keep_names = {os.path.abspath(name) for name in keep_names}
+    checkpoints = []
+    for file_name in os.listdir(state_dict_dir):
+        if not (file_name.startswith("model_") and file_name.endswith("_state_dict.pt")):
+            continue
+        epoch_str = file_name[len("model_") : -len("_state_dict.pt")]
+        if not epoch_str.isdigit():
+            continue
+        path = os.path.abspath(f"{state_dict_dir}/{file_name}")
+        if path not in keep_names:
+            checkpoints.append((int(epoch_str), path))
+    checkpoints.sort()
+    for _, path in checkpoints[:-n_keep]:
+        os.remove(path)
+        logger.info(f"Removed old checkpoint {path}")
 
 
 def set_seed(seed, deterministic=False):
@@ -61,6 +140,9 @@ def loop_one_batch(
     all_kl_values,
     type_eval,
 ):
+    # NOTE: the running/total sums are accumulated as tensors on the device and
+    # converted to python numbers only when printed, to avoid a GPU-CPU
+    # synchronisation (.item()) at every batch
     inputs, labels, class_weights, kl_values = data
 
     inputs = inputs.to(device, non_blocking=True)
@@ -72,8 +154,10 @@ def loop_one_batch(
     inputs = inputs[:, :-1]
     weights = (event_weights * class_weights.flatten()).clamp(min=0)
 
-    # compute the outputs of the model
-    outputs = model(inputs)
+    # build the autograd graph only when training
+    with torch.set_grad_enabled(train):
+        # compute the outputs of the model
+        outputs = model(inputs)
 
     if outputs.shape[1] == 1:
         outputs = outputs.flatten()
@@ -84,7 +168,7 @@ def loop_one_batch(
         y_pred = outputs.argmax(dim=1)
 
     # Compute the accuracy
-    correct = ((y_pred == labels) * weights).sum().item()
+    correct = ((y_pred == labels) * weights).sum().detach()
 
     # Compute the loss and its gradients
     loss = loss_fn(outputs, labels)
@@ -93,25 +177,27 @@ def loop_one_batch(
     # weight the loss
     loss = loss * weights
     # weighted average of the loss
-    loss_average = loss.sum() / weights.sum()
+    sum_weights = weights.sum()
+    loss_average = loss.sum() / sum_weights
 
     if train:
         # Reset the gradients of all optimized torch.Tensor
-        optimizer.zero_grad()
+        optimizer.zero_grad(set_to_none=True)
         # Compute the gradients of the loss w.r.t. the model parameters
         loss_average.backward()
         # Adjust learning weights
         optimizer.step()
 
     # Gather data for reporting
-    running_loss += loss_average.item()
-    tot_loss += loss_average.item()
+    loss_average_value = loss_average.detach()
+    running_loss += loss_average_value
+    tot_loss += loss_average_value
 
     running_correct += correct
     tot_correct += correct
 
-    running_num += weights.sum().item()
-    tot_num += weights.sum().item()
+    running_num += sum_weights
+    tot_num += sum_weights
 
     step_prints = max(1, 0.1 * num_batches)
 
@@ -149,8 +235,8 @@ def loop_one_batch(
 
         count += 1
 
-        last_loss = running_loss / step_prints  # loss per batch
-        last_accuracy = running_correct / running_num  # accuracy per batch
+        last_loss = float(running_loss) / step_prints  # loss per batch
+        last_accuracy = float(running_correct) / float(running_num)  # accuracy per batch
         tb_x = epoch_index * num_batches + i + 1
 
         if DEBUG:
@@ -195,17 +281,14 @@ def loop_one_batch(
         running_num = 0
 
     if eval_model:
-        # Create array of scores and labels
-        if i == 0:
-            all_scores = outputs.cpu().detach()
-            all_labels = labels.cpu().detach()
-            all_weights = event_weights.cpu().detach()
-            all_kl_values = kl_values.cpu().detach()
-        else:
-            all_scores = torch.cat((all_scores, outputs.cpu().detach()))
-            all_labels = torch.cat((all_labels, labels.cpu().detach()))
-            all_weights = torch.cat((all_weights, event_weights.cpu().detach()))
-            all_kl_values = torch.cat((all_kl_values, kl_values.cpu().detach()))
+        # Collect the scores and labels on the CPU (concatenated once at the
+        # end, see eval_model): the scores of all the events (e.g. a large
+        # training dataset, or several trainings sharing a GPU) would not fit
+        # in the GPU memory
+        all_scores.append(outputs.detach().cpu())
+        all_labels.append(labels.detach().cpu())
+        all_weights.append(event_weights.detach().cpu())
+        all_kl_values.append(kl_values.detach().cpu())
 
     return (
         running_loss,
@@ -222,7 +305,9 @@ def loop_one_batch(
     )
 
 
-def save_pytorch_model(main_dir, epoch_index, model, optimizer, save_model=False):
+def save_pytorch_model(
+    main_dir, epoch_index, model, optimizer, save_model=False, scheduler=None
+):
     model_dir = f"{main_dir}/models"
     state_dict_dir = f"{main_dir}/state_dict"
     save_model=False
@@ -238,6 +323,10 @@ def save_pytorch_model(main_dir, epoch_index, model, optimizer, save_model=False
         "state_dict": model.state_dict(),
         "optimizer": optimizer.state_dict(),
     }
+    # the state of the learning rate scheduler, to continue the schedule when
+    # resuming the training with --load-model
+    if scheduler is not None:
+        checkpoint["scheduler"] = scheduler.state_dict()
     torch.save(checkpoint, state_dict_name)
     logger.info(f"Saved state_dict at epoch {epoch_index} to {state_dict_name}")
     return state_dict_name
@@ -327,8 +416,8 @@ def train_val_one_epoch(
         )
         scheduler.step()
 
-    avg_loss = tot_loss / len(loader)
-    avg_accuracy = tot_correct / tot_num
+    avg_loss = float(tot_loss) / len(loader)
+    avg_accuracy = float(tot_correct) / float(tot_num)
     if not train:
         # Track best performance, and save the model state
         if cfg.eval_param == "loss":
@@ -345,7 +434,9 @@ def train_val_one_epoch(
         best_loss = avg_loss
         best_accuracy = avg_accuracy
         best_epoch = epoch_index
-        best_model_name = save_pytorch_model(main_dir, epoch_index, model, optimizer, cfg.save_model)
+        best_model_name = save_pytorch_model(
+            main_dir, epoch_index, model, optimizer, cfg.save_model, scheduler
+        )
 
     return (
         avg_loss,
@@ -355,6 +446,48 @@ def train_val_one_epoch(
         best_epoch,
         best_model_name,
     )
+
+
+def scores_to_probabilities(all_scores):
+    """Scores of the events in the layout of the score_lbl arrays: one column
+    with the signal probability for binary models (1 or 2 output nodes), one
+    column per class for multi-class models, in [0, 1] whatever the model
+    architecture."""
+    all_scores = torch.as_tensor(all_scores)
+    # the outputs of single-node models are flattened in loop_one_batch
+    if all_scores.dim() == 1:
+        all_scores = all_scores.view(-1, 1)
+
+    # Normalize raw logits into probabilities so that the saved scores live
+    # in [0, 1] regardless of the model architecture.
+    if torch.any(all_scores < 0) or torch.any(all_scores > 1):
+        if all_scores.shape[1] == 1:
+            all_scores = torch.nn.functional.sigmoid(all_scores)
+        else:
+            all_scores = torch.nn.functional.softmax(all_scores, dim=1)
+
+    # For backward compatibility with the binary sig/bkg case (1 or 2 output
+    # nodes) we collapse to a single column containing the signal probability.
+    # For genuine multi-class outputs (>=3) we keep all class probabilities.
+    if all_scores.shape[1] == 2:
+        all_scores = all_scores[:, -1].view(-1, 1)
+    elif all_scores.shape[1] == 1:
+        all_scores = all_scores.view(-1, 1)
+    return all_scores
+
+
+def resolve_input_variables(cfg):
+    """Convert the name of an input variables module (cfg.input_variables)
+    into the list of columns."""
+    if isinstance(cfg.input_variables, str):
+        logger.info("Get Input variables from dnn_inputs")
+        logger.info(cfg.input_variables)
+        dnn_input_variables_file = importlib.import_module(
+            f"ml_pytorch.defaults.{cfg.input_variables}"
+        )
+        cfg.input_variables = create_DNN_columns_list(
+            cfg.run2, dnn_input_variables_file.dnn_input_variables
+        )
 
 
 def eval_model(model, loader, loss_fn, type_eval, device, best_epoch):
@@ -371,10 +504,10 @@ def eval_model(model, loader, loss_fn, type_eval, device, best_epoch):
     num_batches = len(loader)
     count = 0
 
-    all_scores = None
-    all_labels = None
-    all_weights = None
-    all_kl_values = None
+    all_scores = []
+    all_labels = []
+    all_weights = []
+    all_kl_values = []
 
     for i, data in enumerate(loader):
         (
@@ -415,28 +548,15 @@ def eval_model(model, loader, loss_fn, type_eval, device, best_epoch):
             type_eval,
         )
 
-    avg_loss = tot_loss / len(loader)
-    avg_accuracy = tot_correct / tot_num
+    avg_loss = float(tot_loss) / len(loader)
+    avg_accuracy = float(tot_correct) / float(tot_num)
 
-    # the outputs of single-node models are flattened in loop_one_batch
-    if all_scores.dim() == 1:
-        all_scores = all_scores.view(-1, 1)
+    all_scores = torch.cat(all_scores).cpu()
+    all_labels = torch.cat(all_labels).cpu()
+    all_weights = torch.cat(all_weights).cpu()
+    all_kl_values = torch.cat(all_kl_values).cpu()
 
-    # Normalize raw logits into probabilities so that the saved scores live
-    # in [0, 1] regardless of the model architecture.
-    if torch.any(all_scores < 0) or torch.any(all_scores > 1):
-        if all_scores.shape[1] == 1:
-            all_scores = torch.nn.functional.sigmoid(all_scores)
-        else:
-            all_scores = torch.nn.functional.softmax(all_scores, dim=1)
-
-    # For backward compatibility with the binary sig/bkg case (1 or 2 output
-    # nodes) we collapse to a single column containing the signal probability.
-    # For genuine multi-class outputs (>=3) we keep all class probabilities.
-    if all_scores.shape[1] == 2:
-        all_scores = all_scores[:, -1].view(-1, 1)
-    elif all_scores.shape[1] == 1:
-        all_scores = all_scores.view(-1, 1)
+    all_scores = scores_to_probabilities(all_scores)
 
     all_labels = all_labels.view(-1, 1)
     all_weights = all_weights.view(-1, 1)

@@ -34,9 +34,16 @@ if [[ ${#EXTRA_ARGS[@]} -gt 0 ]]; then
     echo "Forwarding extra arguments to ml_train: ${EXTRA_ARGS[*]}"
 fi
 
+# GPUs allocated to this job (e.g. sbatch --gres=gpu:5): the 5 trainings are
+# distributed round-robin over them
+IFS=',' read -r -a VISIBLE_GPUS <<< "${CUDA_VISIBLE_DEVICES:-0}"
+N_GPUS=${#VISIBLE_GPUS[@]}
+echo "Using ${N_GPUS} GPU(s)"
+
 # Start 5 jobs in parallel
 for i in {0..4}; do
     SEED=$((i + INIT_SEED))
+    GPU=$((i % N_GPUS))
     RUN_DIR="${OUT_DIR}/run$(printf "%02d" $SEED)"
     MODEL_DIR="$RUN_DIR/state_dict"
     mkdir -p "$RUN_DIR"
@@ -53,7 +60,7 @@ for i in {0..4}; do
         done
     fi
 
-    echo "[$SLURM_ARRAY_TASK_ID] Launching training with seed $SEED -> $RUN_DIR"
+    echo "[$SLURM_ARRAY_TASK_ID] Launching training with seed $SEED on GPU $GPU -> $RUN_DIR"
 
     shopt -s nullglob
     BEST_MODEL=$(ls "$MODEL_DIR"/*best_epoch*.onnx 2>/dev/null | head -n 1)
@@ -73,7 +80,7 @@ for i in {0..4}; do
         if $LOAD_LAST; then
             ml_train -o "$RUN_DIR" \
                      --eval --onnx --roc --histos --history \
-                     --gpus 0 -n 2 -c "$CONFIG_FILE" -s "$SEED" \
+                     --gpus "$GPU" -n 2 -c "$CONFIG_FILE" -s "$SEED" \
                      --load-model "$MODEL_PATH" \
                      --comet-token "$API_KEY" --comet-name "$API_UNAME" \
                      --comet-tags "${API_TAGS[@]}" \
@@ -81,7 +88,7 @@ for i in {0..4}; do
         else
             ml_train -o "$RUN_DIR" \
                      --eval --onnx --roc --histos --history \
-                     --gpus 0 -n 2 -c "$CONFIG_FILE" -s "$SEED" --overwrite \
+                     --gpus "$GPU" -n 2 -c "$CONFIG_FILE" -s "$SEED" --overwrite \
                      --comet-token "$API_KEY" --comet-name "$API_UNAME" \
                      --comet-tags "${API_TAGS[@]}" \
                      "${EXTRA_ARGS[@]}" &
@@ -90,13 +97,13 @@ for i in {0..4}; do
         if $LOAD_LAST; then
             ml_train -o "$RUN_DIR" \
                      --eval --onnx --roc --histos --history \
-                     --gpus 0 -n 2 -c "$CONFIG_FILE" -s "$SEED" \
+                     --gpus "$GPU" -n 2 -c "$CONFIG_FILE" -s "$SEED" \
                      --load-model "$MODEL_PATH" \
                      "${EXTRA_ARGS[@]}" &
         else
             ml_train -o "$RUN_DIR" \
                      --eval --onnx --roc --histos --history \
-                     --gpus 0 -n 2 -c "$CONFIG_FILE" -s "$SEED" --overwrite \
+                     --gpus "$GPU" -n 2 -c "$CONFIG_FILE" -s "$SEED" --overwrite \
                      "${EXTRA_ARGS[@]}" &
         fi
     fi

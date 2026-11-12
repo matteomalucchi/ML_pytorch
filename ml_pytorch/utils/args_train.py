@@ -95,6 +95,12 @@ parser.add_argument(
     "--roc", default=None, help="Make roc curve of discrimination", action="store_true"
 )
 parser.add_argument(
+    "--save-roc",
+    default=None,
+    help="Save also the ROC points (tpr_fpr*.npz) next to the ROC plots",
+    action="store_true",
+)
+parser.add_argument(
     "--input-plots",
     dest="input_plots",
     default=None,
@@ -163,6 +169,20 @@ parser.add_argument(
     action="store_true",
 )
 parser.add_argument(
+    "--data-on-gpu",
+    dest="data_on_gpu",
+    default=None,
+    help="Keep the whole datasets on the GPU and take the batches from there (default: True)",
+    action="store_true",
+)
+parser.add_argument(
+    "--no-data-on-gpu",
+    dest="data_on_gpu",
+    default=None,
+    help="Use the standard DataLoaders, copying every batch to the GPU",
+    action="store_false",
+)
+parser.add_argument(
     "--overwrite",
     default=None,
     help="Overwrite output directory",
@@ -187,6 +207,58 @@ parser.add_argument(
     "--save-numpy",
     default=None,
     help="Save numpy arrays of the output scores",
+    action="store_true",
+)
+parser.add_argument(
+    "-k",
+    "--k-folds",
+    default=None,
+    help="Number of folds of the k-fold training (0 or 1 to disable)",
+    type=int,
+)
+parser.add_argument(
+    "-f",
+    "--fold",
+    default=None,
+    help="Train only this fold of the k-fold training (default: all the folds)",
+    type=int,
+)
+parser.add_argument(
+    "--kfold-split",
+    default=None,
+    choices=["random", "event"],
+    help="How to assign the events to the folds: random or by event number (event %% k_folds)",
+    type=str,
+)
+parser.add_argument(
+    "--kfold-cache",
+    default=None,
+    help="K-fold: directory of the cache of the events, loaded once and memory-mapped by all the folds",
+    type=str,
+)
+parser.add_argument(
+    "--kfold-split-dir",
+    default=None,
+    help="K-fold: directory where the record of the split (k.npy and metadata) is saved when preparing the cache",
+    type=str,
+)
+parser.add_argument(
+    "--kfold-prepare",
+    default=None,
+    help="K-fold: only load the events and save them in the --kfold-cache directory",
+    action="store_true",
+)
+parser.add_argument(
+    "--kfold-onnx",
+    default=None,
+    choices=["average", "event", "median"],
+    help="K-fold: final ONNX model, average over the folds, model of the fold event %% k_folds, or median over the folds of the weight (needs --onnx-ratio or morphing_alpha)",
+    type=str,
+)
+parser.add_argument(
+    "--onnx-ratio",
+    default=None,
+    help="K-fold: build also the ONNX model of the average of the ratios of the outputs of the folds (reweighting)",
     action="store_true",
 )
 

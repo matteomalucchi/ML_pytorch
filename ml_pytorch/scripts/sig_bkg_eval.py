@@ -1,4 +1,6 @@
+import logging
 import os
+import shutil
 import matplotlib
 
 matplotlib.use("Agg")
@@ -7,7 +9,6 @@ import numpy as np
 import mplhep as hep
 from scipy import stats
 from sklearn.metrics import roc_curve, roc_auc_score, auc, brier_score_loss
-from sklearn.calibration import calibration_curve
 
 from hist import Hist
 from utils_configs.plot.HEPPlotter import HEPPlotter
@@ -82,79 +83,93 @@ def my_roc_auc(
     """
     # based on https://github.com/SiLiKhon/my_roc_auc/blob/master/my_roc_auc.py
 
+    classes = np.asarray(classes)
+    predictions = np.asarray(predictions)
     if sample_weight is None:
-        sample_weight = np.ones_like(predictions)
+        sample_weight = np.ones(len(predictions))
+    # the cumulative sums run over all the events: in float32 they lose
+    # precision for large datasets (O(10^7) events) and bias the AUC
+    sample_weight = np.asarray(sample_weight, dtype=np.float64)
 
     assert len(classes) == len(predictions) == len(sample_weight)
     assert classes.ndim == predictions.ndim == sample_weight.ndim == 1
     class0, class1 = sorted(np.unique(classes))
 
-    data = np.empty(
-        shape=len(classes),
-        dtype=[
-            ("c", classes.dtype),
-            ("p", predictions.dtype),
-            ("w", sample_weight.dtype),
-        ],
-    )
-    data["c"], data["p"], data["w"] = classes, predictions, sample_weight
+    # sort by prediction, with class0 before class1 for equal predictions
+    order = np.lexsort((classes, predictions))
+    p = predictions[order]
+    c = classes[order]
+    w = sample_weight[order]
 
-    data = data[np.argsort(data["c"])]
-    data = data[
-        np.argsort(data["p"], kind="mergesort")
-    ]  # here we're relying on stability as we need class orders preserved
-
-    correction = 0.0
-    # mask1 - bool mask to highlight collision areas
-    # mask2 - bool mask with collision areas' start points
-    mask1 = np.empty(len(data), dtype=bool)
-    mask2 = np.empty(len(data), dtype=bool)
-    mask1[0] = mask2[-1] = False
-    mask1[1:] = data["p"][1:] == data["p"][:-1]
-    if mask1.any():
-        mask2[:-1] = ~mask1[:-1] & mask1[1:]
-        mask1[:-1] |= mask1[1:]
-        (ids,) = mask2.nonzero()
-        correction = (
-            sum(
-                [
-                    ((dsplit["c"] == class0) * dsplit["w"] * msplit).sum()
-                    * ((dsplit["c"] == class1) * dsplit["w"] * msplit).sum()
-                    for dsplit, msplit in zip(np.split(data, ids), np.split(mask1, ids))
-                ]
-            )
-            * 0.5
-        )
-
-    weights_0 = data["w"] * (data["c"] == class0)
-    weights_1 = data["w"] * (data["c"] == class1)
+    weights_0 = w * (c == class0)
+    weights_1 = w * (c == class1)
     cumsum_0 = weights_0.cumsum()
+
+    # events with equal predictions count 1/2: cumsum_0 includes all the
+    # class0 events of the tie, so half of their product with class1 is removed
+    _, tie_start = np.unique(p, return_index=True)
+    correction = 0.5 * np.sum(
+        np.add.reduceat(weights_0, tie_start) * np.add.reduceat(weights_1, tie_start)
+    )
 
     return ((cumsum_0 * weights_1).sum() - correction) / (
         weights_1.sum() * cumsum_0[-1]
     )
 
 
-def _calibration_curve_with_errors(binary_labels, scores, n_bins):
-    """``sklearn`` calibration curve plus the uncertainties in each bin:
+def _class_normalized_weights(labels, weights, classes):
+    """Event weights divided by the sum of the weights of their class, so that
+    every class in ``classes`` is a unit-area histogram (0 for the events of
+    the other classes)."""
+    u = np.zeros(len(labels), dtype=np.float64)
+    for c in classes:
+        mask = labels == c
+        sumw = weights[mask].sum()
+        if sumw > 0:
+            u[mask] = weights[mask] / sumw
+    return u
 
-    * on the fraction of positives: binomial, ``sqrt(p * (1 - p) / N)``;
-    * on the mean predicted probability: standard error of the mean,
-      ``std(score) / sqrt(N)``.
 
-    The bin counts are computed with the same uniform binning used by
-    ``calibration_curve`` (empty bins are dropped in both).
+def _normalized_calibration_curve(binary_labels, scores, u, n_bins):
+    """Calibration curve of the histograms normalised with the weights ``u``
+    (see _class_normalized_weights), i.e. as if all the classes had the same
+    prior, which is how a classifier trained on balanced classes is calibrated.
+    ``sklearn.calibration.calibration_curve`` has no event weights, so it
+    cannot do this.
+
+    In each uniform bin of the score:
+      * fraction of positives = sum(u, positives) / sum(u, all), with the
+        uncertainty propagated from sum(u^2) of the positives and the others;
+      * mean predicted probability = sum(u * score) / sum(u), with uncertainty
+        sqrt(sum(u^2 (score - mean)^2)) / sum(u).
+    Empty bins (sum(u) <= 0) are dropped.
     """
-    prob_true, prob_pred = calibration_curve(binary_labels, scores, n_bins=n_bins)
     bins = np.linspace(0.0, 1.0, n_bins + 1)
-    binids = np.searchsorted(bins[1:-1], scores)
-    bin_total = np.bincount(binids, minlength=len(bins))
-    bin_sum_sq = np.bincount(binids, weights=scores**2, minlength=len(bins))
-    nonzero = bin_total != 0
-    bin_total = bin_total[nonzero]
-    prob_true_err = np.sqrt(prob_true * (1 - prob_true) / bin_total)
-    score_var = np.clip(bin_sum_sq[nonzero] / bin_total - prob_pred**2, 0, None)
-    prob_pred_err = np.sqrt(score_var / bin_total)
+    binids = np.clip(np.searchsorted(bins[1:-1], scores), 0, n_bins - 1)
+    pos = binary_labels == 1
+
+    def bin_sum(weights, mask=None):
+        if mask is not None:
+            return np.bincount(binids[mask], weights=weights[mask], minlength=n_bins)
+        return np.bincount(binids, weights=weights, minlength=n_bins)
+
+    sum_pos = bin_sum(u, pos)
+    sum_oth = bin_sum(u, ~pos)
+    var_pos = bin_sum(u**2, pos)
+    var_oth = bin_sum(u**2, ~pos)
+    sum_all = sum_pos + sum_oth
+    ok = sum_all > 0
+
+    prob_true = sum_pos[ok] / sum_all[ok]
+    prob_true_err = np.sqrt(
+        sum_oth[ok] ** 2 * var_pos[ok] + sum_pos[ok] ** 2 * var_oth[ok]
+    ) / sum_all[ok] ** 2
+    prob_pred = bin_sum(u * scores)[ok] / sum_all[ok]
+    # deviations from the mean of each bin
+    mean_per_event = np.zeros(n_bins)
+    mean_per_event[ok] = prob_pred
+    dev2 = bin_sum(u**2 * (scores - mean_per_event[binids]) ** 2)
+    prob_pred_err = np.sqrt(np.clip(dev2[ok], 0, None)) / sum_all[ok]
     return prob_true, prob_true_err, prob_pred, prob_pred_err
 
 
@@ -176,16 +191,21 @@ def plot_calibration_curve(
       fashion. For node ``i`` the true labels are turned into binary ones
       (``1`` for events of class ``i``, ``0`` for all the others).
 
-    Note that ``sklearn.calibration.calibration_curve`` does not support
-    event weights, so both the curve and the Brier score are unweighted.
-    The error bars on the fraction of positives are the binomial uncertainty
-    ``sqrt(p * (1 - p) / N)`` with ``N`` the number of events in the bin;
-    those on the mean predicted probability are ``std(score) / sqrt(N)``.
+    The curves and the Brier scores are computed on the class-normalised
+    histograms: the event weights of every class are divided by the sum of the
+    weights of the class (unit area), so the result does not depend on the
+    relative number of events of the classes in the test dataset, and a
+    classifier trained on balanced classes is on the diagonal when it is well
+    calibrated. For one-vs-rest all the classes are normalised, for the
+    pairwise curves the two classes of the pair. See
+    _normalized_calibration_curve for the uncertainties.
 
     Produces ``calibration_curve{,_class_<i>}.{png,pdf,svg}`` in ``dir``.
     """
-    n_score, label_col, _, _ = get_layout(score_lbl_tensor_test)
+    n_score, label_col, weight_col, _ = get_layout(score_lbl_tensor_test)
     labels = score_lbl_tensor_test[:, label_col].astype(int)
+    weights = score_lbl_tensor_test[:, weight_col].astype(np.float64)
+    all_classes = list(range(n_score)) if n_score > 1 else [0, 1]
 
     for out_idx in range(n_score):
         scores = score_lbl_tensor_test[:, out_idx]
@@ -199,10 +219,11 @@ def plot_calibration_curve(
             print(f"Skipping calibration curve for class {pos_class}: only one class present")
             continue
 
-        prob_true, prob_true_err, prob_pred, prob_pred_err = _calibration_curve_with_errors(
-            binary_labels, scores, n_bins
+        u = _class_normalized_weights(labels, weights, all_classes)
+        prob_true, prob_true_err, prob_pred, prob_pred_err = _normalized_calibration_curve(
+            binary_labels, scores, u, n_bins
         )
-        brier_score = brier_score_loss(binary_labels, scores)
+        brier_score = brier_score_loss(binary_labels, scores, sample_weight=u)
 
         if n_score > 1:
             name = _class_label(class_info, out_idx, fallback=f"class {out_idx}")
@@ -245,6 +266,7 @@ def plot_calibration_curve(
                 x=0.98,
                 y=0.05,
                 s=f"Brier score loss = {brier_score:.4f}"
+                + "\nclasses normalised to unit area"
                 + (f"\n" + rf"bkg $\kappa_\lambda$ = {kl_bkg_str}" if kl_bkg_str else ""),
                 fontsize=20,
                 ha="right",
@@ -274,10 +296,15 @@ def plot_calibration_curve(
                     )
                     continue
 
-                prob_true, prob_true_err, prob_pred, prob_pred_err = _calibration_curve_with_errors(
-                    reduced_labels, reduced_scores, n_bins
+                u_pair = _class_normalized_weights(
+                    labels[pair_mask], weights[pair_mask], [out_idx, ref_idx]
                 )
-                brier_score = brier_score_loss(reduced_labels, reduced_scores)
+                prob_true, prob_true_err, prob_pred, prob_pred_err = _normalized_calibration_curve(
+                    reduced_labels, reduced_scores, u_pair, n_bins
+                )
+                brier_score = brier_score_loss(
+                    reduced_labels, reduced_scores, sample_weight=u_pair
+                )
 
                 name = _class_label(class_info, out_idx, fallback=f"class {out_idx}")
                 name_ref = _class_label(class_info, ref_idx, fallback=f"class {ref_idx}")
@@ -316,6 +343,7 @@ def plot_calibration_curve(
                         x=0.98,
                         y=0.05,
                         s=f"Brier score loss = {brier_score:.4f}"
+                        + "\nclasses normalised to unit area"
                         + (f"\n" + rf"bkg $\kappa_\lambda$ = {kl_bkg_str}" if kl_bkg_str else ""),
                         fontsize=20,
                         ha="right",
@@ -799,6 +827,7 @@ def plot_roc_curve(
     lumitext=LUMITEXT,
     sig_over_bkg=SIG_OVER_BKG,
     dataset_idx_test=None,
+    save_roc=False,
 ):
     # Dispatch to multi-class ROCs when more than one score column is stored.
     n_score, label_col, weight_col, kl_col = get_layout(score_lbl_tensor_test)
@@ -813,6 +842,7 @@ def plot_roc_curve(
             kl_bkg_str=kl_bkg_str,
             lumitext=lumitext,
             dataset_idx_test=dataset_idx_test,
+            save_roc=save_roc,
         )
         if dataset_idx_test is not None:
             plot_per_dataset_roc_curves(
@@ -824,6 +854,7 @@ def plot_roc_curve(
                 comet_logger=comet_logger,
                 kl_bkg_str=kl_bkg_str,
                 lumitext=lumitext,
+                save_roc=save_roc,
             )
         return
 
@@ -952,7 +983,9 @@ def plot_roc_curve(
             comet_logger.log_image(f"{dir}/roc_curve_kl_{kl_tag}.png", name="roc_curve")
 
     # save tpr and fpr in a npz file
-    np.savez(f"{dir}/tpr_fpr.npz", **roc_info_dict)
+    # the ROC points, only with save_roc (--save-roc), to keep the outputs small
+    if save_roc:
+        np.savez(f"{dir}/tpr_fpr.npz", **roc_info_dict)
 
 
 def plot_kl_distributions(
@@ -974,7 +1007,11 @@ def plot_kl_distributions(
     sig_over_bkg=SIG_OVER_BKG,
     dataset_idx_train=None,
     dataset_idx_test=None,
+    save_roc=False,
 ):
+    """Plot the score distributions, ROC and calibration curves of the
+    training and test scores. The ROC points are saved (tpr_fpr*.npz) only
+    with save_roc."""
     if rescale is None:
         rescale = []
 
@@ -1066,6 +1103,7 @@ def plot_kl_distributions(
                 class_info=class_info,
                 sig_over_bkg=sig_over_bkg,
                 dataset_idx_test=test_dataset_idx,
+                save_roc=save_roc,
             )
 
         if do_calibration:
@@ -1359,6 +1397,7 @@ def plot_per_dataset_roc_curves(
     comet_logger=None,
     kl_bkg_str=None,
     lumitext=LUMITEXT,
+    save_roc=False,
 ):
     """For each class made of several coupling points (e.g. the VBF or ggF HH
     samples), plot the ROC of each of its datasets vs all the events of the
@@ -1430,7 +1469,8 @@ def plot_per_dataset_roc_curves(
             + (f"\n{annotation}" if annotation else ""),
         )
 
-    np.savez(f"{dir}/tpr_fpr_per_dataset.npz", **roc_info_dict)
+    if save_roc:
+        np.savez(f"{dir}/tpr_fpr_per_dataset.npz", **roc_info_dict)
 
 
 def plot_multiclass_sig_over_bkg_roc_curves(
@@ -1443,6 +1483,7 @@ def plot_multiclass_sig_over_bkg_roc_curves(
     kl_bkg_str=None,
     lumitext=LUMITEXT,
     dataset_idx_test=None,
+    save_roc=False,
 ):
     """For every entry of ``sig_over_bkg`` plot the ROC of the signal vs the
     sum of the backgrounds, using the discriminant
@@ -1497,7 +1538,8 @@ def plot_multiclass_sig_over_bkg_roc_curves(
             annotation=annotation,
         )
 
-    np.savez(f"{dir}/tpr_fpr_sig_over_bkg.npz", **roc_info_dict)
+    if save_roc:
+        np.savez(f"{dir}/tpr_fpr_sig_over_bkg.npz", **roc_info_dict)
 
 
 def plot_multiclass_sig_over_bkg(
@@ -1648,6 +1690,39 @@ def plot_multiclass_sig_over_bkg(
                 )
 
 
+def plot_kl_distributions_with_fallback(
+    score_lbl_train, score_lbl_test, out_dir, test_fraction, **plot_kwargs
+):
+    """plot_kl_distributions for all the background kl values and for
+    background kl = 1, or only for all the background kl values if the
+    latter fails (e.g. no background events with kl = 1)."""
+    try:
+        plot_kl_distributions(
+            score_lbl_train,
+            score_lbl_test,
+            out_dir,
+            ["all", 1.0],
+            test_fraction,
+            **plot_kwargs,
+        )
+    except ValueError as e:
+        logging.getLogger(__name__).warning(
+            f"Plotting for background kl = 1 failed ({type(e).__name__}: {e}). "
+            "Plotting only for all the background kl values."
+        )
+        # remove the incomplete plots of the failed kl = 1 attempt
+        for prefix in ["sig_bkg", "roc", "calibration"]:
+            shutil.rmtree(f"{out_dir}/{prefix}_bkgkl_1.00", ignore_errors=True)
+        plot_kl_distributions(
+            score_lbl_train,
+            score_lbl_test,
+            out_dir,
+            ["all"],
+            test_fraction,
+            **plot_kwargs,
+        )
+
+
 def main():
     # parse the arguments
     parser = argparse.ArgumentParser()
@@ -1690,6 +1765,12 @@ def main():
         "discriminants to plot, given as NAME=CLASS[:DATASET]=BKG1+BKG2 with the "
         "class names of the config and the short name of a dataset of the "
         "signal class (default: %(default)s).",
+    )
+
+    parser.add_argument(
+        "--save-roc",
+        action="store_true",
+        help="Save the ROC points (tpr_fpr*.npz) next to the ROC plots",
     )
 
     parser.print_help()
@@ -1769,6 +1850,7 @@ def main():
         sig_over_bkg=sig_over_bkg,
         dataset_idx_train=dataset_idx_train,
         dataset_idx_test=dataset_idx_test,
+        save_roc=args.save_roc,
     )
 
 
