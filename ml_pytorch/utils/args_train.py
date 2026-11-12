@@ -251,8 +251,8 @@ parser.add_argument(
 parser.add_argument(
     "--kfold-onnx",
     default=None,
-    choices=["average", "event"],
-    help="K-fold: final ONNX model, average over the folds or model of the fold event %% k_folds",
+    choices=["average", "event", "median"],
+    help="K-fold: final ONNX model, average over the folds, model of the fold event %% k_folds, or median over the folds of the weight (needs --onnx-ratio or morphing_alpha)",
     type=str,
 )
 parser.add_argument(

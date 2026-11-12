@@ -26,7 +26,7 @@ dnn_input_variables = OrderedDict(
         "higgs1_reco_eta": ["HiggsLeading", "eta"],
         "higgs1_reco_phi": ["HiggsLeading", "phi"],
         # "higgs1_reco_mass": ["HiggsLeading", "mass"],
-        "higgs1_btag_dig": ["HiggsLeading", "btagBBTXbb_dig"],
+        "higgs1_btag_dig": ["HiggsLeading", "btagBBTXbb_morph_5wp"],
         # "higgs1_btag_morph": ["HiggsLeading", "btagBBTXbb_morph"],
         "higgs1_centrality": ["HiggsLeading", "centrality"],
         "higgs2_reco_pt": ["HiggsSubLeading", "pt"],

@@ -1321,8 +1321,10 @@ def check_kfold_cfg(cfg, need_fold=True):
 
 
 def check_kfold_onnx_cfg(cfg):
-    if cfg.kfold_onnx not in ["average", "event"]:
-        raise ValueError(f"kfold_onnx must be average or event, got {cfg.kfold_onnx}")
+    if cfg.kfold_onnx not in ["average", "event", "median"]:
+        raise ValueError(
+            f"kfold_onnx must be average, event or median, got {cfg.kfold_onnx}"
+        )
     if cfg.kfold_onnx == "event" and cfg.kfold_split != "event":
         raise ValueError(
             "kfold_onnx: event (the model chosen by event number) needs "

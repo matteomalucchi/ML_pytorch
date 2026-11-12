@@ -138,6 +138,13 @@ onnx_ratio: False
 #            in the training, e.g. the sig/bkg or ggF/VBF classifiers. Events
 #            never seen in the training can be evaluated with any fold.
 #            Needs kfold_split: event.
+#   median : for each event, the median over the folds of the weight of each
+#            fold (the ratio of the outputs with onnx_ratio: True, or the
+#            morphing weight with morphing_alpha). The scores, numerators and
+#            denominators are not touched. It is robust to one fold with an
+#            outlying weight; with 2 folds it is the same as the average.
+#            Needs onnx_ratio or morphing_alpha. Its models are always saved
+#            next to the average ones when a weight is defined.
 kfold_onnx: average
 # K-fold, 4-node multiclass morphing (classes data num., data den., ttbar
 # num., ttbar den., see the README): ttbar fraction alpha = N_ttbar / N_data of
@@ -146,7 +153,8 @@ kfold_onnx: average
 # the final k-fold ONNX model is the morphing weight
 #   w = relu(r_0 - alpha * r_2) / relu(r_1 - alpha_den * r_3)
 # (averaged over the folds as ml_onnx -ar -mc does, or of the fold of the
-# event with kfold_onnx: event). morphing_alpha_den 0.0 switches off the ttbar
+# event with kfold_onnx: event, or the median over the folds of the weight of
+# each fold with kfold_onnx: median). morphing_alpha_den 0.0 switches off the ttbar
 # subtraction in the denominator.
 morphing_alpha: null
 morphing_alpha_den: 0.0
