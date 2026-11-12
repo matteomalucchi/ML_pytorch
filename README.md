@@ -553,6 +553,11 @@ Optional:
   --separate-merge        merge / post-process in a separate CPU job, releasing the GPUs earlier
   --monitor-interval SEC  seconds between the samples of the resource monitor (default: 10)
   --no-monitor            do not run the resource monitor (see "Resource usage monitor")
+  --copy-to DIR           copy OUTDIR to DIR (e.g. on /pnfs) at the end of the last job, if it
+                          succeeded (see "Copy of the output to /pnfs")
+  --copy-redirector URL   xrootd redirector for the copy with xrdcp
+                          (default: root://t3dcachedb03.psi.ch:1094)
+  --copy-only             only copy OUTDIR to --copy-to now, in this shell (no Slurm)
   --load-last             Resume from latest checkpoint
   --time HH:MM:SS         Slurm wall-clock time limit
   --mem-per-cpu MB        Slurm memory per CPU in MB (default: 4000)
@@ -591,6 +596,23 @@ cd jobs/
 - **`NODES>1`**: submits a Slurm array job (one element per node) plus a dependent post-processing job that runs after all array tasks succeed.
 - Each node runs its share of trainings (`N_TRAININGS / NODES`) in parallel using background processes.
 - With `--gpus-per-node N` each node/array job requests `--gres=gpu:N` and the trainings of the node are distributed round-robin over its GPUs (training `i` runs on GPU `i % N`). The CPUs of the job are split among the parallel trainings (`OMP_NUM_THREADS`, DataLoader workers), so the processes do not oversubscribe the cores.
+
+### Copy of the output to /pnfs
+
+With `--copy-to DIR` the output is written as usual to `--outdir` (e.g. on `/work`) and, at the end of the last job of the chain (the single training job, the inline or separate post-processing / k-fold merge job), if it succeeded, every file of `OUTDIR` is copied to the same relative path in `DIR`. `OUTDIR` is kept, and the shared k-fold cache is not copied.
+
+- Files on dCache (`/pnfs`) cannot be overwritten: an existing copy is removed first (`rm`, or `xrdfs rm`).
+- If `DIR` is writable through the mount (e.g. `/pnfs` on the T3 login nodes, or any normal disk) the copy is done with `rsync`. Otherwise (`/pnfs` is read-only on the batch nodes) it is done with `xrdcp --path --cksum adler32:source` through `--copy-redirector`. This needs a valid grid proxy readable from the batch node, e.g. `voms-proxy-init -voms cms -out ~/.x509up_u$(id -u)` and `export X509_USER_PROXY=~/.x509up_u$(id -u)` before submitting (`sbatch` exports the environment).
+- The size of every copy is checked (the content is checked by rsync / the xrdcp checksum). A wrong copy is removed and the job ends with an error. The Slurm logs, still being written, are copied without the size check.
+- To redo a failed copy (or to copy an existing output), run the same command with `--copy-only`. The copy then runs right away in the current shell, without Slurm.
+
+```bash
+./run_training.sh -c /full/path/config.yml -o /work/$USER/out -n 20 -g 4 --ratio \
+  --copy-to /pnfs/psi.ch/cms/trivcat/store/user/$USER/out
+# redo the copy by hand, e.g. from a login node
+./run_training.sh -c /full/path/config.yml -o /work/$USER/out \
+  --copy-to /pnfs/psi.ch/cms/trivcat/store/user/$USER/out --copy-only
+```
 
 ### Resource usage monitor
 

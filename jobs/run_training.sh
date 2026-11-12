@@ -88,6 +88,22 @@
 # summary is also printed at the end of the Slurm log.
 #   --monitor-interval SEC  Seconds between samples (default: 10)
 #   --no-monitor            Do not run the resource monitor
+#
+# Copy of the output (e.g. to /pnfs): at the end of the last job of the chain
+# (the one that finishes the training, or the merge / post-processing), if it
+# succeeded, every file of OUTDIR is copied to the same relative path in
+# COPY_DIR, whose files already there are replaced. OUTDIR is kept. Files on
+# /pnfs cannot be overwritten, so they are removed first. If COPY_DIR is
+# writable through the mount (e.g. /pnfs on the T3 login nodes) the copy is
+# done with rsync, otherwise (/pnfs is read-only on the batch nodes) with xrdcp
+# through --copy-redirector (needs a valid grid proxy, readable from the node,
+# e.g. X509_USER_PROXY in the home), checking the adler32 checksum. The size of
+# every copy is checked; the shared k-fold cache is not copied.
+#   --copy-to DIR           Copy OUTDIR to DIR at the end of the last job
+#   --copy-redirector URL   xrootd redirector for the copy to /pnfs from the
+#                           batch nodes (default: root://t3dcachedb03.psi.ch:1094)
+#   --copy-only             Only copy OUTDIR to --copy-to now, in this shell
+#                           (no Slurm), e.g. to redo a failed copy
 
 # ─── Defaults ─────────────────────────────────────────────────────────────────
 N_TRAININGS=1
@@ -130,6 +146,12 @@ SLOTS_PER_GPU=0
 SEPARATE_MERGE=false
 MONITOR=true
 MONITOR_INTERVAL=10
+COPY_DIR=""
+# xrootd door used to write on /pnfs from the batch nodes
+COPY_REDIRECTOR="root://t3dcachedb03.psi.ch:1094"
+COPY_ONLY=false
+# set by the last job of the chain: copy OUT_DIR to COPY_DIR when it succeeds
+COPY_AT_END=false
 # partition and account of the GPU jobs (as in the #SBATCH lines above)
 GPU_PARTITION="gpu"
 GPU_ACCOUNT="gpu_gres"
@@ -225,6 +247,20 @@ OUTDIR/resource_usage/, with a summary and suggested resources):
   --monitor-interval SEC  Seconds between samples (default: 10)
   --no-monitor            Do not run the resource monitor
 
+Copy of the output (e.g. to /pnfs, where files cannot be written directly):
+  --copy-to DIR           At the end of the last job (training, or merge /
+                          post-processing), if it succeeded, copy every file of
+                          OUTDIR to DIR (same relative paths, existing files
+                          replaced, OUTDIR kept, shared k-fold cache skipped):
+                          with rsync if DIR is writable through the mount,
+                          otherwise (/pnfs on the batch nodes) with xrdcp
+                          through --copy-redirector (needs a valid grid proxy
+                          readable from the node), checking the copies
+  --copy-redirector URL   xrootd redirector for the xrdcp copy
+                          (default: root://t3dcachedb03.psi.ch:1094)
+  --copy-only             Only copy OUTDIR to --copy-to now, in this shell (no
+                          Slurm), e.g. to redo a failed copy
+
 Examples:
   # Single training
   $0 -c /full/path/DNN_config.yml -o /full/path/out
@@ -259,6 +295,14 @@ Examples:
 
   # One big job: at most 2 folds per GPU at a time, merge in a separate CPU job
   $0 -c /full/path/DNN_config.yml -o /full/path/out -k 20 -g 8 --cpus 40 --slots-per-gpu 2 --separate-merge
+
+  # 20 trainings, output copied to /pnfs at the end of the job
+  $0 -c /full/path/DNN_config.yml -o /work/\$USER/out -n 20 -g 4 --ratio \\
+     --copy-to /pnfs/psi.ch/cms/trivcat/store/user/\$USER/out
+
+  # Redo the copy by hand (e.g. from a login node)
+  $0 -c /full/path/DNN_config.yml -o /work/\$USER/out \\
+     --copy-to /pnfs/psi.ch/cms/trivcat/store/user/\$USER/out --copy-only
 
   # Local test
   $0 -c /full/path/DNN_config.yml -o /full/path/out --no-slurm
@@ -307,6 +351,9 @@ while [[ $# -gt 0 ]]; do
         --separate-merge)  SEPARATE_MERGE=true; shift ;;
         --monitor-interval) MONITOR_INTERVAL="$2"; shift 2 ;;
         --no-monitor)      MONITOR=false; shift ;;
+        --copy-to)         COPY_DIR="$2"; shift 2 ;;
+        --copy-redirector) COPY_REDIRECTOR="$2"; shift 2 ;;
+        --copy-only)       COPY_ONLY=true; shift ;;
         --mode)            MODE="$2"; shift 2 ;;
         -h|--help)         usage ;;
         --)                shift; EXTRA_ARGS=("$@"); break ;;
@@ -397,6 +444,20 @@ if [[ "$FOLDS_PER_JOB" -lt 1 ]]; then
     echo "Error: --folds-per-job must be >= 1."
     exit 1
 fi
+if [[ "$COPY_ONLY" == true && -z "$COPY_DIR" ]]; then
+    echo "Error: --copy-only needs --copy-to."
+    exit 1
+fi
+if [[ -n "$COPY_DIR" ]]; then
+    if [[ "$COPY_DIR" != /* || "$OUT_DIR" != /* ]]; then
+        echo "Error: --copy-to and --outdir must be full paths."
+        exit 1
+    fi
+    if [[ "${COPY_DIR%/}/" == "${OUT_DIR%/}/"* || "${OUT_DIR%/}/" == "${COPY_DIR%/}/"* ]]; then
+        echo "Error: --copy-to and --outdir must not contain one another."
+        exit 1
+    fi
+fi
 
 # Folds of a list like "0-4,7,9-10" (sorted, unique), checked against K_FOLDS
 parse_folds() {
@@ -466,9 +527,87 @@ build_submit_args() {
     [[ "$SEPARATE_MERGE" == true ]] && args+=(--separate-merge)
     args+=(--monitor-interval "$MONITOR_INTERVAL")
     [[ "$MONITOR" != true ]] && args+=(--no-monitor)
+    [[ -n "$COPY_DIR" ]] && args+=(--copy-to "$COPY_DIR" --copy-redirector "$COPY_REDIRECTOR")
     [[ ${#EXTRA_ARGS[@]} -gt 0 ]] && args+=(-- "${EXTRA_ARGS[@]}")
     printf '%s\0' "${args[@]}"
 }
+
+# ─── Copy of the output directory (e.g. to /pnfs) ────────────────────────────
+# True if path (or its closest existing parent) is writable through the mount:
+# /pnfs is writable on the T3 login nodes, read-only on the batch nodes
+dir_writable() {
+    local path="$1"
+    while [[ ! -e "$path" ]]; do path=$(dirname "$path"); done
+    [[ -w "$path" ]]
+}
+
+# Remove a copied file, through xrootd if a redirector is given
+remove_copy() {
+    local file="$1" redirector="$2"
+    if [[ -z "$redirector" ]]; then
+        rm -f "$file"
+    else
+        xrdfs "$redirector" rm "$file"
+    fi
+}
+
+# Copy every file of OUT_DIR to the same relative path in COPY_DIR (except the
+# shared k-fold cache), replacing the files already there, and check the size
+# of every copy (rsync and xrdcp --cksum check the content). A copy that fails
+# is removed; OUT_DIR is always kept. Returns 1 if any copy failed.
+copy_outdir() {
+    local src_root="${OUT_DIR%/}" dst_root="${COPY_DIR%/}" redirector=""
+    if [[ "$dst_root" == /pnfs/* ]] && ! dir_writable "$dst_root"; then
+        # read-only through the mount (batch nodes): write through xrootd
+        redirector="$COPY_REDIRECTOR"
+        if command -v voms-proxy-info >/dev/null && ! voms-proxy-info --exists >/dev/null 2>&1; then
+            echo "Warning: no valid grid proxy found (X509_USER_PROXY=${X509_USER_PROXY:-unset}): xrdcp will probably fail."
+        fi
+        echo "Copying ${src_root} -> ${dst_root} with xrdcp through ${redirector}"
+    else
+        echo "Copying ${src_root} -> ${dst_root} with rsync"
+    fi
+
+    local n_ok=0 n_fail=0 src rel dst src_size dst_size
+    while IFS= read -r -d '' src; do
+        rel="${src#"${src_root}"/}"
+        dst="${dst_root}/${rel}"
+        # files on dCache cannot be overwritten: remove the old copy first
+        if [[ -e "$dst" ]] && ! remove_copy "$dst" "$redirector"; then
+            echo "  Error: cannot remove the old copy ${dst}"
+            n_fail=$(( n_fail + 1 ))
+            continue
+        fi
+        if [[ -z "$redirector" ]]; then
+            mkdir -p "$(dirname "$dst")" && rsync -a "$src" "$dst"
+        else
+            # --path creates the missing directories, --cksum checks adler32
+            xrdcp --nopbar --path --cksum adler32:source "$src" "${redirector}/${dst}"
+        fi
+        if [[ $? -eq 0 ]]; then
+            src_size=$(stat -c %s "$src")
+            dst_size=$(stat -c %s "$dst" 2>/dev/null)
+            # the Slurm logs are still being written by this job: no size check
+            if [[ "$src_size" == "$dst_size" || "$(basename "$src")" == slurm-*.out ]]; then
+                n_ok=$(( n_ok + 1 ))
+                continue
+            fi
+            echo "  Error: size of ${dst} ${dst_size:-missing} != ${src_size}"
+        else
+            echo "  Error: copy of ${src} failed"
+        fi
+        [[ -e "$dst" ]] && remove_copy "$dst" "$redirector"
+        n_fail=$(( n_fail + 1 ))
+    done < <(find "$src_root" -path "${SHARED_CACHE_DIR%/}" -prune -o -type f -print0)
+
+    echo "Copied ${n_ok} file(s) to ${dst_root}, ${n_fail} failed (the originals are kept in ${src_root})"
+    [[ "$n_fail" -eq 0 ]]
+}
+
+if [[ "$COPY_ONLY" == true ]]; then
+    copy_outdir
+    exit $?
+fi
 
 # ─── Self-submission ──────────────────────────────────────────────────────────
 if [[ -z "${SLURM_JOB_ID:-}" && "$NO_SLURM" != true ]]; then
@@ -972,13 +1111,17 @@ stop_monitor() {
 }
 
 # at the end of the job, also if it fails or is killed: stop the monitor
-# (final summary) and remove the node-local k-fold cache
+# (final summary) and remove the node-local k-fold cache; then, if this is the
+# last job of the chain and it succeeded, copy OUT_DIR to --copy-to
 on_exit() {
     local rc=$?
     stop_monitor "$rc"
     if [[ -n "$REMOVE_ON_EXIT" ]]; then
         echo "Removing the k-fold cache ${REMOVE_ON_EXIT}"
         rm -rf "$REMOVE_ON_EXIT"
+    fi
+    if [[ "$rc" -eq 0 && "$COPY_AT_END" == true && -n "$COPY_DIR" ]]; then
+        copy_outdir || rc=1
     fi
     exit "$rc"
 }
@@ -1046,11 +1189,15 @@ case "$MODE" in
         # For single-node multi-training: run postproc inline (no separate job)
         if [[ "$N_TRAININGS" -gt 1 && "$NODES" -eq 1 && ( "$SEPARATE_MERGE" != true || "$NO_SLURM" == true ) ]]; then
             run_postproc
+            COPY_AT_END=true
         fi
+        # a single training is the last job too (otherwise the post-processing
+        # job copies the output)
+        [[ "$N_TRAININGS" -eq 1 && "$NODES" -eq 1 ]] && COPY_AT_END=true
         ;;
 
     postproc)
-        run_postproc
+        run_postproc && COPY_AT_END=true
         ;;
 
     prepare_shared)
@@ -1089,6 +1236,7 @@ case "$MODE" in
         fi
         [[ -d "$SHARED_CACHE_DIR" ]] && MERGE_CACHE_DIR="$SHARED_CACHE_DIR"
         run_postproc || exit 1
+        COPY_AT_END=true
         if [[ "$KEEP_CACHE" != true && -d "$SHARED_CACHE_DIR" ]]; then
             echo "Removing the shared k-fold cache ${SHARED_CACHE_DIR}"
             rm -rf "$SHARED_CACHE_DIR"
@@ -1100,6 +1248,7 @@ case "$MODE" in
         # it is not there, the merge loads the events again)
         [[ -d "$SHARED_CACHE_DIR" ]] && MERGE_CACHE_DIR="$SHARED_CACHE_DIR"
         run_postproc || exit 1
+        COPY_AT_END=true
         if [[ "$KEEP_CACHE" != true && -d "$SHARED_CACHE_DIR" ]]; then
             echo "Removing the shared k-fold cache ${SHARED_CACHE_DIR}"
             rm -rf "$SHARED_CACHE_DIR"
@@ -1118,6 +1267,7 @@ case "$MODE" in
         done
         MERGE_CACHE_DIR="$SHARED_CACHE_DIR"
         run_postproc || exit 1
+        COPY_AT_END=true
         if [[ "$KEEP_CACHE" != true ]]; then
             echo "Removing the shared k-fold cache ${SHARED_CACHE_DIR}"
             rm -rf "$SHARED_CACHE_DIR"
