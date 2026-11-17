@@ -587,11 +587,28 @@ def eval_model(model, loader, loss_fn, type_eval, device, best_epoch):
     return score_lbl_array, all_dataset_idx.numpy(), avg_loss, avg_accuracy
 
 
-def export_onnx(model, model_name, batch_size, input_size, device, onnx_model_name):
+def export_onnx(
+    model,
+    model_name,
+    batch_size,
+    input_size,
+    device,
+    onnx_model_name,
+    export_method="export_model",
+):
+    """Export ``model`` to <dir of model_name>/<onnx_model_name>.onnx, wrapped
+    by its ``export_method`` (``export_model``: e.g. the softmax of the
+    logits, if the model defines it; ``export_logdiff_model``: z_1 - z_0 for
+    onnx_logdiff, which the model must define). Returns the ONNX file."""
     model_dir = os.path.dirname(model_name)
     logger.info(f"Exporting model to ONNX format at {model_dir}/{onnx_model_name}.onnx")
-    if hasattr(model, "export_model"):
-        model = model.export_model(model)
+    if export_method != "export_model" and not hasattr(model, export_method):
+        raise ValueError(
+            f"The model {type(model).__name__} has no {export_method} method "
+            f"(needed by onnx_logdiff: only the 2-node softmax reweight models have it)"
+        )
+    if hasattr(model, export_method):
+        model = getattr(model, export_method)(model)
     # export with the running statistics of the (masked) batch norm
     model.eval()
 
@@ -613,6 +630,42 @@ def export_onnx(model, model_name, batch_size, input_size, device, onnx_model_na
         },
     )
     logger.info(f"Exported model to ONNX format at {model_dir}/{onnx_model_name}.onnx")
+    return f"{model_dir}/{onnx_model_name}.onnx"
+
+
+def check_logdiff_onnx(softmax_file, logdiff_file, x, rtol=1e-4, p0_min=1e-6):
+    """Check that exp(logdiff) of the ``_logdiff.onnx`` model matches the
+    ratio p1 / p0 of the softmax ONNX model on the inputs ``x`` (float32
+    [N, n_features]), for the events with p0 > p0_min (where the softmax
+    ratio is not dominated by the float32 rounding of p0). Returns the
+    maximum relative difference."""
+    import onnxruntime as ort
+
+    def run(f):
+        session = ort.InferenceSession(f, providers=["CPUExecutionProvider"])
+        return session.run(None, {session.get_inputs()[0].name: x})[0]
+
+    p = run(softmax_file)
+    logdiff = run(logdiff_file)
+    if logdiff.shape != (len(x),):
+        raise RuntimeError(
+            f"{logdiff_file} has output shape {logdiff.shape}, expected ({len(x)},)"
+        )
+    mask = p[:, 0] > p0_min
+    ratio = p[mask, 1].astype(np.float64) / p[mask, 0]
+    w = np.exp(logdiff[mask].astype(np.float64))
+    rel = np.abs(w - ratio) / np.abs(ratio)
+    max_rel = float(rel.max()) if rel.size else 0.0
+    if not np.allclose(w, ratio, rtol=rtol, atol=0):
+        raise RuntimeError(
+            f"exp({logdiff_file}) does not match p1 / p0 of {softmax_file}: "
+            f"max relative difference {max_rel:.3e} (rtol {rtol})"
+        )
+    logger.info(
+        f"Checked exp(logdiff) = p1 / p0 on {int(mask.sum())}/{len(x)} events with "
+        f"p0 > {p0_min}: max relative difference {max_rel:.3e}"
+    )
+    return max_rel
 
 
 def create_DNN_columns_list(run2, dnn_input_variables):

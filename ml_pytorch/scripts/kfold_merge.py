@@ -317,7 +317,12 @@ def merge_scores(cfg, fold_dirs, out_dir, save=False):
 
 
 def find_best_onnx(fold_dir):
-    onnx_files = sorted(glob.glob(f"{fold_dir}/state_dict/model_best_epoch_*.onnx"))
+    onnx_files = sorted(
+        f
+        for f in glob.glob(f"{fold_dir}/state_dict/model_best_epoch_*.onnx")
+        # the _logdiff.onnx models of onnx_logdiff are not the best model
+        if not f.endswith("_logdiff.onnx")
+    )
     if not onnx_files:
         raise FileNotFoundError(
             f"No best model ONNX found in {fold_dir}/state_dict (train with onnx: True)"

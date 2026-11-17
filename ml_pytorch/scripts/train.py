@@ -29,6 +29,7 @@ from ml_pytorch.utils.tools import (
     eval_model,
     add_training_state,
     copy_input_variables_file,
+    check_logdiff_onnx,
     export_onnx,
     kfold_weights_seed,
     resolve_input_variables,
@@ -45,6 +46,31 @@ if args.comet_token:
     from comet_ml.integration.pytorch import log_model
 
 import torch
+
+
+def first_batch_inputs(loader, n_max=4096):
+    """Input features (without the event weight, the last column) of the
+    first batch of ``loader``, as a float32 numpy array on the CPU."""
+    inputs = next(iter(loader))[0]
+    return inputs[:n_max, :-1].detach().cpu().numpy().astype(np.float32)
+
+
+def export_logdiff_onnx(model, model_name, batch_size, input_size, onnx_model_name, loader):
+    """onnx_logdiff: export also <onnx_model_name>_logdiff.onnx (z_1 - z_0,
+    see export_logdiff_model of the 2-node softmax reweight models) next to
+    the softmax model <onnx_model_name>.onnx, and check on the first batch of
+    ``loader`` that exp(logdiff) = p1 / p0 where p0 > 1e-6."""
+    logdiff_file = export_onnx(
+        model,
+        model_name,
+        batch_size,
+        input_size,
+        "cpu",
+        f"{onnx_model_name}_logdiff",
+        export_method="export_logdiff_model",
+    )
+    softmax_file = f"{os.path.dirname(model_name)}/{onnx_model_name}.onnx"
+    check_logdiff_onnx(softmax_file, logdiff_file, first_batch_inputs(loader))
 
 
 def make_output_dir(main_dir, overwrite):
@@ -683,6 +709,11 @@ def main():
             "cpu",
             f"model_last_epoch_{epoch}",
         )
+        if cfg.onnx_logdiff:
+            export_logdiff_onnx(
+                model, model_dir, batch_size, input_size, f"model_last_epoch_{epoch}",
+                test_loader,
+            )
 
     if cfg.history:
         # plot the training and validation loss and accuracy
@@ -735,6 +766,19 @@ def main():
                 else os.path.basename(cfg.eval_model).replace(".pt", "")
             ),
         )
+        if cfg.onnx_logdiff:
+            export_logdiff_onnx(
+                model,
+                best_model_name if not cfg.eval_model else cfg.eval_model,
+                batch_size,
+                input_size,
+                (
+                    f"model_best_epoch_{best_epoch}"
+                    if not cfg.eval_model
+                    else os.path.basename(cfg.eval_model).replace(".pt", "")
+                ),
+                test_loader,
+            )
 
     model.to(device)
     model.eval()

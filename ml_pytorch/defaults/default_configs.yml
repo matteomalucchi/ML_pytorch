@@ -142,6 +142,15 @@ onnx_ratio: False
 #            Needs onnx_ratio or morphing_alpha. Its models are always saved
 #            next to the average ones when a weight is defined.
 kfold_onnx: average
+# Export also, next to every per-fold ONNX model (state_dict/<name>.onnx,
+# softmax outputs, unchanged), the model <name>_logdiff.onnx whose output is
+# the log of the per-fold weight computed directly from the logits,
+# z_1 - z_0 = log(p1 / p0) (shape [N]), which does not saturate where p0 -> 0
+# in float32. Only for the 2-node softmax reweight models
+# (DNN_softmax_reweight_model*, which define export_logdiff_model); the
+# training checks that exp(logdiff) = p1 / p0 (rtol 1e-4) on a batch where
+# p0 > 1e-6.
+onnx_logdiff: False
 # K-fold, 4-node multiclass morphing (classes data num., data den., ttbar
 # num., ttbar den., see the README): ttbar fraction alpha = N_ttbar / N_data of
 # the numerator region and of the denominator region (computed by ml_alpha,
