@@ -1320,10 +1320,21 @@ def check_kfold_cfg(cfg, need_fold=True):
 
 
 def check_kfold_onnx_cfg(cfg):
-    if cfg.kfold_onnx not in ["average", "event", "median"]:
+    kfold_onnx_choices = ["average", "event", "median", "logaverage", "logmedian"]
+    if cfg.kfold_onnx not in kfold_onnx_choices:
         raise ValueError(
-            f"kfold_onnx must be average, event or median, got {cfg.kfold_onnx}"
+            f"kfold_onnx must be one of {kfold_onnx_choices}, got {cfg.kfold_onnx}"
         )
+    if cfg.kfold_onnx in ["logaverage", "logmedian"] and not cfg.get(
+        "onnx_logdiff", False
+    ):
+        raise ValueError(
+            f"kfold_onnx: {cfg.kfold_onnx} combines the per-fold log-weights of "
+            "the _logdiff.onnx models: it needs onnx_logdiff: True"
+        )
+    clamp = cfg.get("weight_log_clamp", None)
+    if clamp is not None and not float(clamp) > 0:
+        raise ValueError(f"weight_log_clamp must be positive or null, got {clamp}")
     if cfg.kfold_onnx == "event" and cfg.kfold_split != "event":
         raise ValueError(
             "kfold_onnx: event (the model chosen by event number) needs "

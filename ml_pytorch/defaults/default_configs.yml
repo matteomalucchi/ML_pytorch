@@ -141,6 +141,16 @@ onnx_ratio: False
 #            outlying weight; with 2 folds it is the same as the average.
 #            Needs onnx_ratio or morphing_alpha. Its models are always saved
 #            next to the average ones when a weight is defined.
+#   logaverage: exp of the average over the folds of the per-fold log-weight
+#            z_1 - z_0 (the logits of the 2-node softmax models, see
+#            onnx_logdiff), i.e. the geometric mean of the per-fold weights
+#            p1 / p0, saved as kfold_morphing_ratio_logaverage.onnx. Less
+#            sensitive than the average to one fold with a huge weight.
+#            Needs onnx_logdiff.
+#   logmedian: exp of the median over the folds of the per-fold log-weight
+#            (kfold_morphing_ratio_logmedian.onnx). Needs onnx_logdiff.
+#   With onnx_logdiff the logaverage and logmedian models are always saved
+#   next to the others, so that all the combinations can be compared.
 kfold_onnx: average
 # Export also, next to every per-fold ONNX model (state_dict/<name>.onnx,
 # softmax outputs, unchanged), the model <name>_logdiff.onnx whose output is
@@ -149,8 +159,23 @@ kfold_onnx: average
 # in float32. Only for the 2-node softmax reweight models
 # (DNN_softmax_reweight_model*, which define export_logdiff_model); the
 # training checks that exp(logdiff) = p1 / p0 (rtol 1e-4) on a batch where
-# p0 > 1e-6.
+# p0 > 1e-6. Needed by kfold_onnx logaverage / logmedian; with
+# kfold_split: event the k-fold event model of the weight
+# (kfold_morphing_ratio_event_fold.onnx) is then also built from it,
+# w = exp(clamp(Delta_k, -c, c)) of the fold k = event % k_folds.
 onnx_logdiff: False
+# Bound of the log of the final k-fold weights (c, float, or null for no
+# bound). If set, all the final weight models of the binary reweighting
+# (kfold_morphing_ratio_*: average, median, event_fold, logaverage,
+# logmedian; not all_folds and not the multiclass morphing) are bounded:
+#   - logaverage, logmedian (and event_fold with onnx_logdiff): the combined
+#     log-weight is clamped to [-c, c] before the exp;
+#   - average, median, event_fold: the final weight is clipped to
+#     [exp(-c), exp(c)].
+# The fraction of the events whose weight is clamped (on the k-fold data, see
+# ml_kfold_merge) is written to <output_dir>/kfold/kfold_summary.yml
+# (weight_clamp). E.g. 3.912 = ln 50 bounds the weights to [1/50, 50].
+weight_log_clamp: null
 # K-fold, 4-node multiclass morphing (classes data num., data den., ttbar
 # num., ttbar den., see the README): ttbar fraction alpha = N_ttbar / N_data of
 # the numerator region and of the denominator region (computed by ml_alpha,
