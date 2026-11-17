@@ -137,22 +137,6 @@ class DNN(nn.Module):
 
         return ONNXWrappedModel(model)
 
-    def export_logdiff_model(self, model):
-        """Wrapper returning the log of the per-fold weight p1 / p0 directly
-        from the logits, z_1 - z_0 (shape [N]), without the softmax: it does
-        not saturate where p0 -> 0 (onnx_logdiff)."""
-
-        class ONNXLogDiffModel(torch.nn.Module):
-            def __init__(self, original_model):
-                super().__init__()
-                self.model = original_model
-
-            def forward(self, x):
-                logits = self.model(x)
-                return logits[:, 1] - logits[:, 0]
-
-        return ONNXLogDiffModel(model)
-
 
 def get_model(
     input_size,

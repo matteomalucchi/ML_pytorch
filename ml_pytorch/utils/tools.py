@@ -605,7 +605,8 @@ def export_onnx(
     if export_method != "export_model" and not hasattr(model, export_method):
         raise ValueError(
             f"The model {type(model).__name__} has no {export_method} method "
-            f"(needed by onnx_logdiff: only the 2-node softmax reweight models have it)"
+            f"(needed by onnx_logdiff: use DNN_softmax_reweight_model_maskedBN1D_logdiff "
+            f"or DNN_softmax_reweight_model_maskedBN1D_small)"
         )
     if hasattr(model, export_method):
         model = getattr(model, export_method)(model)

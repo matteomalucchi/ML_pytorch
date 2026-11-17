@@ -57,7 +57,8 @@ def first_batch_inputs(loader, n_max=4096):
 
 def export_logdiff_onnx(model, model_name, batch_size, input_size, onnx_model_name, loader):
     """onnx_logdiff: export also <onnx_model_name>_logdiff.onnx (z_1 - z_0,
-    see export_logdiff_model of the 2-node softmax reweight models) next to
+    see export_logdiff_model of DNN_softmax_reweight_model_maskedBN1D_logdiff
+    and DNN_softmax_reweight_model_maskedBN1D_small) next to
     the softmax model <onnx_model_name>.onnx, and check on the first batch of
     ``loader`` that exp(logdiff) = p1 / p0 where p0 > 1e-6."""
     logdiff_file = export_onnx(
@@ -491,6 +492,13 @@ def main():
             )
         model, loss_fn, optimizer, scheduler = ML_model.get_model(
             input_size, device, cfg.learning_rate, cfg.learning_rate_schedule, n_epochs
+        )
+    if cfg.onnx and cfg.onnx_logdiff and not hasattr(model, "export_logdiff_model"):
+        # fail before the training, not at the ONNX export
+        raise ValueError(
+            f"onnx_logdiff: True needs a model with export_logdiff_model "
+            f"(DNN_softmax_reweight_model_maskedBN1D_logdiff or "
+            f"DNN_softmax_reweight_model_maskedBN1D_small), not {cfg.ML_model}"
         )
     num_parameters = get_model_parameters_number(model)
 

@@ -1,3 +1,7 @@
+"""Smaller, more regularised version of DNN_softmax_reweight_model_maskedBN1D
+(hidden layers 128-64-32, dropout 0.3, weight decay 1e-3), with also
+export_logdiff_model, the per-fold log-weight z_1 - z_0 exported with
+onnx_logdiff: True as <model>_logdiff.onnx."""
 from torch import nn
 import torch
 

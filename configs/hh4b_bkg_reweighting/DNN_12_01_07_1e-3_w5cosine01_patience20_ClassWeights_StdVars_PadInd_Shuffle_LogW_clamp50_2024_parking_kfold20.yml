@@ -1,12 +1,11 @@
 # Background morphing (2b -> 4b control region) on the 2024 ParkingHH data.
 # Version of
 # DNN_12_01_06_1e-3_w5cosine01_patience20_ClassWeights_StdVars_PadInd_Shuffle_2024_parking_kfold20.yml
-# with technical fixes only (same model, inputs, training and random k-fold
-# split): 12_01_06 closes well in the control region but badly in the signal
-# region, with
-# weights up to 1e10 from the ratio p1 / p0 of the softmax outputs, which
-# saturates where p0 -> 0, averaged over the folds (one fold with a huge
-# weight dominates the average). Here:
+# with technical fixes only (same model architecture, inputs, training and
+# random k-fold split): 12_01_06 closes well in the control region but badly
+# in the signal region, with weights up to 1e10 from the ratio p1 / p0 of the
+# softmax outputs, which saturates where p0 -> 0, averaged over the folds (one
+# fold with a huge weight dominates the average). Here:
 #   - the per-fold weight is taken in log space from the logits,
 #     log w_k = z1 - z0 (onnx_logdiff), and the folds are combined with the
 #     geometric mean exp(mean_k log w_k) (kfold_onnx: logaverage);
@@ -72,7 +71,9 @@ onnx_ratio: True
 onnx_logdiff: True
 weight_log_clamp: 3.912
 
-ML_model: DNN_softmax_reweight_model_maskedBN1D
+# same model as 12_01_06 (DNN_softmax_reweight_model_maskedBN1D), which also
+# exports the per-fold log-weight z1 - z0 (onnx_logdiff)
+ML_model: DNN_softmax_reweight_model_maskedBN1D_logdiff
 
 data_format: parquet
 
