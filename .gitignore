@@ -3,6 +3,8 @@
 __pycache__/
 *.log
 out*/
+output*/
+plot*/
 *.egg-info
 slurm*out
 test/

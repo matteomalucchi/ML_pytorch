@@ -22,6 +22,7 @@ from ml_pytorch.utils.dataset import (
     load_data,
     loaders_to_device,
 )
+from ml_pytorch.utils.bdt_tools import check_bdt_cfg, is_bdt_model, run_bdt_training
 from ml_pytorch.utils.early_stopper import EarlyStopper
 from ml_pytorch.utils.lumitext import get_lumitext
 from ml_pytorch.utils.setup_logger import setup_logger
@@ -185,6 +186,10 @@ def main():
     for key, val in args.__dict__.items():
         if val is not None:
             cfg[key] = val
+
+    # BDT (XGBoost) instead of a torch model: one model per training
+    if is_bdt_model(cfg.ML_model):
+        check_bdt_cfg(cfg)
 
     if cfg.histos or cfg.roc:
         from ml_pytorch.scripts.sig_bkg_eval import (
@@ -389,6 +394,23 @@ def main():
             class_info=class_info,
         )
         logger.info(f"Input variable distributions saved in {input_plots_dir}")
+
+    if getattr(ML_model, "IS_BDT", False):
+        # the BDT is trained, evaluated and saved by bdt_tools: same data,
+        # weights, log format and evaluation plots as the DNN, no torch loop
+        run_bdt_training(
+            cfg,
+            ML_model,
+            (training_loader, val_loader, test_loader),
+            num_classes,
+            class_info,
+            input_variables,
+            main_dir,
+            lumitext,
+            comet_logger,
+            args.save_numpy,
+        )
+        return
 
     if cfg.gpus is not None and cfg.gpus != "cpu":
         gpus = [int(i) for i in cfg.gpus.split(",")]

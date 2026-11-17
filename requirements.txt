@@ -9,6 +9,9 @@ omegaconf>=2.3
 onnx>=1.15
 onnxscript
 onnxruntime>=1.15
+onnxmltools>=1.12  # BDT: XGBoost to ONNX
+optuna>=3  # BDT: hyperparameter search
+xgboost>=2
 pandas>=2
 pyarrow>=9
 spox>=0.9

@@ -698,6 +698,45 @@ The output goes to `out/sig_bkg_classifier/<config_name>/`, separately from the 
 `sig_bkg_dnn_score_ggFvsBKG` / `sig_bkg_dnn_score_VBFvsBKG` discriminants, which are then used to optimise the
 signal categories.
 
+### BDT (XGBoost) instead of the DNN
+
+The same classifier can be trained with a boosted decision tree: the config is the DNN one (same `input_variables`,
+`classes`, `data_dirs`, weights) with `ML_model: XGB_multiclass_model`, e.g.
+[`boosted/xgb_boosted_signal_background_classifier_50GeV_noH2WP_txbbwps.yml`](configs/hh4b_sig_bkg_classifier/boosted/xgb_boosted_signal_background_classifier_50GeV_noH2WP_txbbwps.yml).
+The data loading, the class weights (balanced by weights: set `oversample_split: False`), the log format and the
+evaluation plots are the ones of the DNN training, so the output folder looks like a DNN one. One model per
+training: k-fold training and `--load-model` are not supported (a clear error is raised).
+
+```bash
+cd jobs/
+sbatch run_bdt_training.sh boosted/xgb_boosted_signal_background_classifier_50GeV_noH2WP_txbbwps.yml
+# with the Optuna search of the hyperparameters (50 trials, then the final training with the best ones)
+sbatch run_bdt_training.sh boosted/xgb_boosted_signal_background_classifier_50GeV_noH2WP_txbbwps_optuna.yml
+# locally, without a GPU
+bash run_bdt_training.sh boosted/xgb_....yml /path/to/out --gpus cpu
+```
+
+The common options are reused: `epochs` is the maximum number of rounds (trees per class), `learning_rate` the eta,
+`patience`/`min_delta`/`eval_param` the early stopping on the validation set, `gpus` the XGBoost device (`cpu` or the
+GPU number). Everything else is in the `bdt_params` dictionary of the config (any `XGBClassifier` argument). The trees
+after the best round are removed, so the ONNX model is the best one.
+
+Besides the usual outputs (`logger_*.log`, `history.*`, `input_variables/`, `sig_bkg_bkgkl_all/`, `roc_bkgkl_all/`,
+`calibration_bkgkl_all/`, `config_parameters.yml`, `state_dict/model_best_epoch_<n>.onnx`), the BDT writes:
+
+* `state_dict/model_best_epoch_<n>.json`: the native XGBoost model (evaluate it again with `--eval-model <json>`);
+* `feature_importance/`: `feature_importance.yml` (gain, total gain, number of splits and cover of each input variable, for
+  all the classes and for each class) and the plots of the fraction of the total gain and of the number of splits;
+* `training_info.yml`: hyperparameters, best round, sizes and weights of the datasets, losses and accuracies, times;
+* with Optuna, `optuna/`: `best_params.yml`, `trials.csv`, `study.db` and the plots of the optimisation history, parameter
+  importances and parameter-vs-loss. The search minimises the validation loss (the test events are not used);
+  options (`n_trials`, `timeout`, `search_space`, ...) are described in `ml_pytorch/utils/bdt_optuna.py`.
+
+The ONNX model has the interface of the DNN ones (input `InputVariables`, output `Output` with the class
+probabilities), so it can be used as `sig_bkg_dnn` in PocketCoffea. The `-999` padding is an ordinary value for the trees.
+The export needs `onnxmltools` and the search `optuna` (both in `requirements.txt`); the output is checked against the
+BDT when it is written.
+
 ## Outputs of a training
 
 Each training run writes to `${output_dir}` (default `/work/$USER/out_ML_pytorch/<config_name>/`):

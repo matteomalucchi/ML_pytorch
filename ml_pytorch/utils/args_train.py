@@ -262,5 +262,14 @@ parser.add_argument(
     action="store_true",
 )
 
+parser.add_argument(
+    "--optuna",
+    dest="optuna_trials",
+    default=None,
+    help="BDT only: number of Optuna trials of the hyperparameter search before the final training "
+    "(the optuna block of the config sets the search space and the other options)",
+    type=int,
+)
+
 # parser.print_help()
 args = parser.parse_args()
