@@ -1039,7 +1039,8 @@ run_postproc() {
         local model_dir
         model_dir="$(run_path "$seed")/state_dict"
         local best_model
-        best_model=$(ls "$model_dir"/*best_epoch*.onnx 2>/dev/null | head -n 1)
+        # not the <model>_logdiff.onnx of onnx_logdiff
+        best_model=$(ls "$model_dir"/*best_epoch*.onnx 2>/dev/null | grep -v '_logdiff\.onnx$' | head -n 1)
         if [[ -n "$best_model" ]]; then
             cp "$best_model" "${best_models_dir}/best_model_run${tag}.onnx"
             echo "  run${tag}: copied $(basename "$best_model")"
