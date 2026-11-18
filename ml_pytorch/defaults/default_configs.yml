@@ -302,6 +302,25 @@ learning_rate: 1e-2
 #                  w5_cosine01 -> 5 warm-up epochs, down to 0.01 * learning_rate
 learning_rate_schedule: linear
 
+# Optimizer, passed to the get_model of the model (as the learning rate
+# schedule, see ml_pytorch/utils/optimizers.py):
+#   adam : torch.optim.Adam
+#   adamw: torch.optim.AdamW (decoupled weight decay)
+optimizer: adam
+# Weight decay of the optimizer. null uses the PyTorch default of the
+# optimizer: 0 (no weight decay) for adam, 0.01 for adamw. For adam it is the
+# coefficient lambda of an L2 penalty (lambda/2) * ||theta||^2 added to the
+# loss (lambda * theta is added to the gradient, which then goes through the
+# adaptive scaling of Adam); for adamw every step multiplies the parameters
+# by (1 - learning_rate * weight_decay), independently of the gradients, so
+# the same number is not the same strength for the two optimizers. It is
+# applied to all the parameters of the model (also the biases and the
+# BatchNorm parameters). Before this option the models hard-coded it (1e-4 in
+# the multiclass and maskedBN1D models, 1e-3 in
+# DNN_softmax_reweight_model_maskedBN1D_small, 0 in the others): to
+# reproduce an older training of those models, set it here (e.g. 1e-4).
+weight_decay: null
+
 # Stop the training if the validation metric (eval_param) does not improve
 # by more than min_delta for patience consecutive epochs.
 early_stopping: False

@@ -24,6 +24,7 @@ from ml_pytorch.utils.dataset import (
 )
 from ml_pytorch.utils.early_stopper import EarlyStopper
 from ml_pytorch.utils.lumitext import get_lumitext
+from ml_pytorch.utils.optimizers import check_optimizer_cfg
 from ml_pytorch.utils.setup_logger import setup_logger
 from ml_pytorch.utils.tools import (
     eval_model,
@@ -239,6 +240,8 @@ def main():
         )
     main_dir = cfg.output_dir
 
+    # fail before loading the data if the optimizer cannot be built
+    check_optimizer_cfg(cfg.optimizer, cfg.weight_decay)
     k_folds = cfg.k_folds or 0
     if k_folds >= 2:
         # fail before training if the final ONNX model cannot be built
@@ -468,6 +471,24 @@ def main():
     import inspect as _inspect
 
     get_model_sig = _inspect.signature(ML_model.get_model)
+    # optimizer and weight decay of the config, passed to get_model as the
+    # learning rate schedule (an ML_model.py of an older training, used with
+    # --load-model / --eval-model, may not accept them: it then keeps its own)
+    optimizer_kwargs = {
+        k: cfg[k]
+        for k in ["optimizer", "weight_decay"]
+        if k in get_model_sig.parameters
+    }
+    ignored = [
+        f"{k}: {cfg[k]}"
+        for k, default in [("optimizer", "adam"), ("weight_decay", None)]
+        if k not in get_model_sig.parameters and cfg[k] != default
+    ]
+    if ignored:
+        raise ValueError(
+            f"The get_model of {cfg.ML_model} does not accept {', '.join(ignored)} "
+            "(model file of an older version): remove them from the config"
+        )
     if "num_classes" in get_model_sig.parameters:
         pad_kwargs = {
             k: cfg[k]
@@ -482,6 +503,7 @@ def main():
             cfg.learning_rate_schedule,
             n_epochs,
             **pad_kwargs,
+            **optimizer_kwargs,
         )
     else:
         if num_classes > 2:
@@ -492,8 +514,22 @@ def main():
                 "(e.g. DNN_multiclass_model)."
             )
         model, loss_fn, optimizer, scheduler = ML_model.get_model(
-            input_size, device, cfg.learning_rate, cfg.learning_rate_schedule, n_epochs
+            input_size,
+            device,
+            cfg.learning_rate,
+            cfg.learning_rate_schedule,
+            n_epochs,
+            **optimizer_kwargs,
         )
+    logger.info(
+        f"Optimizer: {type(optimizer).__name__}, weight decay "
+        f"{optimizer.defaults.get('weight_decay')}"
+        + (
+            " (set by the model file, which does not take it from the config)"
+            if "weight_decay" not in optimizer_kwargs
+            else " (PyTorch default)" if cfg.weight_decay is None else ""
+        )
+    )
     # models defining export_logdiff_model export also the per-fold log-weight
     # z_1 - z_0 (<model>_logdiff.onnx), automatically
     export_logdiff = hasattr(model, "export_logdiff_model")

@@ -1,11 +1,13 @@
 """Smaller, more regularised version of DNN_softmax_reweight_model_maskedBN1D
-(hidden layers 128-64-32, dropout 0.3, weight decay 1e-3), with also
+(hidden layers 128-64-32, dropout 0.3; the weight decay is set in the config,
+weight_decay), with also
 export_logdiff_model, the per-fold log-weight z_1 - z_0 exported automatically as
 <model>_logdiff.onnx next to every softmax ONNX model."""
 from torch import nn
 import torch
 
 from ml_pytorch.utils.learning_rate_schedules import get_lr_scheduler
+from ml_pytorch.utils.optimizers import get_optimizer
 
 
 class MaskedBatchNorm1d(nn.Module):
@@ -113,7 +115,7 @@ class DNN(nn.Module):
             pad_indicators=pad_indicators,
         )
         # smaller and more regularised than DNN_softmax_reweight_model_maskedBN1D
-        # (512-256-128, dropout 0.2, weight decay 1e-4), for a smoother
+        # (512-256-128, dropout 0.2), for a smoother
         # density ratio
         self.net = nn.Sequential(
             nn.Linear(self.input_norm.num_features_out, 128),
@@ -174,6 +176,8 @@ def get_model(
     pad_value=-999.0,
     pad_fill_value=0.0,
     pad_indicators=True,
+    optimizer="adam",
+    weight_decay=None,
 ):
     model = DNN(
         input_size,
@@ -184,7 +188,8 @@ def get_model(
     print(model)
 
     loss_fn = torch.nn.CrossEntropyLoss(reduction="none")
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-3)
+    # optimizer and weight decay from the config (optimizer, weight_decay)
+    optimizer = get_optimizer(optimizer, model.parameters(), lr, weight_decay)
     scheduler = get_lr_scheduler(lr_schedule, optimizer, n_epochs)
 
     return model, loss_fn, optimizer, scheduler
