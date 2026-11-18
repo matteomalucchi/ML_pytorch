@@ -7,7 +7,8 @@
 # softmax outputs, which saturates where p0 -> 0, averaged over the folds (one
 # fold with a huge weight dominates the average). Here:
 #   - the per-fold weight is taken in log space from the logits,
-#     log w_k = z1 - z0 (onnx_logdiff), and the folds are combined with the
+#     log w_k = z1 - z0 (exported automatically by the model as
+#     *_logdiff.onnx per fold), and the folds are combined with the
 #     geometric mean exp(mean_k log w_k) (kfold_onnx: logaverage);
 #   - the final weights are bounded to [1/50, 50] (weight_log_clamp: 3.912 =
 #     ln 50); the fraction of clamped events is in kfold/kfold_summary.yml.
@@ -59,7 +60,8 @@ oversample_split: False
 # (signal region), never used in the training, so the final
 # ONNX model is the geometric mean over the folds of the per-fold weights,
 # exp(mean_k (z1 - z0)), computed from the logits of every fold
-# (onnx_logdiff: *_logdiff.onnx per fold) and bounded to [1/50, 50]
+# (*_logdiff.onnx per fold, exported automatically by the model) and
+# bounded to [1/50, 50]
 # (weight_log_clamp = ln 50 = 3.912):
 # kfold_onnx/kfold_morphing_ratio_logaverage.onnx. The other combinations
 # (average, median and logmedian, all with the same bound) are
@@ -68,11 +70,10 @@ k_folds: 20
 kfold_split: random
 kfold_onnx: logaverage
 onnx_ratio: True
-onnx_logdiff: True
 weight_log_clamp: 3.912
 
 # same model as 12_01_06 (DNN_softmax_reweight_model_maskedBN1D), which also
-# exports the per-fold log-weight z1 - z0 (onnx_logdiff)
+# exports the per-fold log-weight z1 - z0 (*_logdiff.onnx)
 ML_model: DNN_softmax_reweight_model_maskedBN1D_logdiff
 
 data_format: parquet

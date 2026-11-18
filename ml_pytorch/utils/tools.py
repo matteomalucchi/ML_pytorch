@@ -599,14 +599,14 @@ def export_onnx(
     """Export ``model`` to <dir of model_name>/<onnx_model_name>.onnx, wrapped
     by its ``export_method`` (``export_model``: e.g. the softmax of the
     logits, if the model defines it; ``export_logdiff_model``: z_1 - z_0 for
-    onnx_logdiff, which the model must define). Returns the ONNX file."""
+    the models that define it). Returns the ONNX file."""
     model_dir = os.path.dirname(model_name)
     logger.info(f"Exporting model to ONNX format at {model_dir}/{onnx_model_name}.onnx")
     if export_method != "export_model" and not hasattr(model, export_method):
         raise ValueError(
             f"The model {type(model).__name__} has no {export_method} method "
-            f"(needed by onnx_logdiff: use DNN_softmax_reweight_model_maskedBN1D_logdiff "
-            f"or DNN_softmax_reweight_model_maskedBN1D_small)"
+            f"(e.g. DNN_softmax_reweight_model_maskedBN1D_logdiff or "
+            f"DNN_softmax_reweight_model_maskedBN1D_small)"
         )
     if hasattr(model, export_method):
         model = getattr(model, export_method)(model)

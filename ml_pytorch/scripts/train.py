@@ -56,7 +56,8 @@ def first_batch_inputs(loader, n_max=4096):
 
 
 def export_logdiff_onnx(model, model_name, batch_size, input_size, onnx_model_name, loader):
-    """onnx_logdiff: export also <onnx_model_name>_logdiff.onnx (z_1 - z_0,
+    """Export also <onnx_model_name>_logdiff.onnx (z_1 - z_0, for the models
+    defining export_logdiff_model,
     see export_logdiff_model of DNN_softmax_reweight_model_maskedBN1D_logdiff
     and DNN_softmax_reweight_model_maskedBN1D_small) next to
     the softmax model <onnx_model_name>.onnx, and check on the first batch of
@@ -493,10 +494,22 @@ def main():
         model, loss_fn, optimizer, scheduler = ML_model.get_model(
             input_size, device, cfg.learning_rate, cfg.learning_rate_schedule, n_epochs
         )
-    if cfg.onnx and cfg.onnx_logdiff and not hasattr(model, "export_logdiff_model"):
-        # fail before the training, not at the ONNX export
+    # models defining export_logdiff_model export also the per-fold log-weight
+    # z_1 - z_0 (<model>_logdiff.onnx), automatically
+    export_logdiff = hasattr(model, "export_logdiff_model")
+    if export_logdiff:
+        logger.info(
+            "The model defines export_logdiff_model: the ONNX models are exported "
+            "also as <model>_logdiff.onnx (log-weight z_1 - z_0)"
+        )
+    if (
+        k_folds >= 2
+        and cfg.kfold_onnx in ["logaverage", "logmedian"]
+        and not export_logdiff
+    ):
+        # fail before the training, not at the merge
         raise ValueError(
-            f"onnx_logdiff: True needs a model with export_logdiff_model "
+            f"kfold_onnx: {cfg.kfold_onnx} needs a model with export_logdiff_model "
             f"(DNN_softmax_reweight_model_maskedBN1D_logdiff or "
             f"DNN_softmax_reweight_model_maskedBN1D_small), not {cfg.ML_model}"
         )
@@ -717,7 +730,7 @@ def main():
             "cpu",
             f"model_last_epoch_{epoch}",
         )
-        if cfg.onnx_logdiff:
+        if export_logdiff:
             export_logdiff_onnx(
                 model, model_dir, batch_size, input_size, f"model_last_epoch_{epoch}",
                 test_loader,
@@ -774,7 +787,7 @@ def main():
                 else os.path.basename(cfg.eval_model).replace(".pt", "")
             ),
         )
-        if cfg.onnx_logdiff:
+        if export_logdiff:
             export_logdiff_onnx(
                 model,
                 best_model_name if not cfg.eval_model else cfg.eval_model,

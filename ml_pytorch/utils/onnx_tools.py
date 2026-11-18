@@ -309,7 +309,8 @@ def build_kfold_logdiff_models(
     """Build the ONNX weight models combining the folds in log space, from the
     per-fold ``_logdiff.onnx`` models ``logdiff_models`` (ordered by fold),
     whose output is the log-weight Delta_k = z_1 - z_0 (shape [N]) of the
-    2-node softmax models (onnx_logdiff).
+    2-node softmax models (exported by the models defining
+    export_logdiff_model).
 
     Returns a dict {name: onnx model}, all with input ``args_0`` and one
     float32 output of shape [N] (the weight), as the ratio models of

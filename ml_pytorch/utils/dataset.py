@@ -1,3 +1,4 @@
+import importlib
 import sys
 import uproot
 import numpy as np
@@ -1319,18 +1320,34 @@ def check_kfold_cfg(cfg, need_fold=True):
     check_kfold_onnx_cfg(cfg)
 
 
+def model_has_logdiff(ml_model):
+    """True if a class of the model module ml_pytorch.models.<ml_model>
+    defines export_logdiff_model (the per-fold log-weight z_1 - z_0 is then
+    exported as <model>_logdiff.onnx), False if none does, None if the module
+    cannot be imported (e.g. a model loaded from a file)."""
+    try:
+        module = importlib.import_module(f"ml_pytorch.models.{ml_model}")
+    except ImportError:
+        return None
+    return any(
+        isinstance(obj, type) and hasattr(obj, "export_logdiff_model")
+        for obj in vars(module).values()
+    )
+
+
 def check_kfold_onnx_cfg(cfg):
     kfold_onnx_choices = ["average", "event", "median", "logaverage", "logmedian"]
     if cfg.kfold_onnx not in kfold_onnx_choices:
         raise ValueError(
             f"kfold_onnx must be one of {kfold_onnx_choices}, got {cfg.kfold_onnx}"
         )
-    if cfg.kfold_onnx in ["logaverage", "logmedian"] and not cfg.get(
-        "onnx_logdiff", False
-    ):
+    if cfg.kfold_onnx in ["logaverage", "logmedian"] and model_has_logdiff(
+        cfg.ML_model
+    ) is False:
         raise ValueError(
             f"kfold_onnx: {cfg.kfold_onnx} combines the per-fold log-weights of "
-            "the _logdiff.onnx models: it needs onnx_logdiff: True"
+            "the _logdiff.onnx models, exported only by the models that define "
+            f"export_logdiff_model (e.g. DNN_softmax_reweight_model_maskedBN1D_logdiff or DNN_softmax_reweight_model_maskedBN1D_small), not by {cfg.ML_model}"
         )
     clamp = cfg.get("weight_log_clamp", None)
     if clamp is not None and not float(clamp) > 0:

@@ -142,35 +142,34 @@ onnx_ratio: False
 #            Needs onnx_ratio or morphing_alpha. Its models are always saved
 #            next to the average ones when a weight is defined.
 #   logaverage: exp of the average over the folds of the per-fold log-weight
-#            z_1 - z_0 (the logits of the 2-node softmax models, see
-#            onnx_logdiff), i.e. the geometric mean of the per-fold weights
-#            p1 / p0, saved as kfold_morphing_ratio_logaverage.onnx. Less
-#            sensitive than the average to one fold with a huge weight.
-#            Needs onnx_logdiff.
+#            z_1 - z_0 (the logits of the 2-node softmax models), i.e. the
+#            geometric mean of the per-fold weights p1 / p0, saved as
+#            kfold_morphing_ratio_logaverage.onnx. Less sensitive than the
+#            average to one fold with a huge weight. Needs a model with
+#            export_logdiff_model (see below).
 #   logmedian: exp of the median over the folds of the per-fold log-weight
-#            (kfold_morphing_ratio_logmedian.onnx). Needs onnx_logdiff.
-#   With onnx_logdiff the logaverage and logmedian models are always saved
-#   next to the others, so that all the combinations can be compared.
+#            (kfold_morphing_ratio_logmedian.onnx). Needs a model with
+#            export_logdiff_model.
+#   Per-fold log-weights: the models that define export_logdiff_model
+#   (DNN_softmax_reweight_model_maskedBN1D_logdiff, the same model as
+#   DNN_softmax_reweight_model_maskedBN1D, and
+#   DNN_softmax_reweight_model_maskedBN1D_small) are exported automatically
+#   also as <name>_logdiff.onnx next to every per-fold softmax ONNX model
+#   (unchanged), with output z_1 - z_0 = log(p1 / p0) (shape [N]) computed
+#   from the logits, which does not saturate where p0 -> 0 in float32; the
+#   training checks that exp(logdiff) = p1 / p0 (rtol 1e-4) on a batch where
+#   p0 > 1e-6. ml_kfold_merge then always builds the logaverage and logmedian
+#   models next to the others, so that all the combinations can be compared,
+#   and with kfold_split: event the event model of the weight
+#   (kfold_morphing_ratio_event_fold.onnx) is built from them,
+#   w = exp(clamp(Delta_k, -c, c)) of the fold k = event % k_folds. The other
+#   models export only the softmax ONNX, as before.
 kfold_onnx: average
-# Export also, next to every per-fold ONNX model (state_dict/<name>.onnx,
-# softmax outputs, unchanged), the model <name>_logdiff.onnx whose output is
-# the log of the per-fold weight computed directly from the logits,
-# z_1 - z_0 = log(p1 / p0) (shape [N]), which does not saturate where p0 -> 0
-# in float32. Only for the models that define export_logdiff_model
-# (DNN_softmax_reweight_model_maskedBN1D_logdiff, the same model as
-# DNN_softmax_reweight_model_maskedBN1D, and
-# DNN_softmax_reweight_model_maskedBN1D_small): with the other models the
-# training stops with an error before starting. The training checks that
-# exp(logdiff) = p1 / p0 (rtol 1e-4) on a batch where p0 > 1e-6. Needed by kfold_onnx logaverage / logmedian; with
-# kfold_split: event the k-fold event model of the weight
-# (kfold_morphing_ratio_event_fold.onnx) is then also built from it,
-# w = exp(clamp(Delta_k, -c, c)) of the fold k = event % k_folds.
-onnx_logdiff: False
 # Bound of the log of the final k-fold weights (c, float, or null for no
 # bound). If set, all the final weight models of the binary reweighting
 # (kfold_morphing_ratio_*: average, median, event_fold, logaverage,
 # logmedian; not all_folds and not the multiclass morphing) are bounded:
-#   - logaverage, logmedian (and event_fold with onnx_logdiff): the combined
+#   - logaverage, logmedian (and event_fold with the logdiff models): the combined
 #     log-weight is clamped to [-c, c] before the exp;
 #   - average, median, event_fold: the final weight is clipped to
 #     [exp(-c), exp(c)].

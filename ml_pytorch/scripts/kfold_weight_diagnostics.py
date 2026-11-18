@@ -1,5 +1,6 @@
 """Fold-to-fold spread of the per-fold reweighting weights of a k-fold
-training (ml_train with k_folds >= 2 and onnx_logdiff: True).
+training (ml_train with k_folds >= 2 and a model defining
+export_logdiff_model, e.g. DNN_softmax_reweight_model_maskedBN1D_logdiff).
 
 Every per-fold _logdiff.onnx model (the log-weight Delta_k = z_1 - z_0 =
 log(p1 / p0) of fold k) is evaluated on the events of the k-fold training
@@ -380,7 +381,7 @@ def run(main_dir, cfg, out_dir, max_events, random_events, label, weight_log_cla
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Fold-to-fold spread of the per-fold weights of a k-fold reweighting training (needs onnx_logdiff: True)"
+        description="Fold-to-fold spread of the per-fold weights of a k-fold reweighting training (needs the per-fold _logdiff.onnx models)"
     )
     parser.add_argument(
         "-i", "--input", required=True,
