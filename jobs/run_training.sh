@@ -853,10 +853,25 @@ run_one_training() {
     local config_tag
     config_tag=$(basename "$CONFIG_FILE" .yml)
 
+    # Isolate this training to its one physical GPU: Slurm sets
+    # CUDA_VISIBLE_DEVICES to all the GPUs allocated to the job, and $gpu is
+    # only the local index among them (0..n_gpus-1). Without restricting it
+    # per process, every training's CUDA context is still created on device 0
+    # of that full list before switching to its assigned device, piling up
+    # one stray context per training on the same physical GPU. Re-exporting
+    # CUDA_VISIBLE_DEVICES to just the assigned physical id makes that GPU
+    # device 0 from this subprocess's point of view.
+    local physical_gpu="$gpu"
+    if [[ -n "${CUDA_VISIBLE_DEVICES:-}" ]]; then
+        local visible_gpus
+        IFS=',' read -r -a visible_gpus <<< "$CUDA_VISIBLE_DEVICES"
+        physical_gpu="${visible_gpus[$gpu]}"
+    fi
+
     local train_args=(
         -o "$run_dir"
         --eval --onnx --roc --histos --history
-        --gpus "$gpu" -n "$num_workers"
+        --gpus 0 -n "$num_workers"
         -c "$CONFIG_FILE"
         "${load_model_args[@]}"
     )
@@ -881,8 +896,8 @@ run_one_training() {
         )
     fi
 
-    echo "Starting training: seed=${seed} on GPU ${gpu} -> ${run_dir}"
-    ml_train "${train_args[@]}" "${comet_args[@]}"
+    echo "Starting training: seed=${seed} on GPU ${gpu} (physical ${physical_gpu}) -> ${run_dir}"
+    CUDA_VISIBLE_DEVICES="$physical_gpu" ml_train "${train_args[@]}" "${comet_args[@]}"
 }
 
 # ─── K-fold cache: load the events once for all the folds ────────────────────

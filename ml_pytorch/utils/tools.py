@@ -50,7 +50,15 @@ def set_rng_state(state):
     np.random.set_state((name, key.cpu().numpy().astype(np.uint32), *rest))
     torch.set_rng_state(state["torch"].cpu())
     if "cuda" in state and torch.cuda.is_available():
-        torch.cuda.set_rng_state_all([s.cpu() for s in state["cuda"]])
+        cuda_states = [s.cpu() for s in state["cuda"]]
+        # fewer GPUs may be visible now than when the checkpoint was saved
+        # (e.g. a training resumed after each process got isolated to a
+        # single GPU via CUDA_VISIBLE_DEVICES): keep only as many per-device
+        # states as there are visible devices, instead of indexing past them
+        n_visible = torch.cuda.device_count()
+        if len(cuda_states) > n_visible:
+            cuda_states = cuda_states[:n_visible]
+        torch.cuda.set_rng_state_all(cuda_states)
 
 
 def add_training_state(checkpoint_name, early_stopper, best_vloss, best_vaccuracy, best_epoch):
