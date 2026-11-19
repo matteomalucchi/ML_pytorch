@@ -183,6 +183,33 @@ parser.add_argument(
     action="store_false",
 )
 parser.add_argument(
+    "--data-on-gpu-margin-gb",
+    dest="data_on_gpu_margin_gb",
+    default=None,
+    help="data_on_gpu: constant GPU memory margin in GB (1e9 bytes) for what the "
+    "training needs apart from the datasets (CUDA context, model, activations, ...). "
+    "The datasets are copied to the GPU only if datasets + margin <= "
+    "min(total GPU memory / trainings per GPU, free GPU memory) (default: 0.5 from the config)",
+    type=float,
+)
+parser.add_argument(
+    "--data-on-gpu-margin-frac",
+    dest="data_on_gpu_margin_frac",
+    default=None,
+    help="data_on_gpu: additional GPU memory margin as a fraction of the datasets "
+    "size (default: 0.0 from the config)",
+    type=float,
+)
+parser.add_argument(
+    "--trainings-per-gpu",
+    dest="trainings_per_gpu",
+    default=None,
+    help="data_on_gpu: number of trainings sharing the GPU at the same time; the "
+    "datasets budget is the total GPU memory divided by it (default: the "
+    "ML_TRAININGS_PER_GPU environment variable, set by jobs/run_training.sh, else 1)",
+    type=int,
+)
+parser.add_argument(
     "--overwrite",
     default=None,
     help="Overwrite output directory",

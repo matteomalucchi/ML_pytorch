@@ -1,3 +1,4 @@
+import gc
 import importlib
 import sys
 import uproot
@@ -1927,41 +1928,56 @@ def _loader_shuffle(loader):
     return getattr(loader, "shuffle", False)
 
 
-def loaders_to_device(loaders, device, max_memory_fraction=0.5):
-    """Replace the DataLoaders with DeviceBatchLoaders holding the data on
-    `device`.
+def gpu_data_fits(
+    data_bytes, total_bytes, free_bytes, trainings_per_gpu, margin_gb=0.5, margin_frac=0.0
+):
+    """Whether the datasets can be kept on the GPU.
 
-    The loaders are left unchanged if the device is not a GPU. If the datasets
-    would take more than `max_memory_fraction` of the free GPU memory, they are
-    kept in RAM and the batches are sliced there and copied to the GPU one by
-    one. `None` loaders are kept as they are.
+    The datasets fit if
+
+        data_bytes + margin <= min(total_bytes / trainings_per_gpu, free_bytes)
+
+    with margin = margin_gb * 1e9 + margin_frac * data_bytes. The share of the
+    total memory per training is deterministic, so trainings started at the
+    same time on the same GPU do not all see the same free memory and overfill
+    it; the free memory only guards against other processes on the GPU. The
+    margin covers what the training needs apart from the datasets (CUDA
+    context, model and optimizer, activations, shuffle permutation, allocator
+    fragmentation).
+
+    Returns (fits, need_bytes, budget_bytes).
     """
-    if device.type != "cuda":
-        return loaders
+    if trainings_per_gpu < 1:
+        raise ValueError(f"trainings_per_gpu must be >= 1, got {trainings_per_gpu}")
+    if margin_gb < 0 or margin_frac < 0:
+        raise ValueError(
+            f"the data_on_gpu margins must be >= 0, got margin_gb={margin_gb}, "
+            f"margin_frac={margin_frac}"
+        )
+    need = data_bytes * (1.0 + margin_frac) + margin_gb * 1e9
+    budget = min(total_bytes / trainings_per_gpu, free_bytes)
+    return need <= budget, need, budget
 
-    def num_bytes(loader):
-        if isinstance(loader, IndexedBatchLoader):
-            return loader.num_bytes()
-        return sum(
-            t.element_size() * t.nelement() for t in _dataset_tensors(loader.dataset)
-        )
 
-    datasets_bytes = sum(num_bytes(loader) for loader in loaders if loader is not None)
-    free_bytes, _ = torch.cuda.mem_get_info(device)
-    if datasets_bytes > max_memory_fraction * free_bytes:
-        logger.warning(
-            f"Datasets ({datasets_bytes / 1e9:.2f} GB) do not fit in the free GPU "
-            f"memory ({free_bytes / 1e9:.2f} GB): keeping them in RAM and copying "
-            "the batches to the GPU one by one"
+def _is_cuda_oom(err):
+    """Whether the exception is a CUDA out-of-memory error (also with the
+    torch versions without torch.OutOfMemoryError)."""
+    oom_types = tuple(
+        t
+        for t in (
+            getattr(torch, "OutOfMemoryError", None),
+            getattr(torch.cuda, "OutOfMemoryError", None),
         )
-        device = torch.device("cpu")
-        if any(isinstance(loader, IndexedBatchLoader) for loader in loaders):
-            # the k-fold loaders already take the batches by index
-            return loaders
-    else:
-        logger.info(
-            f"Moving the datasets to {device} ({datasets_bytes / 1e9:.2f} GB)"
-        )
+        if t is not None
+    )
+    if oom_types and isinstance(err, oom_types):
+        return True
+    return isinstance(err, RuntimeError) and "out of memory" in str(err)
+
+
+def _make_device_loaders(loaders, device):
+    """DeviceBatchLoaders with the data of `loaders` on `device` (`None`
+    loaders are kept as they are)."""
     out = []
     for loader in loaders:
         if loader is None:
@@ -1980,3 +1996,81 @@ def loaders_to_device(loaders, device, max_memory_fraction=0.5):
                 setattr(new, attr, getattr(loader, attr))
         out.append(new)
     return out
+
+
+def _loaders_in_ram(loaders):
+    """The loaders with the data kept in RAM, the batches sliced there and
+    copied to the GPU in the training loop."""
+    if any(isinstance(loader, IndexedBatchLoader) for loader in loaders):
+        # the k-fold loaders already take the batches by index
+        return loaders
+    return _make_device_loaders(loaders, torch.device("cpu"))
+
+
+def loaders_to_device(
+    loaders, device, trainings_per_gpu=1, margin_gb=0.5, margin_frac=0.0
+):
+    """Replace the DataLoaders with DeviceBatchLoaders holding the data on
+    `device`.
+
+    The loaders are left unchanged if the device is not a GPU. The datasets are
+    copied to the GPU only if they fit in the budget of this training (see
+    `gpu_data_fits`): the total GPU memory divided by `trainings_per_gpu` (the
+    trainings sharing the GPU at the same time), and at most the free GPU
+    memory, including a margin of `margin_gb` GB plus `margin_frac` times the
+    datasets size. Otherwise, or if the copy runs out of GPU memory, they are
+    kept in RAM and the batches are sliced there and copied to the GPU one by
+    one. `None` loaders are kept as they are.
+    """
+    if device.type != "cuda":
+        return loaders
+
+    def num_bytes(loader):
+        if isinstance(loader, IndexedBatchLoader):
+            return loader.num_bytes()
+        return sum(
+            t.element_size() * t.nelement() for t in _dataset_tensors(loader.dataset)
+        )
+
+    datasets_bytes = sum(num_bytes(loader) for loader in loaders if loader is not None)
+    free_bytes, _ = torch.cuda.mem_get_info(device)
+    total_bytes = torch.cuda.get_device_properties(device).total_memory
+    fits, need_bytes, _ = gpu_data_fits(
+        datasets_bytes,
+        total_bytes,
+        free_bytes,
+        trainings_per_gpu,
+        margin_gb=margin_gb,
+        margin_frac=margin_frac,
+    )
+    budget_msg = (
+        f"datasets {datasets_bytes / 1e9:.2f} GB + margin "
+        f"{(need_bytes - datasets_bytes) / 1e9:.2f} GB = {need_bytes / 1e9:.2f} GB, "
+        f"share per training {total_bytes / trainings_per_gpu / 1e9:.2f} GB "
+        f"(total {total_bytes / 1e9:.2f} GB / {trainings_per_gpu} training(s) per "
+        f"GPU), free {free_bytes / 1e9:.2f} GB"
+    )
+    if not fits:
+        logger.warning(
+            f"data_on_gpu: {budget_msg}: the datasets do not fit, keeping them in "
+            "RAM and copying the batches to the GPU one by one"
+        )
+        return _loaders_in_ram(loaders)
+
+    logger.info(f"data_on_gpu: {budget_msg}: the datasets fit")
+    logger.info(f"Moving the datasets to {device} ({datasets_bytes / 1e9:.2f} GB)")
+    try:
+        return _make_device_loaders(loaders, device)
+    except Exception as err:  # noqa: BLE001 (re-raised if not an OOM)
+        if not _is_cuda_oom(err):
+            raise
+        oom_msg = str(err).splitlines()[0] if str(err) else type(err).__name__
+    # out of the except block, so that the traceback (which references the
+    # partially created GPU tensors) is released before freeing the memory
+    gc.collect()
+    torch.cuda.empty_cache()
+    logger.warning(
+        f"data_on_gpu: out of GPU memory while copying the datasets ({oom_msg}): "
+        "keeping them in RAM and copying the batches to the GPU one by one"
+    )
+    return _loaders_in_ram(loaders)

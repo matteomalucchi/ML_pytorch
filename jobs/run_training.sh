@@ -43,6 +43,17 @@
 #   --no-slurm              Run directly without Slurm (for local testing)
 #   -- EXTRA                Additional arguments forwarded to ml_train
 #
+# Exit code: the job exits non-zero if any training or the merge /
+# post-processing fails (the other trainings still run to the end, then the
+# failed ones are listed with how to resubmit them). The merge is then not
+# run, and the Slurm jobs chained after it (afterok) do not start.
+#
+# GPU memory: every training gets ML_TRAININGS_PER_GPU, the number of trainings
+# sharing its GPU at the same time (all at once: the most trainings on one GPU;
+# with --slots-per-gpu: the slots), and keeps its datasets on the GPU
+# (data_on_gpu) only if they fit in GPU memory / ML_TRAININGS_PER_GPU, minus
+# the margin data_on_gpu_margin_gb / data_on_gpu_margin_frac of the config.
+#
 # K-fold in several jobs (see the README, "K-fold in several jobs"): the events
 # are loaded once by a CPU job into a shared cache, then the folds are trained
 # by small GPU jobs that copy it to their node, then a CPU job merges them.
@@ -195,6 +206,11 @@ Optional:
   --no-slurm              Run directly without Slurm (for testing; forces NODES=1)
   -- EXTRA                Extra arguments forwarded to ml_train
 
+Exit code: non-zero if any training or the merge / post-processing fails. The
+other trainings still run to the end, then the failed ones are listed with the
+command to resubmit them; the merge is not run, and the Slurm jobs chained
+after this one (afterok) do not start.
+
 K-fold in several jobs (the events are loaded once by a CPU job into a shared
 cache, the folds are trained by small GPU jobs that copy it to their node, and
 a CPU job merges them):
@@ -237,7 +253,10 @@ a CPU job merges them):
 Occupancy of a single job with several GPUs:
   --slots-per-gpu INT     Run at most INT trainings per GPU at a time; when one
                           ends, the next one starts on the GPU that freed up
-                          (default: 0, all the trainings at once)
+                          (default: 0, all the trainings at once). Every
+                          training keeps its datasets on the GPU (data_on_gpu)
+                          only if they fit in GPU memory / trainings per GPU
+                          (INT, or with 0 the most trainings on one GPU)
   --separate-merge        Merge (or post-process) in a separate CPU job after
                           the training job, instead of inside it, so the GPUs
                           are released as soon as the last training ends
@@ -897,7 +916,43 @@ run_one_training() {
     fi
 
     echo "Starting training: seed=${seed} on GPU ${gpu} (physical ${physical_gpu}) -> ${run_dir}"
-    CUDA_VISIBLE_DEVICES="$physical_gpu" ml_train "${train_args[@]}" "${comet_args[@]}"
+    # ML_TRAININGS_PER_GPU: number of trainings sharing this GPU at the same
+    # time (set by launch_trainings), used by ml_train for the GPU memory
+    # budget of data_on_gpu (GPU memory / trainings per GPU)
+    CUDA_VISIBLE_DEVICES="$physical_gpu" ML_TRAININGS_PER_GPU="${TRAININGS_PER_GPU:-1}" \
+        ml_train "${train_args[@]}" "${comet_args[@]}"
+}
+
+# Name of a training in the messages: the fold for the k-fold, else the seed
+training_label() {
+    if [[ "$K_FOLDS" -ge 2 ]]; then
+        echo "fold_$(( $1 - INIT_SEED ))"
+    else
+        echo "seed_$1"
+    fi
+}
+
+# Run one training in the background (arguments of run_one_training) and
+# record its exit code in LAUNCH_STATUS_DIR/<seed>, so that it is known also
+# if the shell has already reaped the process (wait -n)
+run_one_training_bg() {
+    (
+        run_one_training "$@"
+        rc=$?
+        echo "$rc" > "${LAUNCH_STATUS_DIR}/$1"
+        exit "$rc"
+    ) &
+}
+
+# Exit code of the training $1, whose "wait" returned $2: the recorded one if
+# there is one (otherwise the training was killed before it could record it)
+training_rc() {
+    local f="${LAUNCH_STATUS_DIR}/$1"
+    if [[ -s "$f" ]]; then
+        cat "$f"
+    else
+        echo "$2"
+    fi
 }
 
 # ─── K-fold cache: load the events once for all the folds ────────────────────
@@ -968,20 +1023,43 @@ launch_trainings() {
     # (see data_on_gpu in the config)
     local num_workers=$(( cpus_per_training - 1 ))
 
-    local i
+    # trainings sharing one GPU at the same time, passed to ml_train
+    # (ML_TRAININGS_PER_GPU) for the GPU memory budget of data_on_gpu: all at
+    # once, the most on one GPU (conservative, the same for all the GPUs);
+    # with --slots-per-gpu, the slots per GPU
     if [[ "$max_parallel" -ge "$n_trainings" ]]; then
-        echo "Launching ${n_trainings} training(s) (seeds/folds ${seeds[*]}) in parallel on ${n_gpus} GPU(s), ${cpus_per_training} CPU(s) per training"
+        TRAININGS_PER_GPU=$(( (n_trainings + n_gpus - 1) / n_gpus ))
+    else
+        TRAININGS_PER_GPU="$SLOTS_PER_GPU"
+    fi
+    local budget_msg="up to ${TRAININGS_PER_GPU} training(s) per GPU (data_on_gpu budget = GPU memory / ${TRAININGS_PER_GPU})"
+
+    # exit codes of the trainings (see run_one_training_bg)
+    LAUNCH_STATUS_DIR=$(mktemp -d "${TMPDIR:-/tmp}/ml_train_status_XXXXXX")
+    local -a failed=()
+    local i rc
+    if [[ "$max_parallel" -ge "$n_trainings" ]]; then
+        echo "Launching ${n_trainings} training(s) (seeds/folds ${seeds[*]}) in parallel on ${n_gpus} GPU(s), ${budget_msg}, ${cpus_per_training} CPU(s) per training"
+        local -a sim_pids=()
         for ((i=0; i<n_trainings; i++)); do
-            run_one_training "${seeds[$i]}" "$(run_path "${seeds[$i]}")" "$(( i % n_gpus ))" "$num_workers" &
+            run_one_training_bg "${seeds[$i]}" "$(run_path "${seeds[$i]}")" "$(( i % n_gpus ))" "$num_workers"
+            sim_pids[$i]=$!
         done
-        wait
+        # wait for all of them, also if some fail
+        for ((i=0; i<n_trainings; i++)); do
+            wait "${sim_pids[$i]}"
+            rc=$?
+            rc=$(training_rc "${seeds[$i]}" "$rc")
+            [[ "$rc" -ne 0 ]] && failed+=("$(training_label "${seeds[$i]}") (rc ${rc})")
+        done
+        report_failed_trainings "${failed[@]}"
         return
     fi
 
     # Dynamic scheduling: at most SLOTS_PER_GPU trainings per GPU; when one
     # ends, the next training starts on the GPU with the fewest running ones,
     # so no GPU stays idle while trainings are waiting
-    echo "Launching ${n_trainings} training(s) (seeds/folds ${seeds[*]}) on ${n_gpus} GPU(s), at most ${SLOTS_PER_GPU} per GPU at a time (${max_parallel} in parallel), ${cpus_per_training} CPU(s) per training"
+    echo "Launching ${n_trainings} training(s) (seeds/folds ${seeds[*]}) on ${n_gpus} GPU(s), at most ${SLOTS_PER_GPU} per GPU at a time (${max_parallel} in parallel), ${budget_msg}, ${cpus_per_training} CPU(s) per training"
     local -a gpu_running=() pids=() pid_gpu=()
     local g best pid k
     for ((g=0; g<n_gpus; g++)); do gpu_running[$g]=0; done
@@ -992,6 +1070,9 @@ launch_trainings() {
             for k in "${!pids[@]}"; do
                 if ! kill -0 "${pids[$k]}" 2>/dev/null; then
                     wait "${pids[$k]}" 2>/dev/null
+                    rc=$?
+                    rc=$(training_rc "${seeds[$k]}" "$rc")
+                    [[ "$rc" -ne 0 ]] && failed+=("$(training_label "${seeds[$k]}") (rc ${rc})")
                     gpu_running[${pid_gpu[$k]}]=$(( gpu_running[${pid_gpu[$k]}] - 1 ))
                     unset 'pids[k]' 'pid_gpu[k]'
                 fi
@@ -1002,13 +1083,36 @@ launch_trainings() {
             [[ ${gpu_running[$g]} -lt ${gpu_running[$best]} ]] && best=$g
         done
         echo "Starting seed/fold ${seeds[$i]} on GPU ${best} ($(( gpu_running[best] + 1 )) running on it)"
-        run_one_training "${seeds[$i]}" "$(run_path "${seeds[$i]}")" "$best" "$num_workers" &
+        run_one_training_bg "${seeds[$i]}" "$(run_path "${seeds[$i]}")" "$best" "$num_workers"
         pid=$!
         pids[$i]=$pid
         pid_gpu[$i]=$best
         gpu_running[$best]=$(( gpu_running[best] + 1 ))
     done
-    wait
+    # wait for the remaining ones, also if some fail
+    for k in "${!pids[@]}"; do
+        wait "${pids[$k]}" 2>/dev/null
+        rc=$?
+        rc=$(training_rc "${seeds[$k]}" "$rc")
+        [[ "$rc" -ne 0 ]] && failed+=("$(training_label "${seeds[$k]}") (rc ${rc})")
+    done
+    report_failed_trainings "${failed[@]}"
+}
+
+# End of launch_trainings: remove the exit codes and, if some trainings failed
+# (given as arguments), print them with how to recover and return 1
+report_failed_trainings() {
+    rm -rf "$LAUNCH_STATUS_DIR"
+    [[ $# -eq 0 ]] && return 0
+    local IFS=","
+    echo "Error: $# training(s) failed:${*/#/ }"
+    if [[ "$K_FOLDS" -ge 2 ]]; then
+        echo "Resubmit only the unfinished folds (resuming from their checkpoints) and the merge with:"
+        echo "  $0 -c $CONFIG_FILE -o $OUT_DIR -k $K_FOLDS --missing-folds -g ${GPUS_PER_NODE}"
+    else
+        echo "Rerun the same command with --load-last to resume the unfinished trainings (the finished ones are skipped)."
+    fi
+    return 1
 }
 
 # ─── Post-processing: collect best models + ONNX aggregation ──────────────────
@@ -1199,12 +1303,19 @@ case "$MODE" in
         # starting its folds (every array task prepares its own, on its node)
         [[ "$USE_KFOLD_CACHE" == true ]] && run_prepare
 
-        launch_trainings $(seq "$NODE_START" "$NODE_END")
+        TRAIN_FAILED=false
+        launch_trainings $(seq "$NODE_START" "$NODE_END") || TRAIN_FAILED=true
+        if [[ "$TRAIN_FAILED" == true ]]; then
+            # no post-processing (the k-fold merge would fail on the missing
+            # folds anyway): the job fails, and so do the jobs after it
+            echo "Node ${TASK_ID}: some trainings failed, skipping the post-processing."
+            exit 1
+        fi
         echo "Node ${TASK_ID}: all trainings complete."
 
         # For single-node multi-training: run postproc inline (no separate job)
         if [[ "$N_TRAININGS" -gt 1 && "$NODES" -eq 1 && ( "$SEPARATE_MERGE" != true || "$NO_SLURM" == true ) ]]; then
-            run_postproc
+            run_postproc || exit 1
             COPY_AT_END=true
         fi
         # a single training is the last job too (otherwise the post-processing
@@ -1213,7 +1324,8 @@ case "$MODE" in
         ;;
 
     postproc)
-        run_postproc && COPY_AT_END=true
+        run_postproc || exit 1
+        COPY_AT_END=true
         ;;
 
     prepare_shared)
@@ -1240,7 +1352,7 @@ case "$MODE" in
             JOB_FOLDS=($(seq "$FIRST" "$LAST"))
         fi
         copy_shared_cache
-        launch_trainings $(for f in "${JOB_FOLDS[@]}"; do echo $(( INIT_SEED + f )); done)
+        launch_trainings $(for f in "${JOB_FOLDS[@]}"; do echo $(( INIT_SEED + f )); done) || exit 1
         echo "Folds ${JOB_FOLDS[*]} complete."
         ;;
 
@@ -1248,7 +1360,7 @@ case "$MODE" in
         # --fold-jobs / --missing-folds with --no-slurm: the folds, then the merge
         if [[ -n "$FOLD_LIST" ]]; then
             copy_shared_cache
-            launch_trainings $(for f in $FOLD_LIST; do echo $(( INIT_SEED + f )); done)
+            launch_trainings $(for f in $FOLD_LIST; do echo $(( INIT_SEED + f )); done) || exit 1
         fi
         [[ -d "$SHARED_CACHE_DIR" ]] && MERGE_CACHE_DIR="$SHARED_CACHE_DIR"
         run_postproc || exit 1
@@ -1279,7 +1391,7 @@ case "$MODE" in
         for ((first=0; first<K_FOLDS; first+=FOLDS_PER_JOB)); do
             last=$(( first + FOLDS_PER_JOB - 1 ))
             [[ "$last" -ge "$K_FOLDS" ]] && last=$(( K_FOLDS - 1 ))
-            launch_trainings $(seq $(( INIT_SEED + first )) $(( INIT_SEED + last )))
+            launch_trainings $(seq $(( INIT_SEED + first )) $(( INIT_SEED + last ))) || exit 1
         done
         MERGE_CACHE_DIR="$SHARED_CACHE_DIR"
         run_postproc || exit 1

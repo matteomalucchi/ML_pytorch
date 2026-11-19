@@ -182,6 +182,38 @@ def run_folds(cfg, main_dir, cache_dir, split_dir):
         subprocess.run(cmd, check=True)
 
 
+def resolve_data_on_gpu_budget(cfg):
+    """Check the data_on_gpu budget options and resolve trainings_per_gpu:
+    the config/CLI value, otherwise the ML_TRAININGS_PER_GPU environment
+    variable (set by jobs/run_training.sh), otherwise 1. The resolved value
+    is returned and not written to the config, so that the saved config of
+    the training does not fix it for a later resume."""
+    if cfg.data_on_gpu_margin_gb is None or cfg.data_on_gpu_margin_gb < 0:
+        raise ValueError(
+            f"data_on_gpu_margin_gb must be >= 0, got {cfg.data_on_gpu_margin_gb}"
+        )
+    if cfg.data_on_gpu_margin_frac is None or cfg.data_on_gpu_margin_frac < 0:
+        raise ValueError(
+            f"data_on_gpu_margin_frac must be >= 0, got {cfg.data_on_gpu_margin_frac}"
+        )
+    per_gpu = cfg.trainings_per_gpu
+    source = "trainings_per_gpu"
+    if per_gpu is None and os.environ.get("ML_TRAININGS_PER_GPU"):
+        source = "ML_TRAININGS_PER_GPU"
+        try:
+            per_gpu = int(os.environ["ML_TRAININGS_PER_GPU"])
+        except ValueError:
+            raise ValueError(
+                "ML_TRAININGS_PER_GPU must be an integer >= 1, got "
+                f"'{os.environ['ML_TRAININGS_PER_GPU']}'"
+            ) from None
+    if per_gpu is None:
+        per_gpu = 1
+    if int(per_gpu) != per_gpu or per_gpu < 1:
+        raise ValueError(f"{source} must be an integer >= 1, got {per_gpu}")
+    return int(per_gpu)
+
+
 def main():
     start_time = time.time()
     file_dir = os.path.dirname(__file__)
@@ -242,6 +274,7 @@ def main():
 
     # fail before loading the data if the optimizer cannot be built
     check_optimizer_cfg(cfg.optimizer, cfg.weight_decay)
+    trainings_per_gpu = resolve_data_on_gpu_budget(cfg)
     k_folds = cfg.k_folds or 0
     if k_folds >= 2:
         # fail before training if the final ONNX model cannot be built
@@ -439,9 +472,14 @@ def main():
 
     if cfg.data_on_gpu:
         # copy the whole datasets to the GPU once instead of transferring
-        # every batch (no effect on CPU or if they don't fit in memory)
+        # every batch (no effect on CPU; kept in RAM if they don't fit in the
+        # share of the GPU memory of this training)
         training_loader, val_loader, test_loader = loaders_to_device(
-            [training_loader, val_loader, test_loader], device
+            [training_loader, val_loader, test_loader],
+            device,
+            trainings_per_gpu=trainings_per_gpu,
+            margin_gb=cfg.data_on_gpu_margin_gb,
+            margin_frac=cfg.data_on_gpu_margin_frac,
         )
 
     if k_folds >= 2:

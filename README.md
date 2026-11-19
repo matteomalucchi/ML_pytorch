@@ -176,6 +176,9 @@ A ready-to-edit multi-class example is provided at `configs/hh4b_sig_bkg_classif
 | `seed` | seed of all the randomness (python, numpy and torch, also on GPU): event shuffling, splits, folds, oversampling, weight initialisation and dropout. Resumed trainings (`--load-model`) continue exactly as uninterrupted ones, since the checkpoints store the random generator, scheduler and early-stopper states. Bitwise identical on CPU; on GPU also needs `deterministic` |
 | `k_folds`, `fold`, `kfold_split`, `kfold_event_column`, `kfold_onnx`, `onnx_ratio`, `weight_log_clamp`, `kfold_cache` | k-fold training, see [K-fold training](#k-fold-training) |
 | `shuffle_train` | reshuffle the training events at every epoch (default `False`; also with `data_on_gpu` and k-fold). The permutations come from the torch generator seeded with `seed`, so they are reproducible, also for resumed trainings. Validation and test are never shuffled |
+| `data_on_gpu` | copy the whole datasets to the GPU once and take the batches from there (default `True`). They are copied only if `datasets + margin <= min(total GPU memory / trainings_per_gpu, free GPU memory)`; otherwise, or if the copy runs out of GPU memory, they are kept in RAM and the batches are sliced there and copied to the GPU one by one |
+| `data_on_gpu_margin_gb`, `data_on_gpu_margin_frac` | margin of the `data_on_gpu` budget: `data_on_gpu_margin_gb` GB (1e9 bytes, default `0.5`) plus `data_on_gpu_margin_frac` times the datasets size (default `0.0`), for what the training needs apart from the datasets (CUDA context, model and optimizer, activations, shuffle permutation, allocator fragmentation) |
+| `trainings_per_gpu` | number of trainings sharing the GPU at the same time, dividing the GPU memory of the `data_on_gpu` budget (default `null`: the `ML_TRAININGS_PER_GPU` environment variable, which `jobs/run_training.sh` sets, otherwise 1) |
 | `n_best_checkpoints` | number of best-epoch checkpoints (`state_dict/model_<epoch>_state_dict.pt`) kept on disk (default `5`): when a new best epoch is saved the oldest ones are removed. The last-epoch checkpoint is always kept as well. `0` keeps all of them |
 | `deterministic` | use only deterministic algorithms, so that trainings with the same seed are identical also on GPU (slower) |
 | `pad_value` | value marking padded entries (missing objects); must match the PocketCoffea fill value. Used to pad the missing objects and the `None` values of the inputs when loading the dataset, to not count padded objects when creating a missing `<collection>_N` from parquet files and, in `MaskedBatchNorm1d`, to exclude padded entries from the normalisation statistics |
@@ -338,6 +341,10 @@ Comet ML logging
 Performance
   --data-on-gpu                Keep the whole datasets on the GPU (default: on)
   --no-data-on-gpu             Use the standard DataLoaders (copy every batch to the GPU)
+  --data-on-gpu-margin-gb F    data_on_gpu: constant GPU memory margin in GB (default: 0.5)
+  --data-on-gpu-margin-frac F  data_on_gpu: margin as a fraction of the datasets size (default: 0.0)
+  --trainings-per-gpu N        data_on_gpu: trainings sharing the GPU; the budget is GPU memory / N
+                               (default: $ML_TRAININGS_PER_GPU, set by run_training.sh, else 1)
 ```
 
 ### Run only evaluation (no training)
@@ -470,6 +477,10 @@ If one big job is still preferred, `--slots-per-gpu S` keeps the GPUs busy until
 ```bash
 ./run_training.sh -c /full/path/config.yml -o /full/path/out -k 20 -g 8 --cpus 40 --mem-per-cpu 6000 --slots-per-gpu 2 --separate-merge
 ```
+
+GPU memory of the trainings sharing a GPU: `run_training.sh` passes to every training the number of trainings that run on its GPU at the same time (`ML_TRAININGS_PER_GPU`): `S` with `--slots-per-gpu S`, otherwise the most trainings on one GPU when they all start together. With `data_on_gpu`, each training keeps its datasets on the GPU only if they fit, with the margin, in GPU memory / that number (and in the free memory); otherwise they stay in RAM, which is slower but does not crash. This share does not depend on when the trainings start, so trainings started together cannot overfill the GPU.
+
+The job exits non-zero if any fold (or training) or the merge fails. The other folds still run to the end. The failed ones are then listed together with the `--missing-folds` command, and the merge is skipped. With Slurm, the jobs chained after it (`afterok`) do not start.
 
 **When something goes wrong.** The merge waits for all the fold jobs to succeed (`afterok`). If a fold job fails or hits its time limit, the merge stays pending forever (`squeue` shows `DependencyNeverSatisfied`).
 1. Find the failed folds with `sacct -j <array id>` or the `slurm-<id>_<task>.out` logs in the output directory.

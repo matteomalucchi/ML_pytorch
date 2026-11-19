@@ -359,12 +359,32 @@ gpus: '0'
 # Copy the whole train/val/test datasets to the GPU once and take the batches
 # directly from there, instead of using DataLoader workers and copying every
 # batch to the GPU. Much faster for small models; num_workers and pin_memory
-# are then not used. If the datasets take more than half of the free GPU
-# memory they are kept in RAM and the batches are taken as slices there and
-# copied to the GPU one by one (still much faster than the DataLoaders, which
-# index and collate the events one by one). No effect on CPU. False uses the
-# standard DataLoaders.
+# are then not used. If the datasets do not fit in the GPU memory budget of the
+# training (see below), or if copying them runs out of GPU memory, they are
+# kept in RAM and the batches are taken as slices there and copied to the GPU
+# one by one (still much faster than the DataLoaders, which index and collate
+# the events one by one). No effect on CPU. False uses the standard
+# DataLoaders.
 data_on_gpu: True
+# GPU memory budget of data_on_gpu: the datasets are copied to the GPU only if
+#   datasets + margin <= min(total GPU memory / trainings_per_gpu, free GPU memory)
+# with margin = data_on_gpu_margin_gb (GB, 1e9 bytes) + data_on_gpu_margin_frac
+# * datasets. The share of the total memory per training does not depend on
+# when the trainings start, so trainings started together on the same GPU do
+# not overfill it; the free memory only guards against other processes on the
+# GPU. The margin covers the CUDA context, the model and optimizer, the
+# activations, the per-epoch shuffle permutation and the allocator
+# fragmentation (a few tenths of a GB for the small DNNs used here; increase it
+# for larger models or batches). Otherwise the datasets are kept in RAM
+# (batches sliced there and copied to the GPU). CLI: --data-on-gpu-margin-gb,
+# --data-on-gpu-margin-frac.
+data_on_gpu_margin_gb: 0.5
+data_on_gpu_margin_frac: 0.0
+# Number of trainings sharing the GPU at the same time (set automatically by
+# jobs/run_training.sh through the ML_TRAININGS_PER_GPU environment variable;
+# the CLI/config value wins if given). null: ML_TRAININGS_PER_GPU if set,
+# otherwise 1. CLI: --trainings-per-gpu.
+trainings_per_gpu: null
 # Allow TensorFloat-32 matrix multiplications on Ampere (or newer) GPUs
 # (ignored with deterministic: True).
 tf32: True

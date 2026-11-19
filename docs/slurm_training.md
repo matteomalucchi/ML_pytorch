@@ -36,6 +36,7 @@ Optional:
   --fold-jobs             all the fold jobs (array) + the merge, after --after or from the shared cache
   --missing-folds         resubmit only the unfinished folds (resuming) + the merge
   --slots-per-gpu INT     at most INT trainings per GPU at a time, the others start when a GPU frees up
+                          (the data_on_gpu budget of every training is then GPU memory / INT)
   --separate-merge        merge / post-process in a separate CPU job, releasing the GPUs earlier
   --monitor-interval SEC  seconds between the samples of the resource monitor (default: 10)
   --no-monitor            do not run the resource monitor (see "Resource usage monitor")
@@ -52,6 +53,8 @@ Optional:
   --no-slurm              Run directly without Slurm (for local testing)
   -- EXTRA                Extra arguments forwarded to ml_train
 ```
+
+The script exits non-zero if any training or the merge / post-processing fails. The other trainings still run to the end. The failed ones are then listed with the command to resubmit them (`--missing-folds` for the k-fold, `--load-last` otherwise), and the merge / post-processing is skipped. With Slurm, the jobs chained after it (`afterok`) then do not start.
 
 **Examples:**
 
@@ -122,7 +125,7 @@ The summary is printed at the end of the Slurm log, and is rewritten every 5 min
 
 The models are small DNNs, so the training is limited by the data loading and the Python overhead rather than by the GPU compute:
 
-- `data_on_gpu: True` (default) copies the whole datasets to the GPU once and takes the batches as slices of it, removing the DataLoader workers and the per-batch host-to-device copies. If the datasets take more than half of the free GPU memory (e.g. tens of millions of events on an 11 GB GPU), they are kept in RAM: the batches are sliced there and copied to the GPU one by one. This is still much faster than the DataLoaders, which index and collate the events one at a time. `--no-data-on-gpu` uses the standard DataLoaders.
+- `data_on_gpu: True` (default) copies the whole datasets to the GPU once and takes the batches as slices of it, removing the DataLoader workers and the per-batch host-to-device copies. The datasets are copied only if `datasets + margin <= min(total GPU memory / trainings per GPU, free GPU memory)`, where the margin is `data_on_gpu_margin_gb` GB (default 0.5) plus `data_on_gpu_margin_frac` (default 0.0) times the datasets size. The number of trainings per GPU is `trainings_per_gpu` (`--trainings-per-gpu`), otherwise the `ML_TRAININGS_PER_GPU` environment variable that `run_training.sh` sets for every training (`S` with `--slots-per-gpu S`, otherwise the most trainings on one GPU), otherwise 1. This share does not depend on when the trainings start, so trainings started together on the same GPU do not overfill it. If the datasets do not fit, or if copying them runs out of GPU memory, they are kept in RAM: the batches are sliced there and copied to the GPU one by one. This is still much faster than the DataLoaders, which index and collate the events one at a time. `--no-data-on-gpu` uses the standard DataLoaders.
 - The loss and accuracy are accumulated on the GPU (no synchronisation at every batch) and the validation/evaluation run without building the autograd graph.
 - A larger `batch_size` (e.g. 2048-8192) is the biggest further speed-up, but it changes the training dynamics: scale the learning rate accordingly.
 - `tf32: True` (default) speeds up the matrix multiplications on Ampere or newer GPUs.
