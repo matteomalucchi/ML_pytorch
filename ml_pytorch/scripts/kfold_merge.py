@@ -200,11 +200,13 @@ def check_fold_configs(fold_dirs):
     logger.info(f"Checked that the {len(fold_dirs)} folds are the folds of the same split")
 
 
-def get_kfold_data(cfg):
+def get_kfold_data(cfg, main_dir=None):
     """(cfg, arrays, meta, temp_dir) of the events of the k-fold training:
     the memory-mapped k-fold cache if it still exists (e.g. the merge runs in
     the same job as the folds), otherwise the events are loaded again into a
-    temporary cache (temp_dir, to be removed by the caller)."""
+    temporary cache (temp_dir, to be removed by the caller), with the folds
+    taken from the record of the split (kfold_split_dir, by default
+    <main_dir>/kfold_split) if there is one."""
     from ml_pytorch.utils.dataset import kfold_cache_exists, load_data, open_kfold_cache
     from ml_pytorch.utils.tools import resolve_input_variables
 
@@ -222,7 +224,19 @@ def get_kfold_data(cfg):
         prepare_cfg = OmegaConf.create(OmegaConf.to_container(cfg))
         prepare_cfg.kfold_cache = temp_dir
         prepare_cfg.kfold_prepare = True
-        prepare_cfg.kfold_split_dir = None
+        # rebuild exactly the split of the folds: checked against (and taken
+        # from) the record of the split saved by the first preparation, if
+        # there is one (not rewritten); otherwise not saved again
+        from ml_pytorch.utils.dataset import kfold_split_record_exists
+
+        split_dir = cfg.get("kfold_split_dir", None) or (
+            os.path.join(main_dir, "kfold_split") if main_dir else None
+        )
+        if split_dir and kfold_split_record_exists(split_dir):
+            prepare_cfg.kfold_split_dir = split_dir
+            prepare_cfg.kfold_reuse_split = True
+        else:
+            prepare_cfg.kfold_split_dir = None
         load_data(prepare_cfg, prepare_cfg.seed)
         cache_dir = temp_dir
     arrays, meta = open_kfold_cache(cache_dir, cfg)
@@ -386,7 +400,9 @@ def merge_scores(
     weight_clamp_fractions) are returned in ``weight_clamp``."""
     from ml_pytorch.utils.dataset import kfold_indices
 
-    cfg, arrays, meta, temp_dir = get_kfold_data(cfg)
+    cfg, arrays, meta, temp_dir = get_kfold_data(
+        cfg, main_dir=os.path.dirname(os.path.normpath(fold_dirs[0]))
+    )
     try:
         k_folds = cfg.k_folds
         n_events = meta["n_events"]

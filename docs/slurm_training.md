@@ -34,7 +34,8 @@ Optional:
   --after JOBIDS          with --folds / --merge-only / --fold-jobs / --missing-folds:
                           wait for these jobs (colon-separated)
   --fold-jobs             all the fold jobs (array) + the merge, after --after or from the shared cache
-  --missing-folds         resubmit only the unfinished folds (resuming) + the merge
+  --missing-folds         resubmit only the unfinished folds (resuming) + the merge; if the
+                          shared cache is gone, a prepare job first, with the saved split
   --slots-per-gpu INT     at most INT trainings per GPU at a time, the others start when a GPU frees up
                           (the data_on_gpu budget of every training is then GPU memory / INT)
   --separate-merge        merge / post-process in a separate CPU job, releasing the GPUs earlier
@@ -54,7 +55,7 @@ Optional:
   -- EXTRA                Extra arguments forwarded to ml_train
 ```
 
-The script exits non-zero if any training or the merge / post-processing fails. The other trainings still run to the end. The failed ones are then listed with the command to resubmit them (`--missing-folds` for the k-fold, `--load-last` otherwise), and the merge / post-processing is skipped. With Slurm, the jobs chained after it (`afterok`) then do not start.
+The script exits non-zero if any training or the merge / post-processing fails. The other trainings still run to the end. The failed ones are then listed with the command to resubmit them (for the k-fold, the same command with `--load-last`, or `--missing-folds`; `--load-last` otherwise), and the merge / post-processing is skipped. Resumed k-fold trainings take the folds from the split saved in `OUTDIR/kfold_split` (see "Restarting failed folds" in the main README). With Slurm, the jobs chained after it (`afterok`) then do not start.
 
 **Examples:**
 

@@ -1152,6 +1152,7 @@ def load_data(cfg, seed):
 
     if kfold:
         X_k = assign_fold_ids(X_k, cfg)
+        X_k = apply_saved_kfold_split(X_k, X_fts, cfg)
         arrays = {
             "fts": X_fts,
             "lbl": X_lbl,
@@ -1685,15 +1686,97 @@ def save_kfold_cache(cache_dir, arrays, meta, cfg):
         json.dump(meta, f, indent=2)
     logger.info(f"Saved the k-fold cache of {meta['n_events']} events in {cache_dir}")
 
-    # record of the split ([kl, dataset_idx, fold] of every event and the
-    # metadata), kept for reproducibility when the cache itself is in tmp
+    # record of the split ([kl, dataset_idx, fold] of every event, the
+    # metadata and a fingerprint of the events), kept for reproducibility when
+    # the cache itself is in tmp, and to rebuild exactly the same split when a
+    # k-fold training is resumed (kfold_reuse_split); not rewritten then
     split_dir = cfg.get("kfold_split_dir", None)
-    if split_dir:
+    if split_dir and not (
+        cfg.get("kfold_reuse_split", False) and kfold_split_record_exists(split_dir)
+    ):
         os.makedirs(split_dir, exist_ok=True)
         np.save(os.path.join(split_dir, "k.npy"), np.asarray(arrays["k"]))
+        record = dict(meta, fts_sha256=kfold_events_fingerprint(arrays["fts"]))
         with open(os.path.join(split_dir, KFOLD_CACHE_META), "w") as f:
-            json.dump(meta, f, indent=2)
+            json.dump(record, f, indent=2)
         logger.info(f"Saved the record of the k-fold split in {split_dir}")
+
+
+def kfold_split_record_exists(split_dir):
+    return all(
+        os.path.exists(os.path.join(split_dir, f)) for f in ["k.npy", KFOLD_CACHE_META]
+    )
+
+
+def kfold_events_fingerprint(fts):
+    """sha256 of the features (and event weights) of all the events, in the
+    shuffled order of the k-fold cache."""
+    fts = fts.numpy() if isinstance(fts, torch.Tensor) else np.asarray(fts)
+    return hashlib.sha256(np.ascontiguousarray(fts).data).hexdigest()
+
+
+def apply_saved_kfold_split(X_k, X_fts, cfg):
+    """With kfold_reuse_split (resumed k-fold training), take the fold of every
+    event from the record of the split saved in kfold_split_dir by the first
+    preparation, after checking that the events loaded now are the same, in
+    the same order: same config hash, same number of events, same [kl,
+    dataset_idx] of every event and, if recorded, same fingerprint of the
+    features. Otherwise the folds already trained and the resumed ones would
+    not be the folds of the same split, so a mismatch is an error. Without
+    kfold_reuse_split, or if there is no record, X_k is returned unchanged."""
+    split_dir = cfg.get("kfold_split_dir", None)
+    if not cfg.get("kfold_reuse_split", False):
+        return X_k
+    if not (split_dir and kfold_split_record_exists(split_dir)):
+        logger.warning(
+            f"kfold_reuse_split: no record of the k-fold split in {split_dir}: "
+            "using the split computed now from the config and the seed"
+        )
+        return X_k
+    with open(os.path.join(split_dir, KFOLD_CACHE_META)) as f:
+        record = json.load(f)
+    saved_k = np.load(os.path.join(split_dir, "k.npy"))
+    k_now = torch.as_tensor(X_k).numpy()
+    fix = (
+        f"Use the same config and input files as the first training, or start a "
+        f"new k-fold training (in a new output directory, or without "
+        f"kfold_reuse_split / --load-last to replace the split record {split_dir})"
+    )
+    if record.get("hash") != kfold_cache_hash(cfg):
+        raise ValueError(
+            f"kfold_reuse_split: the saved k-fold split {split_dir} was made with a "
+            "different config (data, fractions, oversampling, seed, k_folds or "
+            f"kfold_split). {fix}"
+        )
+    if saved_k.shape != k_now.shape:
+        raise ValueError(
+            f"kfold_reuse_split: {k_now.shape[0]} events loaded now, but the saved "
+            f"k-fold split {split_dir} has {saved_k.shape[0]}. {fix}"
+        )
+    if not np.array_equal(saved_k[:, :2], k_now[:, :2], equal_nan=True):
+        raise ValueError(
+            "kfold_reuse_split: the events loaded now are not the events of the "
+            f"saved k-fold split {split_dir} (or not in the same order). {fix}"
+        )
+    if "fts_sha256" in record and record["fts_sha256"] != kfold_events_fingerprint(
+        X_fts
+    ):
+        raise ValueError(
+            "kfold_reuse_split: the input variables of the events loaded now differ "
+            f"from those of the saved k-fold split {split_dir}. {fix}"
+        )
+    if not np.array_equal(saved_k[:, 2], k_now[:, 2]):
+        logger.warning(
+            "kfold_reuse_split: the folds computed now differ from the saved ones: "
+            "using the saved folds"
+        )
+    logger.info(
+        f"kfold_reuse_split: using the saved k-fold split {split_dir} "
+        f"({saved_k.shape[0]} events, checked against the events loaded now)"
+    )
+    X_k = torch.as_tensor(X_k).clone()
+    X_k[:, 2] = torch.as_tensor(saved_k[:, 2], dtype=X_k.dtype)
+    return X_k
 
 
 def kfold_test_info(test_idx, n_events):

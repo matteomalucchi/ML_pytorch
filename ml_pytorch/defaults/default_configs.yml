@@ -203,9 +203,22 @@ morphing_alpha_den: 0.0
 kfold_cache: null
 # Directory where the record of the split is saved when the cache is
 # prepared: k.npy ([kl, dataset index, fold] of every event, in the shuffled
-# order) and the metadata, for reproducibility. ml_train -k K and
-# jobs/run_training.sh use <output dir>/kfold_split.
+# order), the metadata and a fingerprint of the events, for reproducibility
+# and to resume a k-fold training with exactly the same split (see
+# kfold_reuse_split). ml_train -k K and jobs/run_training.sh use
+# <output dir>/kfold_split.
 kfold_split_dir: null
+# Resumed k-fold training: when the cache is prepared again (e.g. it was in a
+# temporary directory removed at the end of the job), take the fold of every
+# event from the record in kfold_split_dir instead of the split computed now,
+# after checking that the events loaded now are the same ones in the same
+# order (config hash, number of events, [kl, dataset index] of every event and
+# fingerprint of the input variables); a mismatch is an error, so the resumed
+# folds are always folds of the same split as the finished ones. The record is
+# then not rewritten. Without a record, the split computed now is used (with
+# a warning). jobs/run_training.sh sets it with --load-last / --missing-folds.
+# CLI: --kfold-reuse-split.
+kfold_reuse_split: False
 # Only prepare the k-fold cache (see kfold_cache) and exit.
 kfold_prepare: False
 

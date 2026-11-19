@@ -331,7 +331,7 @@ def run(main_dir, cfg, out_dir, max_events, random_events, label, weight_log_cla
     files = [find_best_onnx(d, logdiff=True) for d in fold_dirs]
     os.makedirs(out_dir, exist_ok=True)
 
-    cfg, arrays, meta, temp_dir = get_kfold_data(cfg)
+    cfg, arrays, meta, temp_dir = get_kfold_data(cfg, main_dir=main_dir)
     try:
         fold_id = np.asarray(arrays["k"][:, 2]).astype(np.int64)
         labels = np.asarray(arrays["lbl"]).reshape(len(fold_id), -1)[:, 0]

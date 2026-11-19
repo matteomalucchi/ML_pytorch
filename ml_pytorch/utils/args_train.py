@@ -270,6 +270,14 @@ parser.add_argument(
     type=str,
 )
 parser.add_argument(
+    "--kfold-reuse-split",
+    default=None,
+    help="K-fold, resumed training: when preparing the cache again, take the folds from the "
+    "record of the split in --kfold-split-dir (checked against the events loaded now) "
+    "instead of computing them again",
+    action="store_true",
+)
+parser.add_argument(
     "--kfold-prepare",
     default=None,
     help="K-fold: only load the events and save them in the --kfold-cache directory",

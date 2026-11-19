@@ -83,7 +83,13 @@
 #                           each) and the merge after them, from an existing
 #                           shared cache or after the prepare job (--after)
 #   --missing-folds         Resubmit only the folds without a finished model
-#                           (resuming from their checkpoints) and the merge
+#                           (resuming from their checkpoints) and the merge;
+#                           without the shared cache, a prepare job first
+#
+# Resuming a k-fold training (--load-last, --missing-folds): the events are
+# loaded again, but the fold of every event is taken from the split saved in
+# OUTDIR/kfold_split by the first preparation (ml_train --kfold-reuse-split),
+# after checking that the events are the same; a mismatch is an error.
 #   --slots-per-gpu INT     Run at most INT trainings per GPU at a time; the
 #                           others start when a GPU frees up (default: 0 = all
 #                           at once)
@@ -248,7 +254,10 @@ a CPU job merges them):
   --missing-folds         Recovery: resubmit only the folds that have no
                           finished model yet (with --load-last, so interrupted
                           folds resume from their last checkpoint) and the
-                          merge after them
+                          merge after them. If the shared cache is gone (e.g.
+                          after a single job), a prepare job is submitted
+                          first. The folds are always those of the split saved
+                          in OUTDIR/kfold_split (also with -k ... --load-last)
 
 Occupancy of a single job with several GPUs:
   --slots-per-gpu INT     Run at most INT trainings per GPU at a time; when one
@@ -746,16 +755,22 @@ if [[ -z "${SLURM_JOB_ID:-}" && "$NO_SLURM" != true ]]; then
             echo "K-fold merge job ($(queue_name "$MERGE_GPU")): ${MERGE_JOB_ID}${AFTER:+, after ${AFTER}}"
             exit 0
         fi
-        if [[ -z "$AFTER" && ! -f "${SHARED_CACHE_DIR}/kfold_cache_meta.json" ]]; then
-            echo "Error: the folds ${MISSING[*]} are not finished but there is no shared k-fold cache in ${SHARED_CACHE_DIR}."
-            echo "Prepare it again (same config and seed, the split is identical) and resubmit after it:"
-            echo "  $0 -c $CONFIG_FILE -o $OUT_DIR -k $K_FOLDS --prepare-only   # -> job id P"
-            echo "  $0 -c $CONFIG_FILE -o $OUT_DIR -k $K_FOLDS --missing-folds --after P -g ${GPUS_PER_NODE}"
-            exit 1
-        fi
         echo "Unfinished folds: ${MISSING[*]} (they resume from their last checkpoint)"
         FOLDS=$(IFS=,; echo "${MISSING[*]}")
         LOAD_LAST=true
+        if [[ -z "$AFTER" && ! -f "${SHARED_CACHE_DIR}/kfold_cache_meta.json" ]]; then
+            # no shared cache (e.g. the folds ran in one job, whose cache was
+            # in its temporary directory): load the events again in a prepare
+            # job, with the folds taken from the saved split (--load-last ->
+            # --kfold-reuse-split), and start the folds after it
+            split_msg="with the saved split ${KFOLD_SPLIT_DIR}"
+            if [[ ! -f "${KFOLD_SPLIT_DIR}/k.npy" ]]; then
+                echo "Warning: no record of the k-fold split in ${KFOLD_SPLIT_DIR}: the split is computed again from the config and the seed."
+                split_msg="split computed again"
+            fi
+            AFTER=$(submit_cpu_job ml_kfold_prepare prepare_shared "" "$PREPARE_GPU") || exit 1
+            echo "No shared k-fold cache in ${SHARED_CACHE_DIR}: prepare job ($(queue_name "$PREPARE_GPU")) ${AFTER}, ${split_msg}"
+        fi
         N_MISSING_JOBS=$(( (${#MISSING[@]} + FOLDS_PER_JOB - 1) / FOLDS_PER_JOB ))
         TRAIN_JOB_ID=$(submit_fold_jobs "$AFTER" "$N_MISSING_JOBS") || exit 1
         echo "Fold jobs: array ${TRAIN_JOB_ID}, ${N_MISSING_JOBS} job(s) of ${FOLDS_PER_JOB} fold(s) on ${GPUS_PER_NODE} GPU(s) each${AFTER:+, after ${AFTER}}"
@@ -859,14 +874,19 @@ run_one_training() {
     # Find latest checkpoint for resuming
     local load_model_args=()
     if [[ "$LOAD_LAST" == true ]]; then
-        for ((epoch=200; epoch>=1; epoch--)); do
-            local ckpt="${model_dir}/model_${epoch}_state_dict.pt"
-            if [[ -f "$ckpt" ]]; then
-                load_model_args=(--load-model "$ckpt")
-                echo "Seed ${seed}: resuming from epoch ${epoch} (${ckpt})"
-                break
-            fi
+        # the checkpoint of the highest epoch
+        local ckpt epoch last_epoch=-1
+        shopt -s nullglob
+        for ckpt in "$model_dir"/model_*_state_dict.pt; do
+            epoch="${ckpt##*/model_}"; epoch="${epoch%_state_dict.pt}"
+            [[ "$epoch" =~ ^[0-9]+$ && "$epoch" -gt "$last_epoch" ]] && last_epoch="$epoch"
         done
+        shopt -u nullglob
+        if [[ "$last_epoch" -ge 0 ]]; then
+            ckpt="${model_dir}/model_${last_epoch}_state_dict.pt"
+            load_model_args=(--load-model "$ckpt")
+            echo "Seed ${seed}: resuming from epoch ${last_epoch} (${ckpt})"
+        fi
     fi
 
     local config_tag
@@ -968,6 +988,10 @@ run_prepare() {
         --kfold-cache "$cache_dir" --kfold-split-dir "$KFOLD_SPLIT_DIR"
         --kfold-prepare
     )
+    # resumed k-fold training: the events are loaded again, but the folds are
+    # taken from the record of the split saved by the first preparation
+    # (OUTDIR/kfold_split), after checking that the events are the same
+    [[ "$LOAD_LAST" == true ]] && prepare_args+=(--kfold-reuse-split)
     [[ ${#EXTRA_ARGS[@]} -gt 0 ]] && prepare_args+=("${EXTRA_ARGS[@]}")
     echo "Preparing the k-fold cache in ${cache_dir}..."
     mark_phase kfold_prepare
@@ -1107,8 +1131,12 @@ report_failed_trainings() {
     local IFS=","
     echo "Error: $# training(s) failed:${*/#/ }"
     if [[ "$K_FOLDS" -ge 2 ]]; then
-        echo "Resubmit only the unfinished folds (resuming from their checkpoints) and the merge with:"
-        echo "  $0 -c $CONFIG_FILE -o $OUT_DIR -k $K_FOLDS --missing-folds -g ${GPUS_PER_NODE}"
+        echo "To finish the k-fold training (the finished folds are kept, the others resume from"
+        echo "their last checkpoint, with exactly the saved split ${KFOLD_SPLIT_DIR}, then the merge):"
+        if [[ "$MODE" == train ]]; then
+            echo "  rerun the same command adding --load-last (all in one job again), or"
+        fi
+        echo "  $0 -c $CONFIG_FILE -o $OUT_DIR -k $K_FOLDS --missing-folds -g ${GPUS_PER_NODE}   (one GPU job per --folds-per-job folds)"
     else
         echo "Rerun the same command with --load-last to resume the unfinished trainings (the finished ones are skipped)."
     fi
@@ -1359,6 +1387,12 @@ case "$MODE" in
     train_folds_merge)
         # --fold-jobs / --missing-folds with --no-slurm: the folds, then the merge
         if [[ -n "$FOLD_LIST" ]]; then
+            # no shared cache (e.g. after a single job): load the events again,
+            # with the saved split if resuming (--load-last / --missing-folds)
+            if [[ ! -f "${SHARED_CACHE_DIR}/kfold_cache_meta.json" ]]; then
+                mkdir -p "$(dirname "$SHARED_CACHE_DIR")"
+                run_prepare "$SHARED_CACHE_DIR" keep
+            fi
             copy_shared_cache
             launch_trainings $(for f in $FOLD_LIST; do echo $(( INIT_SEED + f )); done) || exit 1
         fi

@@ -175,6 +175,7 @@ A ready-to-edit multi-class example is provided at `configs/hh4b_sig_bkg_classif
 | `gpus` | comma-separated GPU indices, or unset for CPU |
 | `seed` | seed of all the randomness (python, numpy and torch, also on GPU): event shuffling, splits, folds, oversampling, weight initialisation and dropout. Resumed trainings (`--load-model`) continue exactly as uninterrupted ones, since the checkpoints store the random generator, scheduler and early-stopper states. Bitwise identical on CPU; on GPU also needs `deterministic` |
 | `k_folds`, `fold`, `kfold_split`, `kfold_event_column`, `kfold_onnx`, `onnx_ratio`, `weight_log_clamp`, `kfold_cache` | k-fold training, see [K-fold training](#k-fold-training) |
+| `kfold_split_dir`, `kfold_reuse_split` | directory of the record of the k-fold split, and whether a new preparation of the cache takes the folds from it (checked against the events loaded now) instead of computing them again; see [Restarting failed folds](#restarting-failed-folds) (CLI `--kfold-split-dir`, `--kfold-reuse-split`) |
 | `shuffle_train` | reshuffle the training events at every epoch (default `False`; also with `data_on_gpu` and k-fold). The permutations come from the torch generator seeded with `seed`, so they are reproducible, also for resumed trainings. Validation and test are never shuffled |
 | `data_on_gpu` | copy the whole datasets to the GPU once and take the batches from there (default `True`). They are copied only if `datasets + margin <= min(total GPU memory / trainings_per_gpu, free GPU memory)`; otherwise, or if the copy runs out of GPU memory, they are kept in RAM and the batches are sliced there and copied to the GPU one by one |
 | `data_on_gpu_margin_gb`, `data_on_gpu_margin_frac` | margin of the `data_on_gpu` budget: `data_on_gpu_margin_gb` GB (1e9 bytes, default `0.5`) plus `data_on_gpu_margin_frac` times the datasets size (default `0.0`), for what the training needs apart from the datasets (CUDA context, model and optimizer, activations, shuffle permutation, allocator fragmentation) |
@@ -416,7 +417,7 @@ All the folds use the same `seed`. `--load-model`/`--eval-model` work for one fo
 
 `ml_train -k K` and `run_training.sh --k-folds K` use the cache automatically (`--no-kfold-cache` to disable it in the script).
 * **Where it lives:** in a temporary directory (`$TMPDIR`, node-local on the batch nodes). It is not written to the output disk, and it is removed when the training ends. In `run_training.sh` every job or array task prepares its own cache on its node.
-* **What is kept in the output directory:** only the record of the split in `<output dir>/kfold_split/`, which holds `k.npy` (kl, dataset index and fold of every event) and the metadata. This is for reproducibility.
+* **What is kept in the output directory:** only the record of the split in `<output dir>/kfold_split/`, which holds `k.npy` (kl, dataset index and fold of every event), the metadata and a fingerprint of the events. This is for reproducibility, and to resume failed folds with exactly the same split (see [Restarting failed folds](#restarting-failed-folds)).
 * **Reuse:** a cache given with `kfold_cache` is reused only if it was made with the same data, fractions, oversampling, seed, `k_folds` and `kfold_split`; otherwise `ml_train` stops. The batches are exactly the same as without the cache.
 
 **Out-of-fold scores without files.** The fold trainings don't save any score arrays. The merge evaluates the best ONNX model of every fold on its test events in memory, using the cache if it still exists or loading the events again into a temporary directory. It does the same on a random 1/(K-1) of each fold's training events, for the train/test comparison in the plots.
@@ -493,9 +494,27 @@ The job exits non-zero if any fold (or training) or the merge fails. The other f
 
    `--missing-folds` finds the folds without a finished best model (`fold_<k>/state_dict/model_best_epoch_*.onnx`) and resubmits only those, with `--load-last`, so an interrupted fold resumes from its last checkpoint exactly as if it had not stopped. It then submits the merge after them. If all the folds are done, it submits only the merge.
 
-   The shared cache is still there because the merge has not run. If it is gone, prepare it again with `--prepare-only`: the same config and seed give exactly the same split. Then use `--missing-folds --after <prepare id>`.
+   The shared cache is still there because the merge has not run. If it is gone, `--missing-folds` first submits a prepare job itself and starts the folds after it, so this is still one command (see [Restarting failed folds](#restarting-failed-folds)).
 
 For full manual control, `--folds LIST` (with `--load-last` to resume) trains given folds, and `--merge-only` merges. Both accept `--after`.
+
+#### Restarting failed folds
+
+If some folds fail in the middle of the training (crash, out of memory, time limit), the job exits non-zero and prints the command to finish the training. Rerun with the same config, output directory and `-k`. Either of these is a single command:
+
+```bash
+# the same command as the first time, adding --load-last: everything in one job again
+./run_training.sh -c /full/path/config.yml -o /full/path/out -k 20 -g 8 --cpus 40 --load-last
+
+# or: one GPU job per --folds-per-job unfinished folds, then the merge
+./run_training.sh -c /full/path/config.yml -o /full/path/out -k 20 --missing-folds -g 1 --cpus 4 --mem-per-cpu 6000
+```
+
+The finished folds (those with `fold_<k>/state_dict/model_best_epoch_*.onnx`) are skipped. The others resume from their last checkpoint, or start again if they did not save one. Then the folds are merged. Add `--no-slurm` to run the same steps in the current shell.
+
+The split is **not** made again. The events are read from the input files again, because the cache of a single job is in its temporary directory and is removed at the end. The fold of every event is then taken from the record saved in `<output dir>/kfold_split` by the first preparation (`kfold_reuse_split`, set automatically by `--load-last` and `--missing-folds`). Before that, the events are checked against the record: the config hash, the number of events, the kl and dataset index of every event, and a fingerprint of all the input variables. If anything differs, for example because the config or the input files changed, the preparation stops with an error, so the resumed folds are always folds of the same split as the finished ones. The record is not rewritten. A merge that has to load the events again also takes the folds from this record. The check of the test folds in the merge stays as it is (disjoint, covering all the events, the ones each fold was trained with).
+
+The reuse of the split needs the k-fold cache, which is the default (not `--no-kfold-cache`). Records saved before the fingerprint existed are checked without it.
 
 **The prepare job on a GPU node.** `--prepare-gpu` runs the prepare job on the GPU partition (`-p gpu --account=gpu_gres`, 1 GPU), e.g. when the CPU queue is busy or its nodes have too little memory. The preparation is CPU and I/O work, so the GPU stays idle during it. `--merge-gpu` does the same for the merge.
 
