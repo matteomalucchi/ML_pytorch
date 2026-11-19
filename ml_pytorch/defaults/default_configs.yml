@@ -141,7 +141,42 @@ onnx_ratio: False
 #            outlying weight; with 2 folds it is the same as the average.
 #            Needs onnx_ratio or morphing_alpha. Its models are always saved
 #            next to the average ones when a weight is defined.
+#   logaverage: exp of the average over the folds of the per-fold log-weight
+#            z_1 - z_0 (the logits of the 2-node softmax models), i.e. the
+#            geometric mean of the per-fold weights p1 / p0, saved as
+#            kfold_morphing_ratio_logaverage.onnx. Less sensitive than the
+#            average to one fold with a huge weight. Needs a model with
+#            export_logdiff_model (see below).
+#   logmedian: exp of the median over the folds of the per-fold log-weight
+#            (kfold_morphing_ratio_logmedian.onnx). Needs a model with
+#            export_logdiff_model.
+#   Per-fold log-weights: the models that define export_logdiff_model
+#   (DNN_softmax_reweight_model_maskedBN1D_logdiff, the same model as
+#   DNN_softmax_reweight_model_maskedBN1D, and
+#   DNN_softmax_reweight_model_maskedBN1D_small) are exported automatically
+#   also as <name>_logdiff.onnx next to every per-fold softmax ONNX model
+#   (unchanged), with output z_1 - z_0 = log(p1 / p0) (shape [N]) computed
+#   from the logits, which does not saturate where p0 -> 0 in float32; the
+#   training checks that exp(logdiff) = p1 / p0 (rtol 1e-4) on a batch where
+#   p0 > 1e-6. ml_kfold_merge then always builds the logaverage and logmedian
+#   models next to the others, so that all the combinations can be compared,
+#   and with kfold_split: event the event model of the weight
+#   (kfold_morphing_ratio_event_fold.onnx) is built from them,
+#   w = exp(clamp(Delta_k, -c, c)) of the fold k = event % k_folds. The other
+#   models export only the softmax ONNX, as before.
 kfold_onnx: average
+# Bound of the log of the final k-fold weights (c, float, or null for no
+# bound). If set, all the final weight models of the binary reweighting
+# (kfold_morphing_ratio_*: average, median, event_fold, logaverage,
+# logmedian; not all_folds and not the multiclass morphing) are bounded:
+#   - logaverage, logmedian (and event_fold with the logdiff models): the combined
+#     log-weight is clamped to [-c, c] before the exp;
+#   - average, median, event_fold: the final weight is clipped to
+#     [exp(-c), exp(c)].
+# The fraction of the events whose weight is clamped (on the k-fold data, see
+# ml_kfold_merge) is written to <output_dir>/kfold/kfold_summary.yml
+# (weight_clamp). E.g. 3.912 = ln 50 bounds the weights to [1/50, 50].
+weight_log_clamp: null
 # K-fold, 4-node multiclass morphing (classes data num., data den., ttbar
 # num., ttbar den., see the README): ttbar fraction alpha = N_ttbar / N_data of
 # the numerator region and of the denominator region (computed by ml_alpha,
@@ -168,9 +203,22 @@ morphing_alpha_den: 0.0
 kfold_cache: null
 # Directory where the record of the split is saved when the cache is
 # prepared: k.npy ([kl, dataset index, fold] of every event, in the shuffled
-# order) and the metadata, for reproducibility. ml_train -k K and
-# jobs/run_training.sh use <output dir>/kfold_split.
+# order), the metadata and a fingerprint of the events, for reproducibility
+# and to resume a k-fold training with exactly the same split (see
+# kfold_reuse_split). ml_train -k K and jobs/run_training.sh use
+# <output dir>/kfold_split.
 kfold_split_dir: null
+# Resumed k-fold training: when the cache is prepared again (e.g. it was in a
+# temporary directory removed at the end of the job), take the fold of every
+# event from the record in kfold_split_dir instead of the split computed now,
+# after checking that the events loaded now are the same ones in the same
+# order (config hash, number of events, [kl, dataset index] of every event and
+# fingerprint of the input variables); a mismatch is an error, so the resumed
+# folds are always folds of the same split as the finished ones. The record is
+# then not rewritten. Without a record, the split computed now is used (with
+# a warning). jobs/run_training.sh sets it with --load-last / --missing-folds.
+# CLI: --kfold-reuse-split.
+kfold_reuse_split: False
 # Only prepare the k-fold cache (see kfold_cache) and exit.
 kfold_prepare: False
 
@@ -267,6 +315,25 @@ learning_rate: 1e-2
 #                  w5_cosine01 -> 5 warm-up epochs, down to 0.01 * learning_rate
 learning_rate_schedule: linear
 
+# Optimizer, passed to the get_model of the model (as the learning rate
+# schedule, see ml_pytorch/utils/optimizers.py):
+#   adam : torch.optim.Adam
+#   adamw: torch.optim.AdamW (decoupled weight decay)
+optimizer: adam
+# Weight decay of the optimizer. null uses the PyTorch default of the
+# optimizer: 0 (no weight decay) for adam, 0.01 for adamw. For adam it is the
+# coefficient lambda of an L2 penalty (lambda/2) * ||theta||^2 added to the
+# loss (lambda * theta is added to the gradient, which then goes through the
+# adaptive scaling of Adam); for adamw every step multiplies the parameters
+# by (1 - learning_rate * weight_decay), independently of the gradients, so
+# the same number is not the same strength for the two optimizers. It is
+# applied to all the parameters of the model (also the biases and the
+# BatchNorm parameters). Before this option the models hard-coded it (1e-4 in
+# the multiclass and maskedBN1D models, 1e-3 in
+# DNN_softmax_reweight_model_maskedBN1D_small, 0 in the others): to
+# reproduce an older training of those models, set it here (e.g. 1e-4).
+weight_decay: null
+
 # Stop the training if the validation metric (eval_param) does not improve
 # by more than min_delta for patience consecutive epochs.
 early_stopping: False
@@ -305,12 +372,32 @@ gpus: '0'
 # Copy the whole train/val/test datasets to the GPU once and take the batches
 # directly from there, instead of using DataLoader workers and copying every
 # batch to the GPU. Much faster for small models; num_workers and pin_memory
-# are then not used. If the datasets take more than half of the free GPU
-# memory they are kept in RAM and the batches are taken as slices there and
-# copied to the GPU one by one (still much faster than the DataLoaders, which
-# index and collate the events one by one). No effect on CPU. False uses the
-# standard DataLoaders.
+# are then not used. If the datasets do not fit in the GPU memory budget of the
+# training (see below), or if copying them runs out of GPU memory, they are
+# kept in RAM and the batches are taken as slices there and copied to the GPU
+# one by one (still much faster than the DataLoaders, which index and collate
+# the events one by one). No effect on CPU. False uses the standard
+# DataLoaders.
 data_on_gpu: True
+# GPU memory budget of data_on_gpu: the datasets are copied to the GPU only if
+#   datasets + margin <= min(total GPU memory / trainings_per_gpu, free GPU memory)
+# with margin = data_on_gpu_margin_gb (GB, 1e9 bytes) + data_on_gpu_margin_frac
+# * datasets. The share of the total memory per training does not depend on
+# when the trainings start, so trainings started together on the same GPU do
+# not overfill it; the free memory only guards against other processes on the
+# GPU. The margin covers the CUDA context, the model and optimizer, the
+# activations, the per-epoch shuffle permutation and the allocator
+# fragmentation (a few tenths of a GB for the small DNNs used here; increase it
+# for larger models or batches). Otherwise the datasets are kept in RAM
+# (batches sliced there and copied to the GPU). CLI: --data-on-gpu-margin-gb,
+# --data-on-gpu-margin-frac.
+data_on_gpu_margin_gb: 0.5
+data_on_gpu_margin_frac: 0.0
+# Number of trainings sharing the GPU at the same time (set automatically by
+# jobs/run_training.sh through the ML_TRAININGS_PER_GPU environment variable;
+# the CLI/config value wins if given). null: ML_TRAININGS_PER_GPU if set,
+# otherwise 1. CLI: --trainings-per-gpu.
+trainings_per_gpu: null
 # Allow TensorFloat-32 matrix multiplications on Ampere (or newer) GPUs
 # (ignored with deterministic: True).
 tf32: True

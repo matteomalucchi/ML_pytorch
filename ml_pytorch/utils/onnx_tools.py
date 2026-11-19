@@ -211,7 +211,9 @@ def _select_per_fold(tensors, event, k_folds):
     return out
 
 
-def build_kfold_models(onnx_models, n_features, ratio=False, event_split=False):
+def build_kfold_models(
+    onnx_models, n_features, ratio=False, event_split=False, weight_log_clamp=None
+):
     """Build the ONNX models combining the k-fold models ``onnx_models``
     (ordered by fold).
 
@@ -229,6 +231,9 @@ def build_kfold_models(onnx_models, n_features, ratio=False, event_split=False):
         event number); every event is evaluated with the model of the fold
         ``event % k_folds``, i.e. the model that was not trained on it
       - ``event_ratio`` (event_split and ratio): same with the ratio
+    With ``weight_log_clamp`` c (None: no clamp) the final weight of
+    ``average_ratio``, ``median_ratio`` and ``event_ratio`` is clipped to
+    [exp(-c), exp(c)] (the per-fold weights of ``all_folds_ratio`` are not).
     """
     k_folds = len(onnx_models)
     b = argument(Tensor(np.float32, ("N", n_features)))
@@ -246,12 +251,19 @@ def build_kfold_models(onnx_models, n_features, ratio=False, event_split=False):
         ratios = [get_ratio_model_tensor_onnx(m, b) for m in onnx_models]
         models["average_ratio"] = build(
             {"args_0": b},
-            {"avg_w": op.div(_sum(ratios), op.const(np.float32(k_folds)))},
+            {
+                "avg_w": _clip_weight(
+                    op.div(_sum(ratios), op.const(np.float32(k_folds))),
+                    weight_log_clamp,
+                )
+            },
         )
         models["all_folds_ratio"] = build(
             {"args_0": b}, {f"w_fold_{k}": r for k, r in enumerate(ratios)}
         )
-        models["median_ratio"] = build({"args_0": b}, {"med_w": _median(ratios)})
+        models["median_ratio"] = build(
+            {"args_0": b}, {"med_w": _clip_weight(_median(ratios), weight_log_clamp)}
+        )
     if event_split:
         event = argument(Tensor(np.int64, ("N",)))
         models["event"] = build(
@@ -261,8 +273,85 @@ def build_kfold_models(onnx_models, n_features, ratio=False, event_split=False):
         if ratio:
             models["event_ratio"] = build(
                 {"args_0": b, "event": event},
-                {"w": _select_per_fold(ratios, event, k_folds)},
+                {
+                    "w": _clip_weight(
+                        _select_per_fold(ratios, event, k_folds), weight_log_clamp
+                    )
+                },
             )
+    return models
+
+
+def _clip_weight(w, weight_log_clamp):
+    """Clip the weight ``w`` to [exp(-c), exp(c)], c = ``weight_log_clamp``
+    (unchanged if None)."""
+    if weight_log_clamp is None:
+        return w
+    c = float(weight_log_clamp)
+    return op.clip(
+        w,
+        op.const(np.float32(np.exp(-c))),
+        op.const(np.float32(np.exp(c))),
+    )
+
+
+def _exp_clamped(log_w, weight_log_clamp):
+    """exp(clamp(log_w, -c, c)), c = ``weight_log_clamp`` (no clamp if None)."""
+    if weight_log_clamp is not None:
+        c = float(weight_log_clamp)
+        log_w = op.clip(log_w, op.const(np.float32(-c)), op.const(np.float32(c)))
+    return op.exp(log_w)
+
+
+def build_kfold_logdiff_models(
+    logdiff_models, n_features, event_split=False, weight_log_clamp=None
+):
+    """Build the ONNX weight models combining the folds in log space, from the
+    per-fold ``_logdiff.onnx`` models ``logdiff_models`` (ordered by fold),
+    whose output is the log-weight Delta_k = z_1 - z_0 (shape [N]) of the
+    2-node softmax models (exported by the models defining
+    export_logdiff_model).
+
+    Returns a dict {name: onnx model}, all with input ``args_0`` and one
+    float32 output of shape [N] (the weight), as the ratio models of
+    build_kfold_models:
+      - ``logaverage_ratio``: exp(clamp(mean_k Delta_k, -c, c)), the
+        geometric mean of the per-fold weights (output ``logavg_w``)
+      - ``logmedian_ratio``: exp(clamp(median_k Delta_k, -c, c)) (output
+        ``logmed_w``)
+      - ``event_ratio`` (event_split=True): inputs ``args_0`` and ``event``,
+        exp(clamp(Delta_k, -c, c)) of the fold k = event % k_folds (output
+        ``w``)
+    with c = ``weight_log_clamp`` (no clamp if None).
+    """
+    k_folds = len(logdiff_models)
+    b = argument(Tensor(np.float32, ("N", n_features)))
+    deltas = [get_score_tensor_onnx(m, b) for m in logdiff_models]
+    models = {
+        "logaverage_ratio": build(
+            {"args_0": b},
+            {
+                "logavg_w": _exp_clamped(
+                    op.div(_sum(deltas), op.const(np.float32(k_folds))),
+                    weight_log_clamp,
+                )
+            },
+        ),
+        "logmedian_ratio": build(
+            {"args_0": b},
+            {"logmed_w": _exp_clamped(_median(deltas), weight_log_clamp)},
+        ),
+    }
+    if event_split:
+        event = argument(Tensor(np.int64, ("N",)))
+        models["event_ratio"] = build(
+            {"args_0": b, "event": event},
+            {
+                "w": _exp_clamped(
+                    _select_per_fold(deltas, event, k_folds), weight_log_clamp
+                )
+            },
+        )
     return models
 
 

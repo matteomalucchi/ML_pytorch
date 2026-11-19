@@ -101,6 +101,8 @@ batch_size: 512
 epochs: 50
 learning_rate: 1e-3
 learning_rate_schedule: e5_drop75              # constant, linear, eX_dropYY or wX_cosineYY (warm-up + cosine decay, e.g. w5_cosine01), see ml_pytorch/utils/learning_rate_schedules.py and ml_pytorch/defaults/default_configs.yml
+optimizer: adam                                # adam or adamw, passed to get_model (ml_pytorch/utils/optimizers.py)
+weight_decay: null                             # null = PyTorch default of the optimizer (0 for adam, 0.01 for adamw)
 
 train_fraction: 0.7
 val_fraction: 0.2
@@ -172,8 +174,12 @@ A ready-to-edit multi-class example is provided at `configs/hh4b_sig_bkg_classif
 | `eval`, `roc`, `histos`, `history`, `onnx` | toggle the post-training outputs |
 | `gpus` | comma-separated GPU indices, or unset for CPU |
 | `seed` | seed of all the randomness (python, numpy and torch, also on GPU): event shuffling, splits, folds, oversampling, weight initialisation and dropout. Resumed trainings (`--load-model`) continue exactly as uninterrupted ones, since the checkpoints store the random generator, scheduler and early-stopper states. Bitwise identical on CPU; on GPU also needs `deterministic` |
-| `k_folds`, `fold`, `kfold_split`, `kfold_event_column`, `kfold_onnx`, `onnx_ratio`, `kfold_cache` | k-fold training, see [K-fold training](#k-fold-training) |
+| `k_folds`, `fold`, `kfold_split`, `kfold_event_column`, `kfold_onnx`, `onnx_ratio`, `weight_log_clamp`, `kfold_cache` | k-fold training, see [K-fold training](#k-fold-training) |
+| `kfold_split_dir`, `kfold_reuse_split` | directory of the record of the k-fold split, and whether a new preparation of the cache takes the folds from it (checked against the events loaded now) instead of computing them again; see [Restarting failed folds](#restarting-failed-folds) (CLI `--kfold-split-dir`, `--kfold-reuse-split`) |
 | `shuffle_train` | reshuffle the training events at every epoch (default `False`; also with `data_on_gpu` and k-fold). The permutations come from the torch generator seeded with `seed`, so they are reproducible, also for resumed trainings. Validation and test are never shuffled |
+| `data_on_gpu` | copy the whole datasets to the GPU once and take the batches from there (default `True`). They are copied only if `datasets + margin <= min(total GPU memory / trainings_per_gpu, free GPU memory)`; otherwise, or if the copy runs out of GPU memory, they are kept in RAM and the batches are sliced there and copied to the GPU one by one |
+| `data_on_gpu_margin_gb`, `data_on_gpu_margin_frac` | margin of the `data_on_gpu` budget: `data_on_gpu_margin_gb` GB (1e9 bytes, default `0.5`) plus `data_on_gpu_margin_frac` times the datasets size (default `0.0`), for what the training needs apart from the datasets (CUDA context, model and optimizer, activations, shuffle permutation, allocator fragmentation) |
+| `trainings_per_gpu` | number of trainings sharing the GPU at the same time, dividing the GPU memory of the `data_on_gpu` budget (default `null`: the `ML_TRAININGS_PER_GPU` environment variable, which `jobs/run_training.sh` sets, otherwise 1) |
 | `n_best_checkpoints` | number of best-epoch checkpoints (`state_dict/model_<epoch>_state_dict.pt`) kept on disk (default `5`): when a new best epoch is saved the oldest ones are removed. The last-epoch checkpoint is always kept as well. `0` keeps all of them |
 | `deterministic` | use only deterministic algorithms, so that trainings with the same seed are identical also on GPU (slower) |
 | `pad_value` | value marking padded entries (missing objects); must match the PocketCoffea fill value. Used to pad the missing objects and the `None` values of the inputs when loading the dataset, to not count padded objects when creating a missing `<collection>_N` from parquet files and, in `MaskedBatchNorm1d`, to exclude padded entries from the normalisation statistics |
@@ -195,10 +201,10 @@ Models live in `ml_pytorch/models/` and are referenced by the `ML_model` key in 
 Binary models (1-node sigmoid + `BCELoss`, or 2-node softmax + `CrossEntropyLoss`) keep the original `get_model` signature:
 
 ```python
-def get_model(input_size, device, lr, lr_schedule, n_epochs):
+def get_model(input_size, device, lr, lr_schedule, n_epochs, optimizer="adam", weight_decay=None):
     model = DNN(input_size).to(device)
     loss_fn = torch.nn.CrossEntropyLoss(reduction="none")  # or BCELoss for 1 node
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    optimizer = get_optimizer(optimizer, model.parameters(), lr, weight_decay)
     scheduler = get_lr_scheduler(lr_schedule, optimizer, n_epochs)
     return model, loss_fn, optimizer, scheduler
 ```
@@ -216,6 +222,7 @@ from torch import nn
 import torch
 
 from ml_pytorch.utils.learning_rate_schedules import get_lr_scheduler
+from ml_pytorch.utils.optimizers import get_optimizer
 
 
 class DNN(nn.Module):
@@ -242,11 +249,11 @@ class DNN(nn.Module):
         return ONNXWrappedModel(model)
 
 
-def get_model(input_size, num_classes, device, lr, lr_schedule, n_epochs):
+def get_model(input_size, num_classes, device, lr, lr_schedule, n_epochs, optimizer="adam", weight_decay=None):
     model = DNN(input_size, num_classes).to(device)
     # raw logits + CrossEntropyLoss for single-label multi-class
     loss_fn = torch.nn.CrossEntropyLoss(reduction="none")
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-4)
+    optimizer = get_optimizer(optimizer, model.parameters(), lr, weight_decay)
     scheduler = get_lr_scheduler(lr_schedule, optimizer, n_epochs)
     return model, loss_fn, optimizer, scheduler
 ```
@@ -255,7 +262,7 @@ To create your own architecture:
 
 1. Add a new file in `ml_pytorch/models/`, e.g. `DNN_my_model.py`.
 2. Define a `torch.nn.Module` whose `__init__` takes `dim_in` (and `num_classes` if multi-class).
-3. Define `get_model(input_size, [num_classes,] device, lr, lr_schedule, n_epochs)` returning `(model, loss_fn, optimizer, scheduler)`. Use `reduction="none"` on the loss — the training loop applies per-event weights manually.
+3. Define `get_model(input_size, [num_classes,] device, lr, lr_schedule, n_epochs, optimizer="adam", weight_decay=None)` returning `(model, loss_fn, optimizer, scheduler)`. Use `reduction="none"` on the loss — the training loop applies per-event weights manually. Build the optimizer with `get_optimizer(optimizer, model.parameters(), lr, weight_decay)` and the scheduler with `get_lr_scheduler(lr_schedule, optimizer, n_epochs)`: `ml_train` passes the `optimizer`, `weight_decay` and `learning_rate_schedule` of the config, so the model must not hard-code them.
 4. Reference the file (without `.py`) from your config: `ML_model: DNN_my_model`.
 
 When using a legacy binary model with a multi-class config (`num_classes > 2`), `ml_train` raises an explicit error and points you at `DNN_multiclass_model`.
@@ -335,6 +342,10 @@ Comet ML logging
 Performance
   --data-on-gpu                Keep the whole datasets on the GPU (default: on)
   --no-data-on-gpu             Use the standard DataLoaders (copy every batch to the GPU)
+  --data-on-gpu-margin-gb F    data_on_gpu: constant GPU memory margin in GB (default: 0.5)
+  --data-on-gpu-margin-frac F  data_on_gpu: margin as a fraction of the datasets size (default: 0.0)
+  --trainings-per-gpu N        data_on_gpu: trainings sharing the GPU; the budget is GPU memory / N
+                               (default: $ML_TRAININGS_PER_GPU, set by run_training.sh, else 1)
 ```
 
 ### Run only evaluation (no training)
@@ -364,7 +375,8 @@ k_folds: 5
 kfold_split: random          # or: event
 kfold_event_column: event    # used with kfold_split: event
 onnx_ratio: False            # also build the average-of-ratios ONNX (reweighting)
-kfold_onnx: average          # final ONNX model: average | event | median (see Outputs)
+kfold_onnx: average          # final ONNX model: average | event | median | logaverage | logmedian (see Outputs)
+weight_log_clamp: null       # bound c of log w of the final weight models (e.g. 3.912 = ln 50)
 train_fraction: 0.8          # the non-test events are split into training and
 val_fraction: 0.2            # validation with the ratio train : val
 ```
@@ -391,6 +403,10 @@ ml_kfold_merge -i out/kfold -c config.yml -k 5 [--ratio]
 # the fold metrics, the out-of-fold evaluation and the plots (no events loaded)
 ml_kfold_merge -i out/kfold --ratio --kfold-onnx median --onnx-only
 
+# fold-to-fold spread of the per-fold weights (needs the _logdiff.onnx models), plots and
+# tables in out/kfold/kfold/weight_diagnostics
+ml_kfold_weight_diag -i out/kfold [--label 0] [--max-events N | --random-events N] [--clamp C]
+
 # Slurm: the folds in parallel (here on 1 node) and merged at the end
 ./jobs/run_training.sh -c /full/path/config.yml -o /full/path/out/kfold -k 5 [--ratio] [-p NODES]
 ```
@@ -401,7 +417,7 @@ All the folds use the same `seed`. `--load-model`/`--eval-model` work for one fo
 
 `ml_train -k K` and `run_training.sh --k-folds K` use the cache automatically (`--no-kfold-cache` to disable it in the script).
 * **Where it lives:** in a temporary directory (`$TMPDIR`, node-local on the batch nodes). It is not written to the output disk, and it is removed when the training ends. In `run_training.sh` every job or array task prepares its own cache on its node.
-* **What is kept in the output directory:** only the record of the split in `<output dir>/kfold_split/`, which holds `k.npy` (kl, dataset index and fold of every event) and the metadata. This is for reproducibility.
+* **What is kept in the output directory:** only the record of the split in `<output dir>/kfold_split/`, which holds `k.npy` (kl, dataset index and fold of every event), the metadata and a fingerprint of the events. This is for reproducibility, and to resume failed folds with exactly the same split (see [Restarting failed folds](#restarting-failed-folds)).
 * **Reuse:** a cache given with `kfold_cache` is reused only if it was made with the same data, fractions, oversampling, seed, `k_folds` and `kfold_split`; otherwise `ml_train` stops. The batches are exactly the same as without the cache.
 
 **Out-of-fold scores without files.** The fold trainings don't save any score arrays. The merge evaluates the best ONNX model of every fold on its test events in memory, using the cache if it still exists or loading the events again into a temporary directory. It does the same on a random 1/(K-1) of each fold's training events, for the train/test comparison in the plots.
@@ -463,6 +479,10 @@ If one big job is still preferred, `--slots-per-gpu S` keeps the GPUs busy until
 ./run_training.sh -c /full/path/config.yml -o /full/path/out -k 20 -g 8 --cpus 40 --mem-per-cpu 6000 --slots-per-gpu 2 --separate-merge
 ```
 
+GPU memory of the trainings sharing a GPU: `run_training.sh` passes to every training the number of trainings that run on its GPU at the same time (`ML_TRAININGS_PER_GPU`): `S` with `--slots-per-gpu S`, otherwise the most trainings on one GPU when they all start together. With `data_on_gpu`, each training keeps its datasets on the GPU only if they fit, with the margin, in GPU memory / that number (and in the free memory); otherwise they stay in RAM, which is slower but does not crash. This share does not depend on when the trainings start, so trainings started together cannot overfill the GPU.
+
+The job exits non-zero if any fold (or training) or the merge fails. The other folds still run to the end. The failed ones are then listed together with the `--missing-folds` command, and the merge is skipped. With Slurm, the jobs chained after it (`afterok`) do not start.
+
 **When something goes wrong.** The merge waits for all the fold jobs to succeed (`afterok`). If a fold job fails or hits its time limit, the merge stays pending forever (`squeue` shows `DependencyNeverSatisfied`).
 1. Find the failed folds with `sacct -j <array id>` or the `slurm-<id>_<task>.out` logs in the output directory.
 2. Cancel the blocked merge with `scancel <merge id>`; the job ids are printed at submission.
@@ -474,9 +494,27 @@ If one big job is still preferred, `--slots-per-gpu S` keeps the GPUs busy until
 
    `--missing-folds` finds the folds without a finished best model (`fold_<k>/state_dict/model_best_epoch_*.onnx`) and resubmits only those, with `--load-last`, so an interrupted fold resumes from its last checkpoint exactly as if it had not stopped. It then submits the merge after them. If all the folds are done, it submits only the merge.
 
-   The shared cache is still there because the merge has not run. If it is gone, prepare it again with `--prepare-only`: the same config and seed give exactly the same split. Then use `--missing-folds --after <prepare id>`.
+   The shared cache is still there because the merge has not run. If it is gone, `--missing-folds` first submits a prepare job itself and starts the folds after it, so this is still one command (see [Restarting failed folds](#restarting-failed-folds)).
 
 For full manual control, `--folds LIST` (with `--load-last` to resume) trains given folds, and `--merge-only` merges. Both accept `--after`.
+
+#### Restarting failed folds
+
+If some folds fail in the middle of the training (crash, out of memory, time limit), the job exits non-zero and prints the command to finish the training. Rerun with the same config, output directory and `-k`. Either of these is a single command:
+
+```bash
+# the same command as the first time, adding --load-last: everything in one job again
+./run_training.sh -c /full/path/config.yml -o /full/path/out -k 20 -g 8 --cpus 40 --load-last
+
+# or: one GPU job per --folds-per-job unfinished folds, then the merge
+./run_training.sh -c /full/path/config.yml -o /full/path/out -k 20 --missing-folds -g 1 --cpus 4 --mem-per-cpu 6000
+```
+
+The finished folds (those with `fold_<k>/state_dict/model_best_epoch_*.onnx`) are skipped. The others resume from their last checkpoint, or start again if they did not save one. Then the folds are merged. Add `--no-slurm` to run the same steps in the current shell.
+
+The split is **not** made again. The events are read from the input files again, because the cache of a single job is in its temporary directory and is removed at the end. The fold of every event is then taken from the record saved in `<output dir>/kfold_split` by the first preparation (`kfold_reuse_split`, set automatically by `--load-last` and `--missing-folds`). Before that, the events are checked against the record: the config hash, the number of events, the kl and dataset index of every event, and a fingerprint of all the input variables. If anything differs, for example because the config or the input files changed, the preparation stops with an error, so the resumed folds are always folds of the same split as the finished ones. The record is not rewritten. A merge that has to load the events again also takes the folds from this record. The check of the test folds in the merge stays as it is (disjoint, covering all the events, the ones each fold was trained with).
+
+The reuse of the split needs the k-fold cache, which is the default (not `--no-kfold-cache`). Records saved before the fingerprint existed are checked without it.
 
 **The prepare job on a GPU node.** `--prepare-gpu` runs the prepare job on the GPU partition (`-p gpu --account=gpu_gres`, 1 GPU), e.g. when the CPU queue is busy or its nodes have too little memory. The preparation is CPU and I/O work, so the GPU stays idle during it. `--merge-gpu` does the same for the merge.
 
@@ -495,7 +533,7 @@ Notes:
 * `kfold_split/`: the record of the split (`k.npy` and the metadata).
 * `kfold/kfold_summary.yml`: best epoch and validation/test loss and accuracy of each fold, with their mean and standard deviation.
 * `kfold/`: the histograms, ROC and calibration curves of the out-of-fold scores of all the events. With `--save-numpy` it also holds `score_lbl_array_oof.npz`, which contains `score_lbl_array_test`, `fold_test` (the fold of each event) and the training scores.
-* `kfold_onnx/folds/model_fold<k>.onnx`: the best model of each fold.
+* `kfold_onnx/folds/model_fold<k>.onnx`: the best model of each fold (and, for the models with `export_logdiff_model`, `model_fold<k>_logdiff.onnx`, its log-weight `z1 - z0`).
 * `kfold_onnx/kfold_<type>_<combination>.onnx`: the combined models. The type says what the model computes:
 
   | type | output | built |
@@ -511,11 +549,16 @@ Notes:
   | `average` | `args_0`, the input variables `(N, n_features)` float32 | the average over the folds (`avg_score` or `avg_w`). For the ratio and the morphing, the weight of every fold is computed first and then averaged, as `ml_onnx -ar` / `-ar -mc` do (for the morphing, the mean of `relu(r_0 - α r_2) / (relu(r_1 - α_den r_3) + eps)`, not the average numerator over the average denominator). Use it for events that were not used in the training |
   | `median` | `args_0` | for each event, the **median over the folds of the weight** of each fold (`med_w`); only for `morphing_ratio` and `morphing_ttbar_subtracted`. The scores, numerators and denominators are not changed. Unlike the average, one fold with an outlying weight (e.g. a near-zero denominator) cannot move it. For an even K it is the mean of the two middle weights, and with K = 2 it is equal to the average |
   | `all_folds` | `args_0` | the output of every fold separately, not averaged (`score_fold_<k>` or `w_fold_<k>`) |
-  | `event_fold` | `args_0` and `event`, the event number `(N,)` int64 | the output of the fold `event % K`, the model that was **not** trained on the event. Use it for the events that were used in the training (e.g. the training regions); only with `kfold_split: event` |
+  | `event_fold` | `args_0` and `event`, the event number `(N,)` int64 | the output of the fold `event % K`, the model that was **not** trained on the event. Use it for the events that were used in the training (e.g. the training regions); only with `kfold_split: event`. With the `_logdiff.onnx` models the `morphing_ratio` one is `exp(clamp(z1 - z0, -c, c))` of that fold |
+  | `logaverage` | `args_0` | only `morphing_ratio` with the `_logdiff.onnx` models: `exp(clamp(mean_k Δ_k, -c, c))` (`logavg_w`), the **geometric mean** of the per-fold weights, with `Δ_k = z1 - z0` the log-weight of fold k computed from the logits (it does not saturate where `p0 → 0`). One fold with a huge weight moves it much less than the average |
+  | `logmedian` | `args_0` | only `morphing_ratio` with the `_logdiff.onnx` models: `exp(clamp(median_k Δ_k, -c, c))` (`logmed_w`) |
 
-* **The final model** is the combined model chosen with `kfold_onnx`: `kfold_<type>_average.onnx`, `kfold_<type>_median.onnx` or `kfold_<type>_event_fold.onnx`, with type `morphing_ttbar_subtracted` with `morphing_alpha`, `morphing_ratio` with `onnx_ratio`, otherwise `classifier`. It is recorded, with its inputs, in `kfold/kfold_summary.yml` (`final_onnx`); no extra copy is written.
+  **Per-fold log-weights.** The models that define `export_logdiff_model` are exported automatically, next to every per-fold softmax ONNX (unchanged), also as `<model>_logdiff.onnx` with the log-weight `z1 - z0` (shape `(N,)`) (`DNN_softmax_reweight_model_maskedBN1D_logdiff`, the same model as `DNN_softmax_reweight_model_maskedBN1D`, and `DNN_softmax_reweight_model_maskedBN1D_small`). The training checks that `exp(logdiff) = p1/p0` (rtol 1e-4) where `p0 > 1e-6`. The `logaverage` and `logmedian` models are then always built next to the others. **`weight_log_clamp: c`** (default `null`, no bound) bounds all the final `morphing_ratio` models (`average`, `median`, `event_fold`, `logaverage`, `logmedian`): the log combinations are clamped to `[-c, c]` before the exp, the others are clipped to `[exp(-c), exp(c)]`. The fraction of clamped events is written to `kfold/kfold_summary.yml` (`weight_clamp`): `oof_fold` for the weight of the fold every event is a test event of (all the events), and every combination on a random subset of events evaluated with all the folds (`ml_kfold_merge --clamp-events`, default 1M). `ml_kfold_weight_diag` compares the fold-to-fold spread of the weights in `w` and in `log w` and the tails of the combinations.
+
+* **The final model** is the combined model chosen with `kfold_onnx`: `kfold_<type>_average.onnx`, `kfold_<type>_median.onnx`, `kfold_<type>_event_fold.onnx` or (with the `_logdiff.onnx` models) `kfold_morphing_ratio_logaverage.onnx` / `kfold_morphing_ratio_logmedian.onnx`, with type `morphing_ttbar_subtracted` with `morphing_alpha`, `morphing_ratio` with `onnx_ratio`, otherwise `classifier`. It is recorded, with its inputs, in `kfold/kfold_summary.yml` (`final_onnx`); no extra copy is written.
   * `kfold_onnx: average` (default) gives the average over the folds. Use it when the model is applied to events that were not used in the training, e.g. the background reweighting applied in a separate region.
   * `kfold_onnx: median` gives the median over the folds of the weight, as an alternative to the average for events that were not used in the training. It needs `onnx_ratio` or `morphing_alpha`, otherwise there is no weight and the merge stops with an error.
+  * `kfold_onnx: logaverage` / `logmedian` give the geometric mean / median over the folds of the per-fold weights, computed in log space from the logits. They need a model with `export_logdiff_model` (e.g. `DNN_softmax_reweight_model_maskedBN1D_logdiff`); `ml_train` stops before the training otherwise.
   * `kfold_onnx: event` gives the event-number-aware model and needs `kfold_split: event`. Use it when the model is also applied to the training events, e.g. the sig/bkg or ggF/VBF classifiers. Events whose number was never seen in the training can be evaluated by any fold, so the same model works for them too.
 
 The combined models are checked against the per-fold models with onnxruntime when they are built. To use the per-fold models by hand with `K = 2`, apply `model_fold0.onnx` to the **even** events and `model_fold1.onnx` to the **odd** events.

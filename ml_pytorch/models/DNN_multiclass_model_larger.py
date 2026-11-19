@@ -2,6 +2,7 @@ from torch import nn
 import torch
 
 from ml_pytorch.utils.learning_rate_schedules import get_lr_scheduler
+from ml_pytorch.utils.optimizers import get_optimizer
 
 
 class MaskedBatchNorm1d(nn.Module):
@@ -146,6 +147,8 @@ def get_model(
     pad_value=-999.0,
     pad_fill_value=0.0,
     pad_indicators=True,
+    optimizer="adam",
+    weight_decay=None,
 ):
     model = DNN(
         input_size,
@@ -160,7 +163,8 @@ def get_model(
     #   model outputs raw logits [N, C]
     #   targets are int64 class indices [N]
     loss_fn = torch.nn.CrossEntropyLoss(reduction="none")
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-4)
+    # optimizer and weight decay from the config (optimizer, weight_decay)
+    optimizer = get_optimizer(optimizer, model.parameters(), lr, weight_decay)
     scheduler = get_lr_scheduler(lr_schedule, optimizer, n_epochs)
 
     return model, loss_fn, optimizer, scheduler

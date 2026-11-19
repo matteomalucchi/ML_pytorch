@@ -24,11 +24,13 @@ from ml_pytorch.utils.dataset import (
 )
 from ml_pytorch.utils.early_stopper import EarlyStopper
 from ml_pytorch.utils.lumitext import get_lumitext
+from ml_pytorch.utils.optimizers import check_optimizer_cfg
 from ml_pytorch.utils.setup_logger import setup_logger
 from ml_pytorch.utils.tools import (
     eval_model,
     add_training_state,
     copy_input_variables_file,
+    check_logdiff_onnx,
     export_onnx,
     kfold_weights_seed,
     resolve_input_variables,
@@ -45,6 +47,33 @@ if args.comet_token:
     from comet_ml.integration.pytorch import log_model
 
 import torch
+
+
+def first_batch_inputs(loader, n_max=4096):
+    """Input features (without the event weight, the last column) of the
+    first batch of ``loader``, as a float32 numpy array on the CPU."""
+    inputs = next(iter(loader))[0]
+    return inputs[:n_max, :-1].detach().cpu().numpy().astype(np.float32)
+
+
+def export_logdiff_onnx(model, model_name, batch_size, input_size, onnx_model_name, loader):
+    """Export also <onnx_model_name>_logdiff.onnx (z_1 - z_0, for the models
+    defining export_logdiff_model,
+    see export_logdiff_model of DNN_softmax_reweight_model_maskedBN1D_logdiff
+    and DNN_softmax_reweight_model_maskedBN1D_small) next to
+    the softmax model <onnx_model_name>.onnx, and check on the first batch of
+    ``loader`` that exp(logdiff) = p1 / p0 where p0 > 1e-6."""
+    logdiff_file = export_onnx(
+        model,
+        model_name,
+        batch_size,
+        input_size,
+        "cpu",
+        f"{onnx_model_name}_logdiff",
+        export_method="export_logdiff_model",
+    )
+    softmax_file = f"{os.path.dirname(model_name)}/{onnx_model_name}.onnx"
+    check_logdiff_onnx(softmax_file, logdiff_file, first_batch_inputs(loader))
 
 
 def make_output_dir(main_dir, overwrite):
@@ -153,6 +182,38 @@ def run_folds(cfg, main_dir, cache_dir, split_dir):
         subprocess.run(cmd, check=True)
 
 
+def resolve_data_on_gpu_budget(cfg):
+    """Check the data_on_gpu budget options and resolve trainings_per_gpu:
+    the config/CLI value, otherwise the ML_TRAININGS_PER_GPU environment
+    variable (set by jobs/run_training.sh), otherwise 1. The resolved value
+    is returned and not written to the config, so that the saved config of
+    the training does not fix it for a later resume."""
+    if cfg.data_on_gpu_margin_gb is None or cfg.data_on_gpu_margin_gb < 0:
+        raise ValueError(
+            f"data_on_gpu_margin_gb must be >= 0, got {cfg.data_on_gpu_margin_gb}"
+        )
+    if cfg.data_on_gpu_margin_frac is None or cfg.data_on_gpu_margin_frac < 0:
+        raise ValueError(
+            f"data_on_gpu_margin_frac must be >= 0, got {cfg.data_on_gpu_margin_frac}"
+        )
+    per_gpu = cfg.trainings_per_gpu
+    source = "trainings_per_gpu"
+    if per_gpu is None and os.environ.get("ML_TRAININGS_PER_GPU"):
+        source = "ML_TRAININGS_PER_GPU"
+        try:
+            per_gpu = int(os.environ["ML_TRAININGS_PER_GPU"])
+        except ValueError:
+            raise ValueError(
+                "ML_TRAININGS_PER_GPU must be an integer >= 1, got "
+                f"'{os.environ['ML_TRAININGS_PER_GPU']}'"
+            ) from None
+    if per_gpu is None:
+        per_gpu = 1
+    if int(per_gpu) != per_gpu or per_gpu < 1:
+        raise ValueError(f"{source} must be an integer >= 1, got {per_gpu}")
+    return int(per_gpu)
+
+
 def main():
     start_time = time.time()
     file_dir = os.path.dirname(__file__)
@@ -211,6 +272,9 @@ def main():
         )
     main_dir = cfg.output_dir
 
+    # fail before loading the data if the optimizer cannot be built
+    check_optimizer_cfg(cfg.optimizer, cfg.weight_decay)
+    trainings_per_gpu = resolve_data_on_gpu_budget(cfg)
     k_folds = cfg.k_folds or 0
     if k_folds >= 2:
         # fail before training if the final ONNX model cannot be built
@@ -408,9 +472,14 @@ def main():
 
     if cfg.data_on_gpu:
         # copy the whole datasets to the GPU once instead of transferring
-        # every batch (no effect on CPU or if they don't fit in memory)
+        # every batch (no effect on CPU; kept in RAM if they don't fit in the
+        # share of the GPU memory of this training)
         training_loader, val_loader, test_loader = loaders_to_device(
-            [training_loader, val_loader, test_loader], device
+            [training_loader, val_loader, test_loader],
+            device,
+            trainings_per_gpu=trainings_per_gpu,
+            margin_gb=cfg.data_on_gpu_margin_gb,
+            margin_frac=cfg.data_on_gpu_margin_frac,
         )
 
     if k_folds >= 2:
@@ -440,6 +509,24 @@ def main():
     import inspect as _inspect
 
     get_model_sig = _inspect.signature(ML_model.get_model)
+    # optimizer and weight decay of the config, passed to get_model as the
+    # learning rate schedule (an ML_model.py of an older training, used with
+    # --load-model / --eval-model, may not accept them: it then keeps its own)
+    optimizer_kwargs = {
+        k: cfg[k]
+        for k in ["optimizer", "weight_decay"]
+        if k in get_model_sig.parameters
+    }
+    ignored = [
+        f"{k}: {cfg[k]}"
+        for k, default in [("optimizer", "adam"), ("weight_decay", None)]
+        if k not in get_model_sig.parameters and cfg[k] != default
+    ]
+    if ignored:
+        raise ValueError(
+            f"The get_model of {cfg.ML_model} does not accept {', '.join(ignored)} "
+            "(model file of an older version): remove them from the config"
+        )
     if "num_classes" in get_model_sig.parameters:
         pad_kwargs = {
             k: cfg[k]
@@ -454,6 +541,7 @@ def main():
             cfg.learning_rate_schedule,
             n_epochs,
             **pad_kwargs,
+            **optimizer_kwargs,
         )
     else:
         if num_classes > 2:
@@ -464,7 +552,40 @@ def main():
                 "(e.g. DNN_multiclass_model)."
             )
         model, loss_fn, optimizer, scheduler = ML_model.get_model(
-            input_size, device, cfg.learning_rate, cfg.learning_rate_schedule, n_epochs
+            input_size,
+            device,
+            cfg.learning_rate,
+            cfg.learning_rate_schedule,
+            n_epochs,
+            **optimizer_kwargs,
+        )
+    logger.info(
+        f"Optimizer: {type(optimizer).__name__}, weight decay "
+        f"{optimizer.defaults.get('weight_decay')}"
+        + (
+            " (set by the model file, which does not take it from the config)"
+            if "weight_decay" not in optimizer_kwargs
+            else " (PyTorch default)" if cfg.weight_decay is None else ""
+        )
+    )
+    # models defining export_logdiff_model export also the per-fold log-weight
+    # z_1 - z_0 (<model>_logdiff.onnx), automatically
+    export_logdiff = hasattr(model, "export_logdiff_model")
+    if export_logdiff:
+        logger.info(
+            "The model defines export_logdiff_model: the ONNX models are exported "
+            "also as <model>_logdiff.onnx (log-weight z_1 - z_0)"
+        )
+    if (
+        k_folds >= 2
+        and cfg.kfold_onnx in ["logaverage", "logmedian"]
+        and not export_logdiff
+    ):
+        # fail before the training, not at the merge
+        raise ValueError(
+            f"kfold_onnx: {cfg.kfold_onnx} needs a model with export_logdiff_model "
+            f"(DNN_softmax_reweight_model_maskedBN1D_logdiff or "
+            f"DNN_softmax_reweight_model_maskedBN1D_small), not {cfg.ML_model}"
         )
     num_parameters = get_model_parameters_number(model)
 
@@ -683,6 +804,11 @@ def main():
             "cpu",
             f"model_last_epoch_{epoch}",
         )
+        if export_logdiff:
+            export_logdiff_onnx(
+                model, model_dir, batch_size, input_size, f"model_last_epoch_{epoch}",
+                test_loader,
+            )
 
     if cfg.history:
         # plot the training and validation loss and accuracy
@@ -735,6 +861,19 @@ def main():
                 else os.path.basename(cfg.eval_model).replace(".pt", "")
             ),
         )
+        if export_logdiff:
+            export_logdiff_onnx(
+                model,
+                best_model_name if not cfg.eval_model else cfg.eval_model,
+                batch_size,
+                input_size,
+                (
+                    f"model_best_epoch_{best_epoch}"
+                    if not cfg.eval_model
+                    else os.path.basename(cfg.eval_model).replace(".pt", "")
+                ),
+                test_loader,
+            )
 
     model.to(device)
     model.eval()

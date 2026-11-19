@@ -183,6 +183,33 @@ parser.add_argument(
     action="store_false",
 )
 parser.add_argument(
+    "--data-on-gpu-margin-gb",
+    dest="data_on_gpu_margin_gb",
+    default=None,
+    help="data_on_gpu: constant GPU memory margin in GB (1e9 bytes) for what the "
+    "training needs apart from the datasets (CUDA context, model, activations, ...). "
+    "The datasets are copied to the GPU only if datasets + margin <= "
+    "min(total GPU memory / trainings per GPU, free GPU memory) (default: 0.5 from the config)",
+    type=float,
+)
+parser.add_argument(
+    "--data-on-gpu-margin-frac",
+    dest="data_on_gpu_margin_frac",
+    default=None,
+    help="data_on_gpu: additional GPU memory margin as a fraction of the datasets "
+    "size (default: 0.0 from the config)",
+    type=float,
+)
+parser.add_argument(
+    "--trainings-per-gpu",
+    dest="trainings_per_gpu",
+    default=None,
+    help="data_on_gpu: number of trainings sharing the GPU at the same time; the "
+    "datasets budget is the total GPU memory divided by it (default: the "
+    "ML_TRAININGS_PER_GPU environment variable, set by jobs/run_training.sh, else 1)",
+    type=int,
+)
+parser.add_argument(
     "--overwrite",
     default=None,
     help="Overwrite output directory",
@@ -243,6 +270,14 @@ parser.add_argument(
     type=str,
 )
 parser.add_argument(
+    "--kfold-reuse-split",
+    default=None,
+    help="K-fold, resumed training: when preparing the cache again, take the folds from the "
+    "record of the split in --kfold-split-dir (checked against the events loaded now) "
+    "instead of computing them again",
+    action="store_true",
+)
+parser.add_argument(
     "--kfold-prepare",
     default=None,
     help="K-fold: only load the events and save them in the --kfold-cache directory",
@@ -251,8 +286,8 @@ parser.add_argument(
 parser.add_argument(
     "--kfold-onnx",
     default=None,
-    choices=["average", "event", "median"],
-    help="K-fold: final ONNX model, average over the folds, model of the fold event %% k_folds, or median over the folds of the weight (needs --onnx-ratio or morphing_alpha)",
+    choices=["average", "event", "median", "logaverage", "logmedian"],
+    help="K-fold: final ONNX model, average over the folds, model of the fold event %% k_folds, median over the folds of the weight (needs --onnx-ratio or morphing_alpha), or geometric mean (logaverage) / median (logmedian) over the folds of the per-fold weights computed in log space (need a model with export_logdiff_model)",
     type=str,
 )
 parser.add_argument(
