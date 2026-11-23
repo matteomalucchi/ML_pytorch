@@ -532,6 +532,7 @@ Notes:
 * `fold_<k>/`: a normal training output for each fold, plus `kfold_fold_info.json`. The test scores (plots, and `score_lbl_array.npz` with `--save-numpy`) are the scores of the events of fold `k`, with no event dropped.
 * `kfold_split/`: the record of the split (`k.npy` and the metadata).
 * `kfold/kfold_summary.yml`: best epoch and validation/test loss and accuracy of each fold, with their mean and standard deviation.
+* `kfold/history_<train|val>_<loss|accuracy>.png`: with `history: True`, the training / validation loss / accuracy of all the folds in one plot per curve (one colour per fold, up to 20 folds, with a dashed vertical line in the colour of the fold at its last epoch), read from the `fold_<k>/history.npz` that every fold saves when plotting its history (`plot_history` / `ml_history` always save `history.npz` next to `history.png`).
 * `kfold/`: the histograms, ROC and calibration curves of the out-of-fold scores of all the events. With `--save-numpy` it also holds `score_lbl_array_oof.npz`, which contains `score_lbl_array_test`, `fold_test` (the fold of each event) and the training scores.
 * `kfold_onnx/folds/model_fold<k>.onnx`: the best model of each fold (and, for the models with `export_logdiff_model`, `model_fold<k>_logdiff.onnx`, its log-weight `z1 - z0`).
 * `kfold_onnx/kfold_<type>_<combination>.onnx`: the combined models. The type says what the model computes:

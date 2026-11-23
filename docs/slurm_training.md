@@ -57,6 +57,8 @@ Optional:
 
 The script exits non-zero if any training or the merge / post-processing fails. The other trainings still run to the end. The failed ones are then listed with the command to resubmit them (for the k-fold, the same command with `--load-last`, or `--missing-folds`; `--load-last` otherwise), and the merge / post-processing is skipped. Resumed k-fold trainings take the folds from the split saved in `OUTDIR/kfold_split` (see "Restarting failed folds" in the main README). With Slurm, the jobs chained after it (`afterok`) then do not start.
 
+**K-fold status file.** With `-k`, every job that trains or merges folds writes `OUTDIR/kfold_status.txt` when it ends, also if it fails (the prepare job does not). It lists the folds that finished, i.e. those with a best ONNX model (`fold_<k>/state_dict/*best_epoch*.onnx`), and the ones that did not, with the exit code if the fold failed in that job and the epoch of its last checkpoint. If some folds are missing, it also gives the `--missing-folds` command to resume them. The file is also printed at the end of the Slurm log. The status is read from `OUTDIR`, so it covers the folds of all the jobs. With several fold jobs, each job rewrites the file when it ends, so folds still running in other jobs show up as not finished.
+
 **Examples:**
 
 ```bash

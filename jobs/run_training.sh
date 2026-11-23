@@ -48,6 +48,14 @@
 # failed ones are listed with how to resubmit them). The merge is then not
 # run, and the Slurm jobs chained after it (afterok) do not start.
 #
+# K-fold status: at the end of every k-fold job that trains or merges folds
+# (also if it fails), OUTDIR/kfold_status.txt is (re)written with the folds
+# that finished (they have a best ONNX model, fold_<k>/state_dict/
+# *best_epoch*.onnx) and those that did not (with the exit code if the fold
+# failed in this job, and the last checkpoint epoch), plus the --missing-folds
+# command to resume them. With several fold jobs, each one rewrites it when it
+# ends, so folds still running in other jobs appear as not finished.
+#
 # GPU memory: every training gets ML_TRAININGS_PER_GPU, the number of trainings
 # sharing its GPU at the same time (all at once: the most trainings on one GPU;
 # with --slots-per-gpu: the slots), and keeps its datasets on the GPU
@@ -216,6 +224,11 @@ Exit code: non-zero if any training or the merge / post-processing fails. The
 other trainings still run to the end, then the failed ones are listed with the
 command to resubmit them; the merge is not run, and the Slurm jobs chained
 after this one (afterok) do not start.
+
+K-fold status: every k-fold job that trains or merges folds writes, when it
+ends (also if it fails), OUTDIR/kfold_status.txt with the folds that finished
+(best ONNX model in fold_<k>/state_dict) and those that did not (exit code if
+failed in this job, last checkpoint epoch) and the --missing-folds command.
 
 K-fold in several jobs (the events are loaded once by a CPU job into a shared
 cache, the folds are trained by small GPU jobs that copy it to their node, and
@@ -1074,6 +1087,7 @@ launch_trainings() {
             wait "${sim_pids[$i]}"
             rc=$?
             rc=$(training_rc "${seeds[$i]}" "$rc")
+            TRAINING_RC[${seeds[$i]}]="$rc"
             [[ "$rc" -ne 0 ]] && failed+=("$(training_label "${seeds[$i]}") (rc ${rc})")
         done
         report_failed_trainings "${failed[@]}"
@@ -1096,6 +1110,7 @@ launch_trainings() {
                     wait "${pids[$k]}" 2>/dev/null
                     rc=$?
                     rc=$(training_rc "${seeds[$k]}" "$rc")
+                    TRAINING_RC[${seeds[$k]}]="$rc"
                     [[ "$rc" -ne 0 ]] && failed+=("$(training_label "${seeds[$k]}") (rc ${rc})")
                     gpu_running[${pid_gpu[$k]}]=$(( gpu_running[${pid_gpu[$k]}] - 1 ))
                     unset 'pids[k]' 'pid_gpu[k]'
@@ -1118,6 +1133,7 @@ launch_trainings() {
         wait "${pids[$k]}" 2>/dev/null
         rc=$?
         rc=$(training_rc "${seeds[$k]}" "$rc")
+        TRAINING_RC[${seeds[$k]}]="$rc"
         [[ "$rc" -ne 0 ]] && failed+=("$(training_label "${seeds[$k]}") (rc ${rc})")
     done
     report_failed_trainings "${failed[@]}"
@@ -1215,6 +1231,75 @@ MONITOR_DIR="${OUT_DIR}/resource_usage"
 MONITOR_PID=""
 MONITOR_PHASE_FILE=""
 REMOVE_ON_EXIT=""
+# exit code of every training launched by this job, by seed (launch_trainings)
+declare -A TRAINING_RC=()
+
+# ─── K-fold status file ──────────────────────────────────────────────────────
+# OUT_DIR/kfold_status.txt: the folds that finished (they have a best ONNX
+# model) and those that did not, from the files in OUT_DIR (so it also covers
+# the folds of the other jobs), with the exit codes of the folds of this job.
+# Written atomically (temporary file + mv), since several fold jobs may end at
+# the same time; it is also printed in the log.
+write_kfold_status() {
+    local job_rc="$1"
+    [[ "$K_FOLDS" -ge 2 ]] || return 0
+    local status_file="${OUT_DIR}/kfold_status.txt"
+    local tmp_file="${status_file}.tmp.$$"
+    local -a done_lines=() missing_lines=() missing_folds=()
+    local f seed model_dir best ckpt epoch last_epoch info
+    for ((f=0; f<K_FOLDS; f++)); do
+        seed=$(( INIT_SEED + f ))
+        model_dir="${OUT_DIR}/fold_${f}/state_dict"
+        # the best model, not the <model>_logdiff.onnx of onnx_logdiff
+        best=$(ls "$model_dir"/*best_epoch*.onnx 2>/dev/null | grep -v '_logdiff\.onnx$' | head -n 1)
+        if [[ -n "$best" ]]; then
+            done_lines+=("  fold_${f}  $(basename "$best")")
+            continue
+        fi
+        missing_folds+=("$f")
+        last_epoch=-1
+        shopt -s nullglob
+        for ckpt in "$model_dir"/model_*_state_dict.pt; do
+            epoch="${ckpt##*/model_}"; epoch="${epoch%_state_dict.pt}"
+            [[ "$epoch" =~ ^[0-9]+$ && "$epoch" -gt "$last_epoch" ]] && last_epoch="$epoch"
+        done
+        shopt -u nullglob
+        if [[ -n "${TRAINING_RC[$seed]:-}" ]]; then
+            info="failed in this job (rc ${TRAINING_RC[$seed]})"
+        elif [[ -d "${OUT_DIR}/fold_${f}" ]]; then
+            info="not finished (failed, or still running in another job)"
+        else
+            info="not started"
+        fi
+        if [[ "$last_epoch" -ge 0 ]]; then
+            info+=", last checkpoint: epoch ${last_epoch}"
+        else
+            info+=", no checkpoint"
+        fi
+        missing_lines+=("  fold_${f}  ${info}")
+    done
+
+    local job="${SLURM_ARRAY_JOB_ID:-${SLURM_JOB_ID:-local $$}}${SLURM_ARRAY_TASK_ID:+_${SLURM_ARRAY_TASK_ID}}"
+    {
+        echo "K-fold status of ${OUT_DIR}"
+        echo "Written at the end of job ${job} (mode ${MODE}, exit code ${job_rc}) on $(date '+%Y-%m-%d %H:%M:%S')"
+        echo
+        echo "Finished (best ONNX model): ${#done_lines[@]}/${K_FOLDS}"
+        [[ ${#done_lines[@]} -gt 0 ]] && printf '%s\n' "${done_lines[@]}"
+        echo
+        echo "Failed / not finished (no best ONNX model): ${#missing_lines[@]}/${K_FOLDS}"
+        if [[ ${#missing_lines[@]} -gt 0 ]]; then
+            printf '%s\n' "${missing_lines[@]}"
+            echo
+            echo "Resume them (from their last checkpoint) and merge with:"
+            echo "  ${SCRIPT_DIR}/run_training.sh -c ${CONFIG_FILE} -o ${OUT_DIR} -k ${K_FOLDS} --missing-folds -g ${GPUS_PER_NODE}"
+        fi
+    } > "$tmp_file" && mv -f "$tmp_file" "$status_file"
+    echo
+    echo "=== K-fold status (${status_file}) ==="
+    cat "$status_file" 2>/dev/null
+    return 0
+}
 
 mark_phase() {
     [[ -n "$MONITOR_PHASE_FILE" ]] && echo "$(date +%s) $*" >> "$MONITOR_PHASE_FILE"
@@ -1264,6 +1349,9 @@ stop_monitor() {
 on_exit() {
     local rc=$?
     stop_monitor "$rc"
+    # k-fold status of all the folds (not after the prepare job, which trains
+    # none), before the copy so that it is copied too
+    [[ "$MODE" != prepare_shared ]] && write_kfold_status "$rc"
     if [[ -n "$REMOVE_ON_EXIT" ]]; then
         echo "Removing the k-fold cache ${REMOVE_ON_EXIT}"
         rm -rf "$REMOVE_ON_EXIT"

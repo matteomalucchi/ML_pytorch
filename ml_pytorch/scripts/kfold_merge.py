@@ -6,6 +6,9 @@ fold k. This script:
     the out-of-fold scores of all the events, and plots them (score histograms,
     ROC and calibration curves); they are saved
     (<main_dir>/kfold/score_lbl_array_oof.npz) only with --save-numpy
+  - with history: True, plots the training / validation loss / accuracy of
+    all the folds (<main_dir>/kfold/history_<train|val>_<loss|accuracy>),
+    read from the fold_<k>/history.npz saved by every fold
   - checks that the test folds are disjoint, cover all the events and are
     those the folds were trained with
   - summarises the metrics of the folds with their mean and standard
@@ -865,6 +868,12 @@ def merge_kfold(
             dataset_idx_test=merged["dataset_idx_test"],
             save_roc=bool(cfg.get("save_roc", False)),
         )
+
+    if not onnx_only and plots and cfg.get("history", False):
+        # history of all the folds, from the fold_<k>/history.npz of every fold
+        from ml_pytorch.scripts.plot_history import plot_history_folds
+
+        plot_history_folds(fold_dirs, kfold_dir, lumitext=get_lumitext(cfg))
 
     if cfg.onnx:
         alpha = cfg.get("morphing_alpha", None)
