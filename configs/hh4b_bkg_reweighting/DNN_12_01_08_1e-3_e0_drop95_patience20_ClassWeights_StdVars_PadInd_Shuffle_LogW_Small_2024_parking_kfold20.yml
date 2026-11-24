@@ -1,17 +1,14 @@
 # Background morphing (2b -> 4b control region) on the 2024 ParkingHH data.
 # Version of
-# DNN_12_01_06_1e-3_w5cosine01_patience20_ClassWeights_StdVars_PadInd_Shuffle_2024_parking_kfold20.yml
-# with technical fixes only (same model architecture, inputs, training and
-# random k-fold split): 12_01_06 closes well in the control region but badly
-# in the signal region, with weights up to 1e10 from the ratio p1 / p0 of the
-# softmax outputs, which saturates where p0 -> 0, averaged over the folds (one
-# fold with a huge weight dominates the average). Here:
-#   - the per-fold weight is taken in log space from the logits,
-#     log w_k = z1 - z0 (exported automatically by the model as
-#     *_logdiff.onnx per fold), and the folds are combined with the
-#     geometric mean exp(mean_k log w_k) (kfold_onnx: logaverage);
-#   - the final weights are bounded to [1/50, 50] (weight_log_clamp: 3.912 =
-#     ln 50); the fraction of clamped events is in kfold/kfold_summary.yml.
+# DNN_12_01_07_1e-3_w5cosine01_patience20_ClassWeights_StdVars_PadInd_Shuffle_LogW_clamp50_2024_parking_kfold20.yml
+# (random k-fold split, per-fold log-weights z1 - z0 combined with the geometric
+# mean, weights bounded to [1/50, 50]) with a smaller, more regularised model
+# (DNN_softmax_reweight_model_maskedBN1D_small: hidden layers 128-64-32,
+# dropout 0.3, weight decay 1e-3 instead of 512-256-128, 0.2 and 1e-4) and 100
+# epochs instead of 200 (the cosine decay of the learning rate is then over
+# 100 epochs), to get a smoother density ratio, with fewer extreme weights
+# from regions with few events, that extrapolates better from the control to
+# the signal region.
 #
 # Run the 20 folds at the same time on one full 8-GPU node (t3gpu0X: 8 GTX
 # 1080 Ti, 40 CPUs, ~245 GB) and merge them:
@@ -70,22 +67,17 @@ k_folds: 20
 kfold_split: random
 kfold_onnx: logaverage
 onnx_ratio: True
-weight_log_clamp: 3.912
+# weight_log_clamp: 3.912
 
-# same model as 12_01_06 (DNN_softmax_reweight_model_maskedBN1D), which also
-# exports the per-fold log-weight z1 - z0 (*_logdiff.onnx)
-ML_model: DNN_softmax_reweight_model_maskedBN1D_logdiff
+ML_model: DNN_softmax_reweight_model_maskedBN1D_small
 
 data_format: parquet
 
 batch_size: 1024
-epochs: 200
+epochs: 100
 
-# 5 epochs of linear warm-up up to 1e-3, then cosine decay down to 1e-5
-# (0.01 * learning_rate) at the last epoch (199): ~8.7e-4 at epoch 50,
-# ~5.2e-4 at epoch 100, ~1.6e-4 at epoch 150
 learning_rate: 1e-3
-learning_rate_schedule: w5_cosine01
+learning_rate_schedule: e0_drop95
 
 # with patience 5 the training would stop in the first tens of epochs, when
 # the learning rate is still close to the maximum
