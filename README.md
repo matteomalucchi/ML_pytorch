@@ -164,7 +164,7 @@ A ready-to-edit multi-class example is provided at `configs/hh4b_sig_bkg_classif
 ### Other useful config keys
 
 | key | meaning |
-|---|---|
+| --- | --- |
 | `input_variables` | either a list of branch names or the name of a module in `ml_pytorch/defaults/` providing a `dnn_input_variables` `OrderedDict` |
 | `preprocess_variables_functions` | mapping `{var: [func_name, [args...]]}` resolved against `ml_pytorch/defaults/preprocess_variables_functions.py` |
 | `data_format` | `coffea`, `parquet`, or `root` |
@@ -416,6 +416,7 @@ All the folds use the same `seed`. `--load-model`/`--eval-model` work for one fo
 **K-fold cache.** With `kfold_cache: <dir>` (`--kfold-cache`), the events are loaded, shuffled and assigned to the folds only once (`ml_train --kfold-prepare`). They are saved in `<dir>` as `.npy` files, and every fold memory-maps them. The pages of a memory-mapped file are shared by all the processes of a node, so the events take the RAM once however many folds run in parallel. Each fold only holds the indices of its training, validation and test events; oversampling repeats indices, not events.
 
 `ml_train -k K` and `run_training.sh --k-folds K` use the cache automatically (`--no-kfold-cache` to disable it in the script).
+
 * **Where it lives:** in a temporary directory (`$TMPDIR`, node-local on the batch nodes). It is not written to the output disk, and it is removed when the training ends. In `run_training.sh` every job or array task prepares its own cache on its node.
 * **What is kept in the output directory:** only the record of the split in `<output dir>/kfold_split/`, which holds `k.npy` (kl, dataset index and fold of every event), the metadata and a fingerprint of the events. This is for reproducibility, and to resume failed folds with exactly the same split (see [Restarting failed folds](#restarting-failed-folds)).
 * **Reuse:** a cache given with `kfold_cache` is reused only if it was made with the same data, fractions, oversampling, seed, `k_folds` and `kfold_split`; otherwise `ml_train` stops. The batches are exactly the same as without the cache.
@@ -425,6 +426,7 @@ All the folds use the same `seed`. `--load-model`/`--eval-model` work for one fo
 With `-s-n/--save-numpy` all the scores are saved: `fold_<k>/score_lbl_array.npz` by every fold, and `kfold/score_lbl_array_oof.npz` by the merge. Without it, none are written.
 
 **Checks of the split.** The merge stops with an error if any of these fails:
+
 * every fold directory is the right fold of the same split (same data, fractions, oversampling, seed, `k_folds` and `kfold_split`);
 * every fold was trained with the test events expected from the split. Each fold writes the number and a sha256 fingerprint of its test events to `fold_<k>/kfold_fold_info.json`;
 * the test folds are disjoint and together contain every event exactly once.
@@ -484,6 +486,7 @@ GPU memory of the trainings sharing a GPU: `run_training.sh` passes to every tra
 The job exits non-zero if any fold (or training) or the merge fails. The other folds still run to the end. The failed ones are then listed together with the `--missing-folds` command, and the merge is skipped. With Slurm, the jobs chained after it (`afterok`) do not start.
 
 **When something goes wrong.** The merge waits for all the fold jobs to succeed (`afterok`). If a fold job fails or hits its time limit, the merge stays pending forever (`squeue` shows `DependencyNeverSatisfied`).
+
 1. Find the failed folds with `sacct -j <array id>` or the `slurm-<id>_<task>.out` logs in the output directory.
 2. Cancel the blocked merge with `scancel <merge id>`; the job ids are printed at submission.
 3. Resubmit the unfinished folds and the merge:
@@ -521,6 +524,7 @@ The reuse of the split needs the k-fold cache, which is the default (not `--no-k
 **By hand,** e.g. to resubmit one specific fold: `--folds LIST --after <id>` submits one job with these folds, waiting for the given jobs. `--merge-only --after <id1>:<id2>:...` submits the merge after them.
 
 Notes:
+
 * **Same options everywhere:** use the same config, `-s`, `-k` and extra `ml_train` options in all the steps. A fold job refuses a shared cache made with a different config, and the merge checks that the folds are the folds of the same split.
 * **Resources:** `--time`, `--mem-per-cpu`, `--cpus` and `-g` set the resources of the fold jobs; `--cpu-time`, `--cpu-mem-per-cpu` and `--cpu-cpus` those of the prepare and merge jobs. The prepare job needs the memory of loading all the events, about what a single fold needed before the cache.
 * **Other options:** `--ratio`, `--alpha`, `--save-roc` and `--load-last` work as for the single job. With `--load-last`, a `--folds` job skips the folds that are already finished and resumes the others.
@@ -575,18 +579,10 @@ cd jobs/
 
 ## Boosted HH4b: multiclass background morphing
 
-> [!NOTE]
-> The multiclass support was developed on the branch
-> [`claude/add-multiclass-support-mgeOZ`](https://github.com/thierryharte/ML_pytorch/tree/claude/add-multiclass-support-mgeOZ)
-> of `thierryharte/ML_pytorch` and will be merged soon. This repository is compatible with it.
->
-> The full boosted workflow (PocketCoffea runs, closure plots, category optimisation, datacards) is described in the
-> [boosted README of AnalysisConfigs](https://github.com/matteomalucchi/AnalysisConfigs/blob/main/configs/VBF_HH4b_boosted/README.md).
-
 The boosted analysis estimates the QCD background with an ABCD method. The plane is defined by the TXbb of the
 subleading Higgs candidate and by the Higgs mass:
 
-|  | mass sideband | mass window |
+| | mass sideband | mass window |
 | --- | --- | --- |
 | **high TXbb** | C: `boosted_signal_sideband_region_C` | D: `boosted_signal_region_D` (signal region) |
 | **low TXbb** | A: `boosted_control_sideband_region_A` | B: `boosted_control_region_B` |
@@ -682,6 +678,7 @@ and the two alphas, and `--json <file>` saves them.
 
 **Automatically with `run_training.sh`.** With `--alpha`, the post-processing computes alpha with `ml_alpha` (saved
 in `<outdir>/alpha.json`) and passes it to the conversion:
+
 * `ml_onnx -ar -mc -al <alpha> -ald <alpha_den>` for the trainings with several seeds;
 * `ml_kfold_merge --alpha <alpha> --alpha-den <alpha_den>` with `--k-folds`. The final model,
   `kfold_onnx/kfold_morphing_ttbar_subtracted_average.onnx`, is then the morphing weight averaged over the folds (or, with `kfold_onnx: median`,
@@ -781,7 +778,6 @@ ml_sb -i <training_directory> -klb full
 ml_input_vars -c <config_file> -o <output_directory>
 ```
 
-
 ## Input variable distributions
 
 Before the training starts, the normalized distributions of the input variables
@@ -863,12 +859,13 @@ Within that workspace, each experiment is grouped into a **project** named after
 **Existing workspaces:**
 
 | Config directory | Comet workspace |
-|---|---|
+| --- | --- |
 | `configs/hh4b_bkg_reweighting/` | [hh4b-bkg-reweighting](https://www.comet.com/hh4b-bkg-reweighting#projects) |
 | `configs/hh4b_ggF_VBF/` | [hh4b-ggf-vbf](https://www.comet.com/hh4b-ggf-vbf#projects) |
 | `configs/hh4b_sig_bkg_classifier/` | [hh4b-sig-bkg-classifier](https://www.comet.com/hh4b-sig-bkg-classifier#projects) |
 
 To add a new workspace:
+
 1. Go to [comet.com](https://www.comet.com) and create the workspace manually from the website.
 2. Name it to match the parent directory of your config file (underscores → hyphens), e.g. `configs/hh4b_sig_bkg_classifier/` → workspace `hh4b-sig-bkg-classifier` → `https://www.comet.com/hh4b-sig-bkg-classifier#projects`.
 3. Add it to the table above.
