@@ -178,7 +178,7 @@ kfold_onnx: average
 # (weight_clamp). E.g. 3.912 = ln 50 bounds the weights to [1/50, 50].
 weight_log_clamp: null
 # K-fold, 4-node multiclass morphing (classes data num., data den., ttbar
-# num., ttbar den., see the README): ttbar fraction alpha = N_ttbar / N_data of
+# num., ttbar den., see docs/boosted_hh4b.md): ttbar fraction alpha = N_ttbar / N_data of
 # the numerator region and of the denominator region (computed by ml_alpha,
 # or automatically by jobs/run_training.sh --alpha). If morphing_alpha is set,
 # the final k-fold ONNX model is the morphing weight

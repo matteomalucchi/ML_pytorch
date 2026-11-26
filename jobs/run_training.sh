@@ -62,7 +62,7 @@
 # (data_on_gpu) only if they fit in GPU memory / ML_TRAININGS_PER_GPU, minus
 # the margin data_on_gpu_margin_gb / data_on_gpu_margin_frac of the config.
 #
-# K-fold in several jobs (see the README, "K-fold in several jobs"): the events
+# K-fold in several jobs (see docs/kfold_training.md): the events
 # are loaded once by a CPU job into a shared cache, then the folds are trained
 # by small GPU jobs that copy it to their node, then a CPU job merges them.
 #   --prepare-job           Submit the CPU prepare job, an array of GPU jobs

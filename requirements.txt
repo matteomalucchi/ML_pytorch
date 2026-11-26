@@ -15,5 +15,5 @@ spox>=0.9
 uproot>=4
 
 # HEPPlotter (utils_configs.plot.HEPPlotter): used by every plotting script.
-# See the "Plotting with HEPPlotter" section of the README to update it.
+# See the "Installation" section of the README to update it.
 configs @ git+https://github.com/matteomalucchi/AnalysisConfigs.git
