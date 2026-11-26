@@ -40,7 +40,7 @@ Set `kfold_event_column` to the name of the column exactly as it appears in the 
 **2. When applying the final model.** With `kfold_onnx: event` the final model is `kfold_onnx/kfold_<type>_event_fold.onnx`. It has two inputs:
 
 | Input | Shape / type | Content |
-|---|---|---|
+| --- | --- | --- |
 | `args_0` | `(N, n_features)`, float32 | the input variables, as for the other models |
 | `event` | `(N,)`, int64 | the event number of each event |
 
@@ -111,7 +111,7 @@ Use the same config, `-s` and `-k` in all the steps.
 Useful options:
 
 | Option | Effect |
-|---|---|
+| --- | --- |
 | `--cpu-partition`, `--cpu-account`, `--cpu-cpus`, `--cpu-mem-per-cpu`, `--cpu-time` | resources of the prepare and merge jobs (default `-p standard --account=t3`) |
 | `--prepare-gpu`, `--merge-gpu` | run the prepare / merge job on the GPU partition instead |
 | `--slots-per-gpu S` | in a single big job, run at most S folds per GPU and start the next one as soon as a GPU is free |
@@ -138,7 +138,7 @@ With `--prepare-job`, if a fold job fails the merge job stays pending forever (`
 ## Outputs
 
 | Path | Content |
-|---|---|
+| --- | --- |
 | `fold_<k>/` | a normal training output for every fold |
 | `kfold_split/` | the record of the split, used to resume failed folds |
 | `kfold/kfold_summary.yml` | best epoch and losses of every fold, and the name of the final ONNX model |
@@ -151,7 +151,7 @@ With `--prepare-job`, if a fold job fails the merge job stays pending forever (`
 ### Choosing the final model (`kfold_onnx`)
 
 | `kfold_onnx` | Model | Use it for |
-|---|---|---|
+| --- | --- | --- |
 | `average` (default) | average of the folds | events not used in the training, e.g. reweighting applied in another region |
 | `median` | median over the folds of the weight (needs `onnx_ratio` or the morphing) | as `average`, but robust against one fold with an outlying weight |
 | `logaverage`, `logmedian` | geometric mean / median of the weights (needs a `*_logdiff` model) | as `average`, with even less sensitivity to single large weights |

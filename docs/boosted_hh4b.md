@@ -2,13 +2,13 @@
 
 Back to the [main README](../README.md).
 
-The full boosted workflow (PocketCoffea runs, closure plots, category optimisation, datacards) is described in the [boosted README of AnalysisConfigs](https://github.com/matteomalucchi/AnalysisConfigs/blob/main/configs/VBF_HH4b_boosted/README.md). This page covers the two DNNs trained here: the multiclass background morphing and the signal-vs-background classifier.
+This page covers the two DNNs trained here: the multiclass background morphing and the signal-vs-background classifier.
 
 ## Multiclass background morphing
 
 The QCD background is estimated with an ABCD method in the plane of the TXbb of the subleading Higgs candidate and the Higgs mass:
 
-|  | mass sideband | mass window |
+| | mass sideband | mass window |
 | --- | --- | --- |
 | **high TXbb** | C: `boosted_signal_sideband_region_C` | D: `boosted_signal_region_D` (signal region) |
 | **low TXbb** | A: `boosted_control_sideband_region_A` | B: `boosted_control_region_B` |

@@ -1,0 +1,74 @@
+input_variables: bkg_morphing_dnn_input_variables
+
+run2: False
+
+signal_sample: [DATA_JetMET_HH4bResolved]
+background_sample: [DATA_JetMET_HH4bResolved]
+
+signal_region: [4b_control_region]
+background_region: [2b_control_region_preW]
+
+signal_dataset:
+  [
+    DATA_JetMET_2022_postEE_EraE,
+    DATA_JetMET_2022_postEE_EraF,
+    DATA_JetMET_2022_postEE_EraG,
+  ]
+background_dataset:
+  [
+    DATA_JetMET_2022_postEE_EraE,
+    DATA_JetMET_2022_postEE_EraF,
+    DATA_JetMET_2022_postEE_EraG,
+  ]
+
+
+split_oversample: False
+
+k_folds: 20
+kfold_split: random
+kfold_onnx: logaverage
+onnx_ratio: True
+# weight_log_clamp: 3.912
+
+# same model as 12_01_06 (DNN_softmax_reweight_model_maskedBN1D), which also
+# exports the per-fold log-weight z1 - z0 (*_logdiff.onnx)
+ML_model: DNN_softmax_reweight_model_maskedBN1D_logdiff
+
+data_format: parquet
+
+batch_size: 1024
+epochs: 200
+
+learning_rate: 1e-3
+learning_rate_schedule: e0_drop95
+
+early_stopping: True
+patience: 20
+min_delta: 1e-5
+
+eval_param: "loss"
+
+# reshuffle the training events at every epoch
+shuffle_train: True
+
+# With the k-folding the test dataset is the fold (1/20 of the events) and the
+# other events are split into training and validation with the ratio
+# train_fraction : val_fraction. The sum of the fractions is the fraction of
+# events read, so it is kept at 1.
+train_fraction: 0.9
+val_fraction: 0.1
+test_fraction: 0.0
+
+# As for 2024, the datasets of a fold are kept in RAM (with 3 folds per GPU
+# they do not fit in the 11 GB of a GTX 1080 Ti) and the batches are sliced
+# there and copied to the GPU (much faster than the DataLoaders).
+data_on_gpu: False
+
+# padded entries (e.g. add_jet1pt in events without a 5th jet) are excluded
+# from the MaskedBatchNorm1d statistics and flagged by the pad indicators
+pad_value: -999.0
+pad_fill_value: 0.0
+pad_indicators: True
+
+
+data_dirs: [/work/mmalucch/out_hh4b/VBF/12_02_01_out_DATA_AllKlambda_DetaMjjCentrality_DNNVars_vbfregions_2022postEE]

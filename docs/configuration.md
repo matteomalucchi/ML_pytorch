@@ -81,7 +81,7 @@ seed: 0
 Other useful keys:
 
 | Key | Meaning |
-|---|---|
+| --- | --- |
 | `oversample_split`, `split_oversample`, `undersample` | class balancing (binary only) |
 | `eval`, `roc`, `histos`, `history`, `onnx` | switch on/off the outputs produced after the training |
 | `gpus` | comma-separated GPU indices; unset to run on CPU |
@@ -117,7 +117,7 @@ Variables can be transformed before the training with `preprocess_variables_func
 Models are in `ml_pytorch/models/` and are selected with `ML_model` (the file name without `.py`). The main ones:
 
 | Model | Use |
-|---|---|
+| --- | --- |
 | `DNN_model` | binary, single sigmoid output |
 | `DNN_softmax_reweight_model` | binary, two softmax outputs (background reweighting) |
 | `DNN_softmax_reweight_model_maskedBN1D*` | as above, ignoring padded objects in the batch norm |

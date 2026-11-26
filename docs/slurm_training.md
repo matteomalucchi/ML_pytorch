@@ -30,7 +30,7 @@ Back to the [main README](../README.md).
 ## Options
 
 | Option | Meaning |
-|---|---|
+| --- | --- |
 | `-c, --config FILE` | config file (full path), required |
 | `-o, --outdir DIR` | output directory (full path), required |
 | `-n, --n-trainings N` | number of trainings with different seeds (default 1) |

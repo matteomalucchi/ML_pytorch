@@ -7,7 +7,7 @@ The inputs are the outputs of [PocketCoffea](https://github.com/PocketCoffea/Poc
 ## Documentation
 
 | Page | Content |
-|---|---|
+| --- | --- |
 | [Configuration](docs/configuration.md) | config files, classes, input variables, models, `ml_train` options |
 | [Training on Slurm](docs/slurm_training.md) | `run_training.sh`: many trainings / GPUs / nodes, copy to `/pnfs`, resource monitor |
 | [K-fold training](docs/kfold_training.md) | k-fold trainings, splitting by event number, resuming failed folds, combined ONNX models |
@@ -64,7 +64,7 @@ docs/           # documentation
 ## Command-line tools
 
 | Command | Use |
-|---|---|
+| --- | --- |
 | `ml_train` | train and evaluate a model (see [Configuration](docs/configuration.md#ml_train-command-line-options)) |
 | `ml_sb -i <training_dir>` | ROC curves and overtraining plots (`-klb 1.0` or `-klb full` for given background kl values) |
 | `ml_history -i <log_file>` | plot the training history |
@@ -78,7 +78,7 @@ docs/           # documentation
 Each training writes to the output directory (default `/work/$USER/out_ML_pytorch/<config_name>/`):
 
 | File | Content |
-|---|---|
+| --- | --- |
 | `config_parameters.yml` | the full config used (defaults + YAML + command line) |
 | `ML_model.py`, `<input_variables>.py` | copies of the model and of the input variables used, to reload the training later |
 | `logger_<name>.log` | training log, epoch by epoch |
@@ -104,7 +104,7 @@ The metrics of every epoch (loss, accuracy, learning rate) can be sent to [Comet
 If the file exists, the logging is enabled automatically. The Comet workspace is the name of the directory of the config, with `_` replaced by `-`, and the project is the config file name:
 
 | Config directory | Comet workspace |
-|---|---|
+| --- | --- |
 | `configs/hh4b_bkg_reweighting/` | [hh4b-bkg-reweighting](https://www.comet.com/hh4b-bkg-reweighting#projects) |
 | `configs/hh4b_ggF_VBF/` | [hh4b-ggf-vbf](https://www.comet.com/hh4b-ggf-vbf#projects) |
 | `configs/hh4b_sig_bkg_classifier/` | [hh4b-sig-bkg-classifier](https://www.comet.com/hh4b-sig-bkg-classifier#projects) |
