@@ -1,25 +1,3 @@
-# Background morphing (2b -> 4b control region) on the 2022 postEE JetMET
-# data. Same setup as the 2024 ParkingHH training
-# DNN_12_01_07_1e-3_e0_drop95_patience20_ClassWeights_StdVars_PadInd_Shuffle_LogW_2024_parking_kfold20.yml
-# (same model, inputs without the VBF variables, training and random 20-fold
-# split), with only the 2022 postEE samples, datasets and input directory
-# changed:
-#   - the per-fold weight is taken in log space from the logits,
-#     log w_k = z1 - z0 (exported automatically by the model as
-#     *_logdiff.onnx per fold), and the folds are combined with the
-#     geometric mean exp(mean_k log w_k) (kfold_onnx: logaverage);
-#   - the final weights can be bounded to [1/50, 50] (weight_log_clamp: 3.912
-#     = ln 50, commented out as in 12_01_07); the fraction of clamped events
-#     is in kfold/kfold_summary.yml.
-#
-# Run the 20 folds at the same time on one full 8-GPU node (t3gpu0X: 8 GTX
-# 1080 Ti, 40 CPUs, ~245 GB) and merge them:
-#   ./jobs/run_training.sh -c <this config> -o <output dir> \
-#     -k 20 -g 8 --cpus 40 --mem-per-cpu 6000 --time 48:00:00 --ratio
-# The events are first loaded once into <output dir>/kfold_cache, which the 20
-# fold processes memory-map (the events take the RAM once, not 20 times).
-# Folds i run on GPU i % 8 (3 folds on GPUs 0-3, 2 on GPUs 4-7), with 2 CPUs
-# each.
 input_variables: bkg_morphing_dnn_input_variables
 
 run2: False
@@ -46,17 +24,6 @@ background_dataset:
 
 split_oversample: False
 
-# K-fold training: 20 folds assigned randomly (no event number needed). The
-# morphing weights are applied to the events of a separate, orthogonal region
-# (signal region), never used in the training, so the final
-# ONNX model is the geometric mean over the folds of the per-fold weights,
-# exp(mean_k (z1 - z0)), computed from the logits of every fold
-# (*_logdiff.onnx per fold, exported automatically by the model) and
-# bounded to [1/50, 50]
-# (weight_log_clamp = ln 50 = 3.912):
-# kfold_onnx/kfold_morphing_ratio_logaverage.onnx. The other combinations
-# (average, median and logmedian, all with the same bound) are
-# saved next to it, to be compared with ml_kfold_weight_diag.
 k_folds: 20
 kfold_split: random
 kfold_onnx: logaverage
