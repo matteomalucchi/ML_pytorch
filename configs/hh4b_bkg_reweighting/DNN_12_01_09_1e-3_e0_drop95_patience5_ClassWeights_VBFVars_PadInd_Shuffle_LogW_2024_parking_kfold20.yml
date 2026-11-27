@@ -1,0 +1,116 @@
+# Background morphing (2b -> 4b control region) on the 2024 ParkingHH data.
+# Version of
+# DNN_12_01_06_1e-3_w5cosine01_patience20_ClassWeights_StdVars_PadInd_Shuffle_2024_parking_kfold20.yml
+# with technical fixes only (same model architecture, inputs, training and
+# random k-fold split): 12_01_06 closes well in the control region but badly
+# in the signal region, with weights up to 1e10 from the ratio p1 / p0 of the
+# softmax outputs, which saturates where p0 -> 0, averaged over the folds (one
+# fold with a huge weight dominates the average). Here:
+#   - the per-fold weight is taken in log space from the logits,
+#     log w_k = z1 - z0 (exported automatically by the model as
+#     *_logdiff.onnx per fold), and the folds are combined with the
+#     geometric mean exp(mean_k log w_k) (kfold_onnx: logaverage);
+#   - the final weights are bounded to [1/50, 50] (weight_log_clamp: 3.912 =
+#     ln 50); the fraction of clamped events is in kfold/kfold_summary.yml.
+#
+# Run the 20 folds at the same time on one full 8-GPU node (t3gpu0X: 8 GTX
+# 1080 Ti, 40 CPUs, ~245 GB) and merge them:
+#   ./jobs/run_training.sh -c <this config> -o <output dir> \
+#     -k 20 -g 8 --cpus 40 --mem-per-cpu 6000 --time 48:00:00 --ratio
+# The events are first loaded once into <output dir>/kfold_cache, which the 20
+# fold processes memory-map (the events take the RAM once, not 20 times).
+# Folds i run on GPU i % 8 (3 folds on GPUs 0-3, 2 on GPUs 4-7), with 2 CPUs
+# each.
+input_variables: bkg_morphing_dnn_ggf_vbf_VBFvars_input_variables
+
+run2: False
+
+signal_sample: [DATA_ParkingHH]
+background_sample: [DATA_ParkingHH]
+
+signal_region: [4b_control_region]
+background_region: [2b_control_region_preW]
+
+signal_dataset:
+  [
+    DATA_ParkingHH_2024_EraC,
+    DATA_ParkingHH_2024_EraD,
+    DATA_ParkingHH_2024_EraE,
+    DATA_ParkingHH_2024_EraF,
+    DATA_ParkingHH_2024_EraG,
+    DATA_ParkingHH_2024_EraH,
+    DATA_ParkingHH_2024_EraI,
+  ]
+background_dataset:
+  [
+    DATA_ParkingHH_2024_EraC,
+    DATA_ParkingHH_2024_EraD,
+    DATA_ParkingHH_2024_EraE,
+    DATA_ParkingHH_2024_EraF,
+    DATA_ParkingHH_2024_EraG,
+    DATA_ParkingHH_2024_EraH,
+    DATA_ParkingHH_2024_EraI,
+  ]
+
+
+split_oversample: False
+
+# K-fold training: 20 folds assigned randomly (no event number needed). The
+# morphing weights are applied to the events of a separate, orthogonal region
+# (signal region), never used in the training, so the final
+# ONNX model is the geometric mean over the folds of the per-fold weights,
+# exp(mean_k (z1 - z0)), computed from the logits of every fold
+# (*_logdiff.onnx per fold, exported automatically by the model) and
+# bounded to [1/50, 50]
+# (weight_log_clamp = ln 50 = 3.912):
+# kfold_onnx/kfold_morphing_ratio_logaverage.onnx. The other combinations
+# (average, median and logmedian, all with the same bound) are
+# saved next to it, to be compared with ml_kfold_weight_diag.
+k_folds: 20
+kfold_split: random
+kfold_onnx: logaverage
+onnx_ratio: True
+# weight_log_clamp: 3.912
+
+# same model as 12_01_06 (DNN_softmax_reweight_model_maskedBN1D), which also
+# exports the per-fold log-weight z1 - z0 (*_logdiff.onnx)
+ML_model: DNN_softmax_reweight_model_maskedBN1D_logdiff
+
+data_format: parquet
+
+batch_size: 1024
+epochs: 200
+
+learning_rate: 1e-3
+learning_rate_schedule: e0_drop95
+
+early_stopping: True
+patience: 5
+min_delta: 1e-5
+
+eval_param: "loss"
+
+# reshuffle the training events at every epoch
+shuffle_train: True
+
+# With the k-folding the test dataset is the fold (1/20 of the events) and the
+# other events are split into training and validation with the ratio
+# train_fraction : val_fraction (10% for validation is ~5.7M events). The sum
+# of the fractions is the fraction of events read, so it is kept at 1.
+train_fraction: 0.9
+val_fraction: 0.1
+test_fraction: 0.0
+
+# The datasets of a fold do not fit in the 11 GB of a GTX 1080 Ti: they are
+# then kept in RAM and the batches are sliced there and copied to the GPU
+# (much faster than the DataLoaders).
+data_on_gpu: False
+
+# padded entries (e.g. add_jet1pt in events without a 5th jet) are excluded
+# from the MaskedBatchNorm1d statistics and flagged by the pad indicators
+pad_value: -999.0
+pad_fill_value: 0.0
+pad_indicators: True
+
+
+data_dirs: [/work/mmalucch/out_hh4b/VBF/12_01_09_out_ggf_vbf_spanet_input_AllKlambda_DetaMjjCentrality_ApplyGGFvsVBF_DNNVars_vbfregions_2024SPANetHiggsTraining_parking_presel_ptreg/]
