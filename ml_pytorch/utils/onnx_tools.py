@@ -95,7 +95,15 @@ def get_ratio_model_tensor_onnx(onnx_model, b):
     return r
 
 def get_multiclass_ratio_model_tensor_onnx(onnx_model, b, alpha, alpha_den):
-    """Build the QCD-morphing weight tensor for a 4-node multiclass model.
+    """Training weight of get_multiclass_weights_tensor_onnx (clipped)."""
+    return get_multiclass_weights_tensor_onnx(onnx_model, b, alpha, alpha_den)[0]
+
+
+def get_multiclass_weights_tensor_onnx(onnx_model, b, alpha, alpha_den):
+    """Build the QCD-morphing weight tensors for a 4-node multiclass model:
+    returns ``(w_train, w_template)``, computed from the same outputs of the
+    model and with the same denominator, which differ only in the clipping of
+    the numerator (see below).
 
     Output-node convention (class_idx order, i.e. sorted by ``lbl``)::
 
@@ -109,6 +117,18 @@ def get_multiclass_ratio_model_tensor_onnx(onnx_model, b, alpha, alpha_den):
 
         w(x) = clip(relu(r_0 - alpha * r_2) / (relu(r_1 - alpha_den * r_3) + eps),
                     0, RATIO_W_MAX)
+
+    ``w_train`` is the weight above (the numerator is clipped to be >= 0, so
+    ``w_train >= 0``); it keeps the name and the use of the weight so far.
+    ``w_template`` has the numerator without the clipping::
+
+        w_template(x) = (r_0 - alpha * r_2) / (relu(r_1 - alpha_den * r_3) + eps)
+
+    so it is negative where the subtraction of the ttbar overshoots: use it to
+    fill templates, where the negative weights are needed to keep the ttbar
+    subtraction unbiased. The two weights are equal where ``r_0 - alpha * r_2
+    >= 0`` and for ``alpha = 0``. The denominator is the same for both (with
+    ``alpha_den != 0`` it keeps its relu).
 
     ``alpha = N_ttbar / N_data`` in the numerator region and ``alpha_den =
     N_ttbar / N_data`` in the denominator region. They are needed because
@@ -166,13 +186,15 @@ def get_multiclass_ratio_model_tensor_onnx(onnx_model, b, alpha, alpha_den):
     r_3 = _node(3)  # ttbar, denominator region
 
     if alpha:
+        subtracted = op.sub(r_0, op.mul(op.const(float(alpha), dtype="float32"), r_2))
         # relu guards against the subtraction overshooting where the classifier
-        # thinks ttbar dominates the data shape (would give a negative weight)
-        numerator = op.relu(
-            op.sub(r_0, op.mul(op.const(float(alpha), dtype="float32"), r_2))
-        )
+        # thinks ttbar dominates the data shape (would give a negative weight):
+        # for the training weight only, the template weight keeps the sign
+        numerator = op.relu(subtracted)
+        numerator_template = subtracted
     else:
         numerator = r_0
+        numerator_template = r_0
     if alpha_den:
         denominator = op.relu(
             op.sub(r_1, op.mul(op.const(float(alpha_den), dtype="float32"), r_3))
@@ -182,13 +204,14 @@ def get_multiclass_ratio_model_tensor_onnx(onnx_model, b, alpha, alpha_den):
     # floor the denominator so a relu that clamps to 0 cannot produce inf/nan
     denominator = op.add(denominator, op.const(float(RATIO_DEN_EPS), dtype="float32"))
     r = op.div(numerator, denominator)
+    r_template = op.div(numerator_template, denominator)
     # bound the per-model weight: a near-zero denominator would otherwise give a
     # finite-but-huge spike that dominates the averaged weight downstream
     print(
         f"{r_0.type = !s}, {r_1.type = !s}, {r_2.type = !s}, {r_3.type = !s}, "
-        f"{r.type = !s}"
+        f"{r.type = !s}, {r_template.type = !s}"
     )
-    return r
+    return r, r_template
 
 
 def get_score_tensor_onnx(onnx_model, b):
@@ -302,9 +325,10 @@ def build_multiclass_morphing_models(
 ):
     """Build the QCD-morphing weight models of the 4-node multiclass k-fold
     models ``onnx_models`` (ordered by fold), with the ttbar subtraction of
-    get_multiclass_ratio_model_tensor_onnx.
+    get_multiclass_weights_tensor_onnx.
 
-    Returns a dict {name: onnx model} with:
+    Returns a dict {name: onnx model} with, for the training weight (the
+    numerator is clipped to be >= 0):
       - ``average_morphing``: as ml_onnx -ar -mc, per-event mean over the
         folds of the weight of each fold, relu(r_0 - alpha * r_2) /
         (relu(r_1 - alpha_den * r_3) + eps) (input ``args_0``, output
@@ -315,28 +339,42 @@ def build_multiclass_morphing_models(
         relu and division (outputs ``w_fold_<k>``)
       - ``event_morphing`` (event_split=True): inputs ``args_0`` and
         ``event``, the weight of the fold ``event % k_folds`` (output ``w``)
+    and the same models for the template weight, whose numerator is not
+    clipped, (r_0 - alpha * r_2) / (relu(r_1 - alpha_den * r_3) + eps), with
+    the keys and the output names suffixed with ``_template``:
+    ``average_morphing_template`` (``avg_w_template``),
+    ``median_morphing_template`` (``med_w_template``),
+    ``all_folds_morphing_template`` (``w_template_fold_<k>``) and
+    ``event_morphing_template`` (``w_template``).
     """
     k_folds = len(onnx_models)
     b = argument(Tensor(np.float32, ("N", n_features)))
-    ratios = [
-        get_multiclass_ratio_model_tensor_onnx(m, b, alpha, alpha_den)
+    weights = [
+        get_multiclass_weights_tensor_onnx(m, b, alpha, alpha_den)
         for m in onnx_models
     ]
-    models = {
+    event = argument(Tensor(np.int64, ("N",))) if event_split else None
+    models = {}
+    for suffix, i in [("", 0), ("_template", 1)]:
+        ratios = [w[i] for w in weights]
         # the weight of every fold first, then the mean / median over the folds
-        "average_morphing": build(
+        models[f"average_morphing{suffix}"] = build(
             {"args_0": b},
-            {"avg_w": op.div(_sum(ratios), op.const(np.float32(k_folds)))},
-        ),
-        "median_morphing": build({"args_0": b}, {"med_w": _median(ratios)}),
-        "all_folds_morphing": build(
-            {"args_0": b}, {f"w_fold_{k}": r for k, r in enumerate(ratios)}
-        ),
-    }
-    if event_split:
-        event = argument(Tensor(np.int64, ("N",)))
-        models["event_morphing"] = build(
-            {"args_0": b, "event": event},
-            {"w": _select_per_fold(ratios, event, k_folds)},
+            {f"avg_w{suffix}": op.div(_sum(ratios), op.const(np.float32(k_folds)))},
         )
+        models[f"median_morphing{suffix}"] = build(
+            {"args_0": b}, {f"med_w{suffix}": _median(ratios)}
+        )
+        models[f"all_folds_morphing{suffix}"] = build(
+            {"args_0": b},
+            {
+                (f"w_fold_{k}" if i == 0 else f"w_template_fold_{k}"): r
+                for k, r in enumerate(ratios)
+            },
+        )
+        if event_split:
+            models[f"event_morphing{suffix}"] = build(
+                {"args_0": b, "event": event},
+                {f"w{suffix}": _select_per_fold(ratios, event, k_folds)},
+            )
     return models

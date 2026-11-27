@@ -75,6 +75,12 @@ data_format: coffea
 #            skipped)
 novars: False
 
+# Use only half of the events (parquet only): "even" or "odd" keeps the events
+# with that parity of the event_parity_column column, before the train /
+# validation / test split and the weight normalisation. null uses all events.
+event_parity: null
+event_parity_column: events_event
+
 # ---------------------------------------------------------------------------
 # Train / validation / test split
 # ---------------------------------------------------------------------------
@@ -123,7 +129,9 @@ onnx_ratio: False
 # recorded in <output_dir>/kfold/kfold_summary.yml (final_onnx). The models
 # are saved as <output_dir>/kfold_onnx/kfold_<type>_<combination>.onnx, with
 # <type> classifier, morphing_ratio (onnx_ratio) or
-# morphing_ttbar_subtracted (morphing_alpha), and <combination> average,
+# morphing_ttbar_subtracted (morphing_alpha; the training weight, clipped
+# numerator) with its morphing_ttbar_subtracted_template (the template weight,
+# not clipped; recorded as final_onnx_template), and <combination> average,
 # all_folds (the outputs of every fold, not averaged) or event_fold; the
 # final model is kfold_<type>_average.onnx or kfold_<type>_event_fold.onnx:
 #   average: average over the folds of the outputs (of their ratio with
@@ -401,3 +409,17 @@ overwrite: False
 
 # Logging verbosity: debug, info or warning.
 verbosity: info
+
+# ---------------------------------------------------------------------------
+# BDT (XGBoost): ML_model: XGB_multiclass_model (see models/XGB_multiclass_model.py)
+# ---------------------------------------------------------------------------
+# Hyperparameters of the BDT, any XGBClassifier argument (e.g. max_depth,
+# min_child_weight, subsample, colsample_bytree, reg_lambda, reg_alpha, gamma,
+# max_bin, n_jobs); they override the defaults of the model file. The common
+# options epochs (maximum number of rounds), learning_rate, patience, min_delta,
+# eval_param, early_stopping, seed and gpus (cpu or the GPU number) are used too.
+bdt_params: {}
+# Optuna search of the BDT hyperparameters before the final training, see
+# utils/bdt_optuna.py for the options (n_trials, timeout, seed, n_startup_trials,
+# pruner, storage, search_space). null: no search. ml_train --optuna N runs N trials.
+optuna: null

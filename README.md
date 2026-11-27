@@ -502,18 +502,19 @@ Notes:
   | --- | --- | --- |
   | `classifier` | the scores of the classifier | always |
   | `morphing_ratio` | the ratio of the outputs, `p/(1-p)` for one output node or `p1/p0` for two, for the binary background reweighting (equivalent to `ml_onnx -ar`) | with `onnx_ratio: True` or `--ratio` |
-  | `morphing_ttbar_subtracted` | the 4-node multiclass morphing weight with the ttbar subtraction, `relu(r0 - alpha r2) / relu(r1 - alpha_den r3)` (equivalent to `ml_onnx -ar -mc`, see [Boosted HH4b: multiclass background morphing](#boosted-hh4b-multiclass-background-morphing)) | with `morphing_alpha` (`--alpha`) |
+  | `morphing_ttbar_subtracted` | the 4-node multiclass morphing weight with the ttbar subtraction, `relu(r0 - alpha r2) / relu(r1 - alpha_den r3)` (equivalent to `ml_onnx -ar -mc`, see [Boosted HH4b: multiclass background morphing](#boosted-hh4b-multiclass-background-morphing)). This is the **training weight**: the numerator is clipped to be >= 0 | with `morphing_alpha` (`--alpha`) |
+  | `morphing_ttbar_subtracted_template` | the **template weight**: the same weight without the clipping of the numerator, `(r0 - alpha r2) / (relu(r1 - alpha_den r3) + eps)`. It is negative where the ttbar subtraction overshoots, and equal to the training weight elsewhere (and everywhere for `alpha = 0`). Outputs `avg_w_template`, `med_w_template`, `w_template_fold_<k>`, `w_template` | with `morphing_alpha` (`--alpha`) |
 
   The combination says how the folds are combined:
 
   | combination | inputs | outputs |
   | --- | --- | --- |
   | `average` | `args_0`, the input variables `(N, n_features)` float32 | the average over the folds (`avg_score` or `avg_w`). For the ratio and the morphing, the weight of every fold is computed first and then averaged, as `ml_onnx -ar` / `-ar -mc` do (for the morphing, the mean of `relu(r_0 - α r_2) / (relu(r_1 - α_den r_3) + eps)`, not the average numerator over the average denominator). Use it for events that were not used in the training |
-  | `median` | `args_0` | for each event, the **median over the folds of the weight** of each fold (`med_w`); only for `morphing_ratio` and `morphing_ttbar_subtracted`. The scores, numerators and denominators are not changed. Unlike the average, one fold with an outlying weight (e.g. a near-zero denominator) cannot move it. For an even K it is the mean of the two middle weights, and with K = 2 it is equal to the average |
+  | `median` | `args_0` | for each event, the **median over the folds of the weight** of each fold (`med_w`); only for `morphing_ratio`, `morphing_ttbar_subtracted` and `morphing_ttbar_subtracted_template`. The scores, numerators and denominators are not changed. Unlike the average, one fold with an outlying weight (e.g. a near-zero denominator) cannot move it. For an even K it is the mean of the two middle weights, and with K = 2 it is equal to the average |
   | `all_folds` | `args_0` | the output of every fold separately, not averaged (`score_fold_<k>` or `w_fold_<k>`) |
   | `event_fold` | `args_0` and `event`, the event number `(N,)` int64 | the output of the fold `event % K`, the model that was **not** trained on the event. Use it for the events that were used in the training (e.g. the training regions); only with `kfold_split: event` |
 
-* **The final model** is the combined model chosen with `kfold_onnx`: `kfold_<type>_average.onnx`, `kfold_<type>_median.onnx` or `kfold_<type>_event_fold.onnx`, with type `morphing_ttbar_subtracted` with `morphing_alpha`, `morphing_ratio` with `onnx_ratio`, otherwise `classifier`. It is recorded, with its inputs, in `kfold/kfold_summary.yml` (`final_onnx`); no extra copy is written.
+* **The final model** is the combined model chosen with `kfold_onnx`: `kfold_<type>_average.onnx`, `kfold_<type>_median.onnx` or `kfold_<type>_event_fold.onnx`, with type `morphing_ttbar_subtracted` with `morphing_alpha`, `morphing_ratio` with `onnx_ratio`, otherwise `classifier`. It is recorded, with its inputs, in `kfold/kfold_summary.yml` (`final_onnx`); no extra copy is written. With `morphing_alpha` the same combination of the template weight, `kfold_morphing_ttbar_subtracted_template_<combination>.onnx`, is recorded as `final_onnx_template`; `final_onnx` is always the training weight.
   * `kfold_onnx: average` (default) gives the average over the folds. Use it when the model is applied to events that were not used in the training, e.g. the background reweighting applied in a separate region.
   * `kfold_onnx: median` gives the median over the folds of the weight, as an alternative to the average for events that were not used in the training. It needs `onnx_ratio` or `morphing_alpha`, otherwise there is no weight and the merge stops with an error.
   * `kfold_onnx: event` gives the event-number-aware model and needs `kfold_split: event`. Use it when the model is also applied to the training events, e.g. the sig/bkg or ggF/VBF classifiers. Events whose number was never seen in the training can be evaluated by any fold, so the same model works for them too.
@@ -697,6 +698,45 @@ The output goes to `out/sig_bkg_classifier/<config_name>/`, separately from the 
 `state_dict/model_best_epoch_<n>.onnx`. PocketCoffea saves its four class scores and the
 `sig_bkg_dnn_score_ggFvsBKG` / `sig_bkg_dnn_score_VBFvsBKG` discriminants, which are then used to optimise the
 signal categories.
+
+### BDT (XGBoost) instead of the DNN
+
+The same classifier can be trained with a boosted decision tree: the config is the DNN one (same `input_variables`,
+`classes`, `data_dirs`, weights) with `ML_model: XGB_multiclass_model`, e.g.
+[`boosted/xgb_boosted_signal_background_classifier_50GeV_noH2WP_txbbwps.yml`](configs/hh4b_sig_bkg_classifier/boosted/xgb_boosted_signal_background_classifier_50GeV_noH2WP_txbbwps.yml).
+The data loading, the class weights (balanced by weights: set `oversample_split: False`), the log format and the
+evaluation plots are the ones of the DNN training, so the output folder looks like a DNN one. One model per
+training: k-fold training and `--load-model` are not supported (a clear error is raised).
+
+```bash
+cd jobs/
+sbatch run_bdt_training.sh boosted/xgb_boosted_signal_background_classifier_50GeV_noH2WP_txbbwps.yml
+# with the Optuna search of the hyperparameters (50 trials, then the final training with the best ones)
+sbatch run_bdt_training.sh boosted/xgb_boosted_signal_background_classifier_50GeV_noH2WP_txbbwps_optuna.yml
+# locally, without a GPU
+bash run_bdt_training.sh boosted/xgb_....yml /path/to/out --gpus cpu
+```
+
+The common options are reused: `epochs` is the maximum number of rounds (trees per class), `learning_rate` the eta,
+`patience`/`min_delta`/`eval_param` the early stopping on the validation set, `gpus` the XGBoost device (`cpu` or the
+GPU number). Everything else is in the `bdt_params` dictionary of the config (any `XGBClassifier` argument). The trees
+after the best round are removed, so the ONNX model is the best one.
+
+Besides the usual outputs (`logger_*.log`, `history.*`, `input_variables/`, `sig_bkg_bkgkl_all/`, `roc_bkgkl_all/`,
+`calibration_bkgkl_all/`, `config_parameters.yml`, `state_dict/model_best_epoch_<n>.onnx`), the BDT writes:
+
+* `state_dict/model_best_epoch_<n>.json`: the native XGBoost model (evaluate it again with `--eval-model <json>`);
+* `feature_importance/`: `feature_importance.yml` (gain, total gain, number of splits and cover of each input variable, for
+  all the classes and for each class) and the plots of the fraction of the total gain and of the number of splits;
+* `training_info.yml`: hyperparameters, best round, sizes and weights of the datasets, losses and accuracies, times;
+* with Optuna, `optuna/`: `best_params.yml`, `trials.csv`, `study.db` and the plots of the optimisation history, parameter
+  importances and parameter-vs-loss. The search minimises the validation loss (the test events are not used);
+  options (`n_trials`, `timeout`, `search_space`, ...) are described in `ml_pytorch/utils/bdt_optuna.py`.
+
+The ONNX model has the interface of the DNN ones (input `InputVariables`, output `Output` with the class
+probabilities), so it can be used as `sig_bkg_dnn` in PocketCoffea. The `-999` padding is an ordinary value for the trees.
+The export needs `onnxmltools` and the search `optuna` (both in `requirements.txt`); the output is checked against the
+BDT when it is written.
 
 ## Outputs of a training
 

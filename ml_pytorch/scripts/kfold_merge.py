@@ -15,7 +15,10 @@ fold k. This script:
     ratios of the outputs (reweighting) and, with kfold_split event, the model
     that evaluates every event with the model of the fold event % k_folds;
     with the ratio (reweighting) or the multiclass morphing weight, also the
-    per-event median over the folds of the weight
+    per-event median over the folds of the weight; the multiclass morphing
+    gives two weights, the training weight (the ttbar-subtracted numerator is
+    clipped to be >= 0) and the template weight (not clipped), in separate
+    models
 With --onnx-only only the combined ONNX models are built (no events loaded).
 """
 
@@ -47,12 +50,18 @@ logger = logging.getLogger(__name__)
 #   morphing_ratio            : ratio of the outputs p / (1 - p) (1 node) or
 #                               p1 / p0 (2 nodes), for the binary reweighting
 #   morphing_ttbar_subtracted : 4-node multiclass morphing weight with the
-#                               ttbar subtraction (alpha)
+#                               ttbar subtraction (alpha): the training weight,
+#                               with the numerator relu(r0 - alpha r2) clipped
+#                               to be >= 0
+#   morphing_ttbar_subtracted_template : the same weight with the numerator
+#                               r0 - alpha r2 not clipped (it can be negative),
+#                               for the templates
 # and combination of the folds:
 #   average   : average over the folds (input args_0); for the ratio and the
 #               morphing, the weight of every fold is computed first
 #   median    : per-event median over the folds of the weight of every fold
-#               (only for morphing_ratio and morphing_ttbar_subtracted)
+#               (only for the morphing_ratio and morphing_ttbar_subtracted
+#               types)
 #   all_folds : the output of every fold separately, not averaged (outputs
 #               <name>_fold_<k>)
 #   event_fold: the output of the fold event % k_folds (inputs args_0, event)
@@ -60,6 +69,7 @@ KFOLD_ONNX_TYPES = {
     "": "classifier",
     "_ratio": "morphing_ratio",
     "_morphing": "morphing_ttbar_subtracted",
+    "_morphing_template": "morphing_ttbar_subtracted_template",
 }
 KFOLD_ONNX_NAMES = {
     f"{combination}{suffix}": f"kfold_{kind}_{name}.onnx"
@@ -348,23 +358,28 @@ def ratio_of_outputs(out):
 
 def morphing_weights(fold_out, event, k_folds, alpha, alpha_den):
     """Morphing weights of the 4-node fold outputs computed with numpy, as
-    build_multiclass_morphing_models does in ONNX."""
+    build_multiclass_morphing_models does in ONNX: the training weight (the
+    numerator is clipped to be >= 0) and, with the suffix _template, the
+    template weight (the numerator is not clipped)."""
     from ml_pytorch.utils.onnx_tools import RATIO_DEN_EPS
 
     nums = [o[:, 0] - alpha * o[:, 2] for o in fold_out]
     dens = [o[:, 1] - alpha_den * o[:, 3] for o in fold_out]
-    fold_w = [
-        (np.maximum(n, 0) if alpha else n)
-        / ((np.maximum(d, 0) if alpha_den else d) + RATIO_DEN_EPS)
-        for n, d in zip(nums, dens)
-    ]
-    return {
-        # the weight of every fold first, then the mean / median over the folds
-        "average_morphing": np.mean(fold_w, axis=0),
-        "median_morphing": np.median(fold_w, axis=0),
-        "all_folds_morphing": fold_w,
-        "event_morphing": np.choose(event % k_folds, fold_w),
-    }
+    weights = {}
+    for suffix, clip in [("", True), ("_template", False)]:
+        fold_w = [
+            (np.maximum(n, 0) if alpha and clip else n)
+            / ((np.maximum(d, 0) if alpha_den else d) + RATIO_DEN_EPS)
+            for n, d in zip(nums, dens)
+        ]
+        weights |= {
+            # the weight of every fold first, then the mean / median over the folds
+            f"average_morphing{suffix}": np.mean(fold_w, axis=0),
+            f"median_morphing{suffix}": np.median(fold_w, axis=0),
+            f"all_folds_morphing{suffix}": fold_w,
+            f"event_morphing{suffix}": np.choose(event % k_folds, fold_w),
+        }
+    return weights
 
 
 def check_kfold_models(fold_files, kfold_files, n_features, k_folds, morphing=None):
@@ -424,7 +439,9 @@ def merge_onnx(
     model to use, recorded in the summary). With ``alpha`` (4-node multiclass
     morphing models) it is the morphing weight with the ttbar subtraction (see
     build_multiclass_morphing_models). With kfold_onnx median it is the median
-    over the folds of the weight."""
+    over the folds of the weight. The models of the template weight (key
+    suffix _template) are built too, but the returned key is the one of the
+    training weight."""
     folds_dir = f"{out_dir}/folds"
     os.makedirs(folds_dir, exist_ok=True)
     fold_files = []
@@ -563,6 +580,18 @@ def merge_kfold(main_dir, cfg, ratio=None, plots=True, save_numpy=False, onnx_on
                 ["args_0", "event"] if final_key.startswith("event") else ["args_0"]
             ),
         }
+        # the same combination of the folds for the template weight (without
+        # the clipping of the numerator), only for the morphing weights
+        template_key = f"{final_key}_template"
+        if template_key in kfold_files:
+            summary["final_onnx_template"] = {
+                **summary["final_onnx"],
+                "file": kfold_files[template_key],
+                "model": template_key,
+            }
+        else:
+            # not left from a previous merge of another type
+            summary.pop("final_onnx_template", None)
 
     OmegaConf.save(OmegaConf.create(summary), summary_file)
     logger.info(f"K-fold summary saved in {summary_file}:\n{OmegaConf.to_yaml(summary)}")
