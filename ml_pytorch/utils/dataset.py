@@ -187,13 +187,19 @@ def normalize_weights_per_dataset(weights_list, dataset_names):
     """
     Normalize the weights of each dataset so that sum(w) = 1 for each of them.
     Entries of weights_list belonging to the same dataset (e.g. multiple regions)
-    are normalized together.
+    are normalized together. All the datasets with "DATA" in their name are
+    normalized together, so that their total sum of weights is 1.
     """
     sumw_per_dataset = get_sumw_per_dataset(weights_list, dataset_names)
+    data_datasets = {d for d in dataset_names if "DATA" in d}
+    sumw_data = sum(sumw_per_dataset[name] for name in data_datasets)
 
     normalized_weights_list = []
     for w, name in zip(weights_list, dataset_names):
-        sumw = sumw_per_dataset[name]
+        if "DATA" not in name:
+            sumw = sumw_per_dataset[name]
+        else:
+            sumw = sumw_data
         if sumw <= 0:
             raise ValueError(
                 f"Sum of weights of dataset {name} is {sumw}, cannot normalize it to 1"
@@ -298,6 +304,8 @@ def get_variables(
     normalize_per_dataset=False,
     event_column=None,
     k_folds=0,
+    event_parity=None,
+    event_parity_column="events_event",
 ):
     """Load the input features and weights for a single class.
 
@@ -306,7 +314,14 @@ def get_variables(
 
     If ``event_column`` is given, the k-fold index ``event % k_folds`` of each
     event is computed from that column, otherwise it is set to -1.
+
+    If ``event_parity`` is "even" or "odd", only the events with that parity of
+    the ``event_parity_column`` column are kept (parquet only).
     """
+    if event_parity not in (None, "even", "odd"):
+        raise ValueError(f"event_parity must be even, odd or null, got {event_parity}")
+    if event_parity is not None and data_format != "parquet":
+        raise ValueError("event_parity is only supported with data_format parquet")
     if data_format == "root":
         raise ValueError("Not updated for root format!")
         for i, file_name in enumerate(files):
@@ -405,10 +420,27 @@ def get_variables(
                     + list(count_fields.values())
                     + ["weight"]
                     + ([event_column] if event_column is not None else [])
+                    + ([event_parity_column] if event_parity is not None else [])
                 )
             )
+            if event_parity is not None and event_parity_column not in dataset.schema.names:
+                raise ValueError(
+                    f"Column {event_parity_column} (event_parity_column) needed for "
+                    f"event_parity not found in the parquet files of {file_name}"
+                )
             table = dataset.to_table(columns=columns, use_threads=True)
             jagged_variables_array = ak.from_arrow(table)
+            # keep only the even or odd events, before anything is derived from
+            # the columns, so that the inputs and the weights stay aligned
+            if event_parity is not None:
+                events = np.asarray(
+                    ak.to_numpy(jagged_variables_array[event_parity_column])
+                ).astype(np.int64)
+                keep = events % 2 == (0 if event_parity == "even" else 1)
+                logger.info(
+                    f"Keeping the {event_parity} events: {int(keep.sum())} of {len(keep)}"
+                )
+                jagged_variables_array = jagged_variables_array[keep]
             variables_array = jagged_variables_array[
                 [x for x in vars if x not in missing_counts]
             ]
@@ -1002,6 +1034,8 @@ def load_data(cfg, seed):
             cfg.normalize_weights_per_dataset,
             event_column,
             k_folds,
+            cfg.get("event_parity", None),
+            cfg.get("event_parity_column", "events_event"),
         )
         if X_per_class and X_class[0].shape[0] != X_per_class[0][0].shape[0]:
             raise ValueError(
@@ -1612,6 +1646,8 @@ KFOLD_CACHE_KEYS = [
     "kfold_split",
     "kfold_event_column",
     "pad_value",
+    "event_parity",
+    "event_parity_column",
 ]
 
 

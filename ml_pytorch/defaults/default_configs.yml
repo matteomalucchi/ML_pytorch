@@ -79,6 +79,12 @@ data_format: coffea
 #            skipped)
 novars: False
 
+# Use only half of the events (parquet only): "even" or "odd" keeps the events
+# with that parity of the event_parity_column column, before the train /
+# validation / test split and the weight normalisation. null uses all events.
+event_parity: null
+event_parity_column: events_event
+
 # ---------------------------------------------------------------------------
 # Train / validation / test split
 # ---------------------------------------------------------------------------
@@ -127,7 +133,9 @@ onnx_ratio: False
 # recorded in <output_dir>/kfold/kfold_summary.yml (final_onnx). The models
 # are saved as <output_dir>/kfold_onnx/kfold_<type>_<combination>.onnx, with
 # <type> classifier, morphing_ratio (onnx_ratio) or
-# morphing_ttbar_subtracted (morphing_alpha), and <combination> average,
+# morphing_ttbar_subtracted (morphing_alpha; the training weight, clipped
+# numerator) with its morphing_ttbar_subtracted_template (the template weight,
+# not clipped; recorded as final_onnx_template), and <combination> average,
 # all_folds (the outputs of every fold, not averaged) or event_fold; the
 # final model is kfold_<type>_average.onnx or kfold_<type>_event_fold.onnx:
 #   average: average over the folds of the outputs (of their ratio with

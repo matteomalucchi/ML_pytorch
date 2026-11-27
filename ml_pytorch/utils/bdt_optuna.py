@@ -10,6 +10,8 @@ number of trials)::
       seed: 0               # seed of the TPE sampler
       n_startup_trials: 10  # random trials before the TPE sampler is used
       pruner: median        # median or none
+      enqueue:              # optional: parameter sets evaluated first (only when the study is new),
+        - {max_depth: 6, min_child_weight: 1.0}   # e.g. the baseline, so the search cannot do worse
       storage: null         # default sqlite:///<output_dir>/optuna/study.db
       search_space:         # optional: replaces the default search space
         max_depth: {type: int, low: 3, high: 10}
@@ -50,6 +52,7 @@ DEFAULT_OPTUNA = {
     "seed": 0,
     "n_startup_trials": 10,
     "pruner": "median",
+    "enqueue": None,
     "storage": None,
     "search_space": None,
 }
@@ -135,6 +138,10 @@ def run_optuna_search(cfg, ML_model, train, val, num_classes, input_variables, m
         pruner=pruner,
         load_if_exists=True,
     )
+    if config.get("enqueue") and len(study.trials) == 0:
+        for params in config["enqueue"]:
+            study.enqueue_trial(dict(params))
+        logger.info(f"Optuna: enqueued {len(config['enqueue'])} parameter sets to evaluate first")
     finished = [
         t
         for t in study.trials
