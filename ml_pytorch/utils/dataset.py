@@ -1,3 +1,4 @@
+import gc
 import importlib
 import sys
 import uproot
@@ -1151,6 +1152,7 @@ def load_data(cfg, seed):
 
     if kfold:
         X_k = assign_fold_ids(X_k, cfg)
+        X_k = apply_saved_kfold_split(X_k, X_fts, cfg)
         arrays = {
             "fts": X_fts,
             "lbl": X_lbl,
@@ -1684,15 +1686,97 @@ def save_kfold_cache(cache_dir, arrays, meta, cfg):
         json.dump(meta, f, indent=2)
     logger.info(f"Saved the k-fold cache of {meta['n_events']} events in {cache_dir}")
 
-    # record of the split ([kl, dataset_idx, fold] of every event and the
-    # metadata), kept for reproducibility when the cache itself is in tmp
+    # record of the split ([kl, dataset_idx, fold] of every event, the
+    # metadata and a fingerprint of the events), kept for reproducibility when
+    # the cache itself is in tmp, and to rebuild exactly the same split when a
+    # k-fold training is resumed (kfold_reuse_split); not rewritten then
     split_dir = cfg.get("kfold_split_dir", None)
-    if split_dir:
+    if split_dir and not (
+        cfg.get("kfold_reuse_split", False) and kfold_split_record_exists(split_dir)
+    ):
         os.makedirs(split_dir, exist_ok=True)
         np.save(os.path.join(split_dir, "k.npy"), np.asarray(arrays["k"]))
+        record = dict(meta, fts_sha256=kfold_events_fingerprint(arrays["fts"]))
         with open(os.path.join(split_dir, KFOLD_CACHE_META), "w") as f:
-            json.dump(meta, f, indent=2)
+            json.dump(record, f, indent=2)
         logger.info(f"Saved the record of the k-fold split in {split_dir}")
+
+
+def kfold_split_record_exists(split_dir):
+    return all(
+        os.path.exists(os.path.join(split_dir, f)) for f in ["k.npy", KFOLD_CACHE_META]
+    )
+
+
+def kfold_events_fingerprint(fts):
+    """sha256 of the features (and event weights) of all the events, in the
+    shuffled order of the k-fold cache."""
+    fts = fts.numpy() if isinstance(fts, torch.Tensor) else np.asarray(fts)
+    return hashlib.sha256(np.ascontiguousarray(fts).data).hexdigest()
+
+
+def apply_saved_kfold_split(X_k, X_fts, cfg):
+    """With kfold_reuse_split (resumed k-fold training), take the fold of every
+    event from the record of the split saved in kfold_split_dir by the first
+    preparation, after checking that the events loaded now are the same, in
+    the same order: same config hash, same number of events, same [kl,
+    dataset_idx] of every event and, if recorded, same fingerprint of the
+    features. Otherwise the folds already trained and the resumed ones would
+    not be the folds of the same split, so a mismatch is an error. Without
+    kfold_reuse_split, or if there is no record, X_k is returned unchanged."""
+    split_dir = cfg.get("kfold_split_dir", None)
+    if not cfg.get("kfold_reuse_split", False):
+        return X_k
+    if not (split_dir and kfold_split_record_exists(split_dir)):
+        logger.warning(
+            f"kfold_reuse_split: no record of the k-fold split in {split_dir}: "
+            "using the split computed now from the config and the seed"
+        )
+        return X_k
+    with open(os.path.join(split_dir, KFOLD_CACHE_META)) as f:
+        record = json.load(f)
+    saved_k = np.load(os.path.join(split_dir, "k.npy"))
+    k_now = torch.as_tensor(X_k).numpy()
+    fix = (
+        f"Use the same config and input files as the first training, or start a "
+        f"new k-fold training (in a new output directory, or without "
+        f"kfold_reuse_split / --load-last to replace the split record {split_dir})"
+    )
+    if record.get("hash") != kfold_cache_hash(cfg):
+        raise ValueError(
+            f"kfold_reuse_split: the saved k-fold split {split_dir} was made with a "
+            "different config (data, fractions, oversampling, seed, k_folds or "
+            f"kfold_split). {fix}"
+        )
+    if saved_k.shape != k_now.shape:
+        raise ValueError(
+            f"kfold_reuse_split: {k_now.shape[0]} events loaded now, but the saved "
+            f"k-fold split {split_dir} has {saved_k.shape[0]}. {fix}"
+        )
+    if not np.array_equal(saved_k[:, :2], k_now[:, :2], equal_nan=True):
+        raise ValueError(
+            "kfold_reuse_split: the events loaded now are not the events of the "
+            f"saved k-fold split {split_dir} (or not in the same order). {fix}"
+        )
+    if "fts_sha256" in record and record["fts_sha256"] != kfold_events_fingerprint(
+        X_fts
+    ):
+        raise ValueError(
+            "kfold_reuse_split: the input variables of the events loaded now differ "
+            f"from those of the saved k-fold split {split_dir}. {fix}"
+        )
+    if not np.array_equal(saved_k[:, 2], k_now[:, 2]):
+        logger.warning(
+            "kfold_reuse_split: the folds computed now differ from the saved ones: "
+            "using the saved folds"
+        )
+    logger.info(
+        f"kfold_reuse_split: using the saved k-fold split {split_dir} "
+        f"({saved_k.shape[0]} events, checked against the events loaded now)"
+    )
+    X_k = torch.as_tensor(X_k).clone()
+    X_k[:, 2] = torch.as_tensor(saved_k[:, 2], dtype=X_k.dtype)
+    return X_k
 
 
 def kfold_test_info(test_idx, n_events):
@@ -1927,41 +2011,56 @@ def _loader_shuffle(loader):
     return getattr(loader, "shuffle", False)
 
 
-def loaders_to_device(loaders, device, max_memory_fraction=0.5):
-    """Replace the DataLoaders with DeviceBatchLoaders holding the data on
-    `device`.
+def gpu_data_fits(
+    data_bytes, total_bytes, free_bytes, trainings_per_gpu, margin_gb=0.5, margin_frac=0.0
+):
+    """Whether the datasets can be kept on the GPU.
 
-    The loaders are left unchanged if the device is not a GPU. If the datasets
-    would take more than `max_memory_fraction` of the free GPU memory, they are
-    kept in RAM and the batches are sliced there and copied to the GPU one by
-    one. `None` loaders are kept as they are.
+    The datasets fit if
+
+        data_bytes + margin <= min(total_bytes / trainings_per_gpu, free_bytes)
+
+    with margin = margin_gb * 1e9 + margin_frac * data_bytes. The share of the
+    total memory per training is deterministic, so trainings started at the
+    same time on the same GPU do not all see the same free memory and overfill
+    it; the free memory only guards against other processes on the GPU. The
+    margin covers what the training needs apart from the datasets (CUDA
+    context, model and optimizer, activations, shuffle permutation, allocator
+    fragmentation).
+
+    Returns (fits, need_bytes, budget_bytes).
     """
-    if device.type != "cuda":
-        return loaders
+    if trainings_per_gpu < 1:
+        raise ValueError(f"trainings_per_gpu must be >= 1, got {trainings_per_gpu}")
+    if margin_gb < 0 or margin_frac < 0:
+        raise ValueError(
+            f"the data_on_gpu margins must be >= 0, got margin_gb={margin_gb}, "
+            f"margin_frac={margin_frac}"
+        )
+    need = data_bytes * (1.0 + margin_frac) + margin_gb * 1e9
+    budget = min(total_bytes / trainings_per_gpu, free_bytes)
+    return need <= budget, need, budget
 
-    def num_bytes(loader):
-        if isinstance(loader, IndexedBatchLoader):
-            return loader.num_bytes()
-        return sum(
-            t.element_size() * t.nelement() for t in _dataset_tensors(loader.dataset)
-        )
 
-    datasets_bytes = sum(num_bytes(loader) for loader in loaders if loader is not None)
-    free_bytes, _ = torch.cuda.mem_get_info(device)
-    if datasets_bytes > max_memory_fraction * free_bytes:
-        logger.warning(
-            f"Datasets ({datasets_bytes / 1e9:.2f} GB) do not fit in the free GPU "
-            f"memory ({free_bytes / 1e9:.2f} GB): keeping them in RAM and copying "
-            "the batches to the GPU one by one"
+def _is_cuda_oom(err):
+    """Whether the exception is a CUDA out-of-memory error (also with the
+    torch versions without torch.OutOfMemoryError)."""
+    oom_types = tuple(
+        t
+        for t in (
+            getattr(torch, "OutOfMemoryError", None),
+            getattr(torch.cuda, "OutOfMemoryError", None),
         )
-        device = torch.device("cpu")
-        if any(isinstance(loader, IndexedBatchLoader) for loader in loaders):
-            # the k-fold loaders already take the batches by index
-            return loaders
-    else:
-        logger.info(
-            f"Moving the datasets to {device} ({datasets_bytes / 1e9:.2f} GB)"
-        )
+        if t is not None
+    )
+    if oom_types and isinstance(err, oom_types):
+        return True
+    return isinstance(err, RuntimeError) and "out of memory" in str(err)
+
+
+def _make_device_loaders(loaders, device):
+    """DeviceBatchLoaders with the data of `loaders` on `device` (`None`
+    loaders are kept as they are)."""
     out = []
     for loader in loaders:
         if loader is None:
@@ -1980,3 +2079,81 @@ def loaders_to_device(loaders, device, max_memory_fraction=0.5):
                 setattr(new, attr, getattr(loader, attr))
         out.append(new)
     return out
+
+
+def _loaders_in_ram(loaders):
+    """The loaders with the data kept in RAM, the batches sliced there and
+    copied to the GPU in the training loop."""
+    if any(isinstance(loader, IndexedBatchLoader) for loader in loaders):
+        # the k-fold loaders already take the batches by index
+        return loaders
+    return _make_device_loaders(loaders, torch.device("cpu"))
+
+
+def loaders_to_device(
+    loaders, device, trainings_per_gpu=1, margin_gb=0.5, margin_frac=0.0
+):
+    """Replace the DataLoaders with DeviceBatchLoaders holding the data on
+    `device`.
+
+    The loaders are left unchanged if the device is not a GPU. The datasets are
+    copied to the GPU only if they fit in the budget of this training (see
+    `gpu_data_fits`): the total GPU memory divided by `trainings_per_gpu` (the
+    trainings sharing the GPU at the same time), and at most the free GPU
+    memory, including a margin of `margin_gb` GB plus `margin_frac` times the
+    datasets size. Otherwise, or if the copy runs out of GPU memory, they are
+    kept in RAM and the batches are sliced there and copied to the GPU one by
+    one. `None` loaders are kept as they are.
+    """
+    if device.type != "cuda":
+        return loaders
+
+    def num_bytes(loader):
+        if isinstance(loader, IndexedBatchLoader):
+            return loader.num_bytes()
+        return sum(
+            t.element_size() * t.nelement() for t in _dataset_tensors(loader.dataset)
+        )
+
+    datasets_bytes = sum(num_bytes(loader) for loader in loaders if loader is not None)
+    free_bytes, _ = torch.cuda.mem_get_info(device)
+    total_bytes = torch.cuda.get_device_properties(device).total_memory
+    fits, need_bytes, _ = gpu_data_fits(
+        datasets_bytes,
+        total_bytes,
+        free_bytes,
+        trainings_per_gpu,
+        margin_gb=margin_gb,
+        margin_frac=margin_frac,
+    )
+    budget_msg = (
+        f"datasets {datasets_bytes / 1e9:.2f} GB + margin "
+        f"{(need_bytes - datasets_bytes) / 1e9:.2f} GB = {need_bytes / 1e9:.2f} GB, "
+        f"share per training {total_bytes / trainings_per_gpu / 1e9:.2f} GB "
+        f"(total {total_bytes / 1e9:.2f} GB / {trainings_per_gpu} training(s) per "
+        f"GPU), free {free_bytes / 1e9:.2f} GB"
+    )
+    if not fits:
+        logger.warning(
+            f"data_on_gpu: {budget_msg}: the datasets do not fit, keeping them in "
+            "RAM and copying the batches to the GPU one by one"
+        )
+        return _loaders_in_ram(loaders)
+
+    logger.info(f"data_on_gpu: {budget_msg}: the datasets fit")
+    logger.info(f"Moving the datasets to {device} ({datasets_bytes / 1e9:.2f} GB)")
+    try:
+        return _make_device_loaders(loaders, device)
+    except Exception as err:  # noqa: BLE001 (re-raised if not an OOM)
+        if not _is_cuda_oom(err):
+            raise
+        oom_msg = str(err).splitlines()[0] if str(err) else type(err).__name__
+    # out of the except block, so that the traceback (which references the
+    # partially created GPU tensors) is released before freeing the memory
+    gc.collect()
+    torch.cuda.empty_cache()
+    logger.warning(
+        f"data_on_gpu: out of GPU memory while copying the datasets ({oom_msg}): "
+        "keeping them in RAM and copying the batches to the GPU one by one"
+    )
+    return _loaders_in_ram(loaders)

@@ -7,3 +7,4 @@ out*/
 slurm*out
 test/
 jobs/comet_token.key
+tests/

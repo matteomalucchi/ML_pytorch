@@ -178,7 +178,7 @@ kfold_onnx: average
 # (weight_clamp). E.g. 3.912 = ln 50 bounds the weights to [1/50, 50].
 weight_log_clamp: null
 # K-fold, 4-node multiclass morphing (classes data num., data den., ttbar
-# num., ttbar den., see the README): ttbar fraction alpha = N_ttbar / N_data of
+# num., ttbar den., see docs/boosted_hh4b.md): ttbar fraction alpha = N_ttbar / N_data of
 # the numerator region and of the denominator region (computed by ml_alpha,
 # or automatically by jobs/run_training.sh --alpha). If morphing_alpha is set,
 # the final k-fold ONNX model is the morphing weight
@@ -203,9 +203,22 @@ morphing_alpha_den: 0.0
 kfold_cache: null
 # Directory where the record of the split is saved when the cache is
 # prepared: k.npy ([kl, dataset index, fold] of every event, in the shuffled
-# order) and the metadata, for reproducibility. ml_train -k K and
-# jobs/run_training.sh use <output dir>/kfold_split.
+# order), the metadata and a fingerprint of the events, for reproducibility
+# and to resume a k-fold training with exactly the same split (see
+# kfold_reuse_split). ml_train -k K and jobs/run_training.sh use
+# <output dir>/kfold_split.
 kfold_split_dir: null
+# Resumed k-fold training: when the cache is prepared again (e.g. it was in a
+# temporary directory removed at the end of the job), take the fold of every
+# event from the record in kfold_split_dir instead of the split computed now,
+# after checking that the events loaded now are the same ones in the same
+# order (config hash, number of events, [kl, dataset index] of every event and
+# fingerprint of the input variables); a mismatch is an error, so the resumed
+# folds are always folds of the same split as the finished ones. The record is
+# then not rewritten. Without a record, the split computed now is used (with
+# a warning). jobs/run_training.sh sets it with --load-last / --missing-folds.
+# CLI: --kfold-reuse-split.
+kfold_reuse_split: False
 # Only prepare the k-fold cache (see kfold_cache) and exit.
 kfold_prepare: False
 
@@ -363,12 +376,32 @@ gpus: '0'
 # Copy the whole train/val/test datasets to the GPU once and take the batches
 # directly from there, instead of using DataLoader workers and copying every
 # batch to the GPU. Much faster for small models; num_workers and pin_memory
-# are then not used. If the datasets take more than half of the free GPU
-# memory they are kept in RAM and the batches are taken as slices there and
-# copied to the GPU one by one (still much faster than the DataLoaders, which
-# index and collate the events one by one). No effect on CPU. False uses the
-# standard DataLoaders.
+# are then not used. If the datasets do not fit in the GPU memory budget of the
+# training (see below), or if copying them runs out of GPU memory, they are
+# kept in RAM and the batches are taken as slices there and copied to the GPU
+# one by one (still much faster than the DataLoaders, which index and collate
+# the events one by one). No effect on CPU. False uses the standard
+# DataLoaders.
 data_on_gpu: True
+# GPU memory budget of data_on_gpu: the datasets are copied to the GPU only if
+#   datasets + margin <= min(total GPU memory / trainings_per_gpu, free GPU memory)
+# with margin = data_on_gpu_margin_gb (GB, 1e9 bytes) + data_on_gpu_margin_frac
+# * datasets. The share of the total memory per training does not depend on
+# when the trainings start, so trainings started together on the same GPU do
+# not overfill it; the free memory only guards against other processes on the
+# GPU. The margin covers the CUDA context, the model and optimizer, the
+# activations, the per-epoch shuffle permutation and the allocator
+# fragmentation (a few tenths of a GB for the small DNNs used here; increase it
+# for larger models or batches). Otherwise the datasets are kept in RAM
+# (batches sliced there and copied to the GPU). CLI: --data-on-gpu-margin-gb,
+# --data-on-gpu-margin-frac.
+data_on_gpu_margin_gb: 0.5
+data_on_gpu_margin_frac: 0.0
+# Number of trainings sharing the GPU at the same time (set automatically by
+# jobs/run_training.sh through the ML_TRAININGS_PER_GPU environment variable;
+# the CLI/config value wins if given). null: ML_TRAININGS_PER_GPU if set,
+# otherwise 1. CLI: --trainings-per-gpu.
+trainings_per_gpu: null
 # Allow TensorFloat-32 matrix multiplications on Ampere (or newer) GPUs
 # (ignored with deterministic: True).
 tf32: True

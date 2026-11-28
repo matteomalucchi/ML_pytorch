@@ -21,7 +21,7 @@
 # fold processes memory-map (the events take the RAM once, not 20 times).
 # Folds i run on GPU i % 8 (3 folds on GPUs 0-3, 2 on GPUs 4-7), with 2 CPUs
 # each.
-input_variables: bkg_morphing_dnn_input_variables
+input_variables: bkg_morphing_dnn_ggf_vbf_VBFvars_input_variables
 
 run2: False
 
@@ -52,8 +52,8 @@ background_dataset:
     DATA_ParkingHH_2024_EraI,
   ]
 
-# no oversampling: the classes are balanced with the class weights
-oversample_split: False
+
+split_oversample: False
 
 # K-fold training: 20 folds assigned randomly (no event number needed). The
 # morphing weights are applied to the events of a separate, orthogonal region
@@ -70,7 +70,7 @@ k_folds: 20
 kfold_split: random
 kfold_onnx: logaverage
 onnx_ratio: True
-weight_log_clamp: 3.912
+# weight_log_clamp: 3.912
 
 # same model as 12_01_06 (DNN_softmax_reweight_model_maskedBN1D), which also
 # exports the per-fold log-weight z1 - z0 (*_logdiff.onnx)
@@ -81,16 +81,11 @@ data_format: parquet
 batch_size: 1024
 epochs: 200
 
-# 5 epochs of linear warm-up up to 1e-3, then cosine decay down to 1e-5
-# (0.01 * learning_rate) at the last epoch (199): ~8.7e-4 at epoch 50,
-# ~5.2e-4 at epoch 100, ~1.6e-4 at epoch 150
 learning_rate: 1e-3
-learning_rate_schedule: w5_cosine01
+learning_rate_schedule: e0_drop95
 
-# with patience 5 the training would stop in the first tens of epochs, when
-# the learning rate is still close to the maximum
 early_stopping: True
-patience: 20
+patience: 5
 min_delta: 1e-5
 
 eval_param: "loss"
@@ -109,7 +104,7 @@ test_fraction: 0.0
 # The datasets of a fold do not fit in the 11 GB of a GTX 1080 Ti: they are
 # then kept in RAM and the batches are sliced there and copied to the GPU
 # (much faster than the DataLoaders).
-data_on_gpu: True
+data_on_gpu: False
 
 # padded entries (e.g. add_jet1pt in events without a 5th jet) are excluded
 # from the MaskedBatchNorm1d statistics and flagged by the pad indicators
@@ -117,6 +112,5 @@ pad_value: -999.0
 pad_fill_value: 0.0
 pad_indicators: True
 
-parquet_dir: /pnfs/psi.ch/cms/trivcat/store/user/mmalucch/out_hh4b/VBF/12_01_01_out_ggf_vbf_DATA_AllKlambda_DetaMjjCentrality_ApplyGGFvsVBF_DNNVars_vbfregions_2024SPANetHiggsTraining_parking_presel/parquet_files/merged_parquet
 
-data_dirs: [/work/mmalucch/out_hh4b/VBF/12_01_01_out_ggf_vbf_DATA_AllKlambda_DetaMjjCentrality_ApplyGGFvsVBF_DNNVars_vbfregions_2024SPANetHiggsTraining_parking_presel]
+data_dirs: [/work/mmalucch/out_hh4b/VBF/12_01_09_out_ggf_vbf_spanet_input_AllKlambda_DetaMjjCentrality_ApplyGGFvsVBF_DNNVars_vbfregions_2024SPANetHiggsTraining_parking_presel_ptreg/]

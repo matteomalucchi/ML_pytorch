@@ -67,7 +67,7 @@ k_folds: 20
 kfold_split: random
 kfold_onnx: logaverage
 onnx_ratio: True
-weight_log_clamp: 3.912
+# weight_log_clamp: 3.912
 
 ML_model: DNN_softmax_reweight_model_maskedBN1D_small
 
@@ -76,11 +76,8 @@ data_format: parquet
 batch_size: 1024
 epochs: 100
 
-# 5 epochs of linear warm-up up to 1e-3, then cosine decay down to 1e-5
-# (0.01 * learning_rate) at the last epoch (99): ~8.9e-4 at epoch 25,
-# ~5.4e-4 at epoch 50, ~1.6e-4 at epoch 75
 learning_rate: 1e-3
-learning_rate_schedule: w5_cosine01
+learning_rate_schedule: e0_drop95
 
 # with patience 5 the training would stop in the first tens of epochs, when
 # the learning rate is still close to the maximum
