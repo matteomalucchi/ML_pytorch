@@ -1,8 +1,8 @@
 """Smaller, more regularised version of DNN_softmax_reweight_model_maskedBN1D
-(hidden layers 128-64-32, dropout 0.3; the weight decay is set in the config,
-weight_decay), with also
-export_logdiff_model, the per-fold log-weight z_1 - z_0 exported automatically as
-<model>_logdiff.onnx next to every softmax ONNX model."""
+(hidden layers 128-64-32, dropout 0.3, default weight decay 1e-3, used when
+weight_decay is null in the config), with also export_logdiff_model, the
+per-fold log-weight z_1 - z_0 exported automatically as <model>_logdiff.onnx
+next to every softmax ONNX model."""
 from torch import nn
 import torch
 
@@ -177,7 +177,7 @@ def get_model(
     pad_fill_value=0.0,
     pad_indicators=True,
     optimizer="adam",
-    weight_decay=None,
+    weight_decay=1e-3,
 ):
     model = DNN(
         input_size,

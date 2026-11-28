@@ -151,7 +151,7 @@ def get_model(
     pad_fill_value=0.0,
     pad_indicators=True,
     optimizer="adam",
-    weight_decay=None,
+    weight_decay=1e-4,
 ):
     model = DNN(
         input_size,

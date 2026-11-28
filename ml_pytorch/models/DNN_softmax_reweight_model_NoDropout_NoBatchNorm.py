@@ -36,7 +36,7 @@ class DNN(nn.Module):
         
         return ONNXWrappedModel(model)
 
-def get_model(input_size, device, lr, lr_schedule, n_epochs, optimizer="adam", weight_decay=None):
+def get_model(input_size, device, lr, lr_schedule, n_epochs, optimizer="adam", weight_decay=0.0):
     model = DNN(input_size).to(device)
     print(model)
 

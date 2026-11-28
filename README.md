@@ -102,7 +102,7 @@ epochs: 50
 learning_rate: 1e-3
 learning_rate_schedule: e5_drop75              # constant, linear, eX_dropYY or wX_cosineYY (warm-up + cosine decay, e.g. w5_cosine01), see ml_pytorch/utils/learning_rate_schedules.py and ml_pytorch/defaults/default_configs.yml
 optimizer: adam                                # adam or adamw, passed to get_model (ml_pytorch/utils/optimizers.py)
-weight_decay: null                             # null = PyTorch default of the optimizer (0 for adam, 0.01 for adamw)
+weight_decay: null                             # null = default weight_decay of the model's get_model (its previous hard-coded value); a number overrides it
 
 train_fraction: 0.7
 val_fraction: 0.2
@@ -197,7 +197,7 @@ Models live in `ml_pytorch/models/` and are referenced by the `ML_model` key in 
 Binary models (1-node sigmoid + `BCELoss`, or 2-node softmax + `CrossEntropyLoss`) keep the original `get_model` signature:
 
 ```python
-def get_model(input_size, device, lr, lr_schedule, n_epochs, optimizer="adam", weight_decay=None):
+def get_model(input_size, device, lr, lr_schedule, n_epochs, optimizer="adam", weight_decay=0.0):
     model = DNN(input_size).to(device)
     loss_fn = torch.nn.CrossEntropyLoss(reduction="none")  # or BCELoss for 1 node
     optimizer = get_optimizer(optimizer, model.parameters(), lr, weight_decay)
@@ -245,7 +245,7 @@ class DNN(nn.Module):
         return ONNXWrappedModel(model)
 
 
-def get_model(input_size, num_classes, device, lr, lr_schedule, n_epochs, optimizer="adam", weight_decay=None):
+def get_model(input_size, num_classes, device, lr, lr_schedule, n_epochs, optimizer="adam", weight_decay=1e-4):
     model = DNN(input_size, num_classes).to(device)
     # raw logits + CrossEntropyLoss for single-label multi-class
     loss_fn = torch.nn.CrossEntropyLoss(reduction="none")
@@ -258,7 +258,7 @@ To create your own architecture:
 
 1. Add a new file in `ml_pytorch/models/`, e.g. `DNN_my_model.py`.
 2. Define a `torch.nn.Module` whose `__init__` takes `dim_in` (and `num_classes` if multi-class).
-3. Define `get_model(input_size, [num_classes,] device, lr, lr_schedule, n_epochs, optimizer="adam", weight_decay=None)` returning `(model, loss_fn, optimizer, scheduler)`. Use `reduction="none"` on the loss — the training loop applies per-event weights manually. Build the optimizer with `get_optimizer(optimizer, model.parameters(), lr, weight_decay)` and the scheduler with `get_lr_scheduler(lr_schedule, optimizer, n_epochs)`: `ml_train` passes the `optimizer`, `weight_decay` and `learning_rate_schedule` of the config, so the model must not hard-code them.
+3. Define `get_model(input_size, [num_classes,] device, lr, lr_schedule, n_epochs, optimizer="adam", weight_decay=<default of the model>)` returning `(model, loss_fn, optimizer, scheduler)`. Use `reduction="none"` on the loss — the training loop applies per-event weights manually. Build the optimizer with `get_optimizer(optimizer, model.parameters(), lr, weight_decay)` and the scheduler with `get_lr_scheduler(lr_schedule, optimizer, n_epochs)`: `ml_train` passes the `optimizer` and `learning_rate_schedule` of the config, and its `weight_decay` when it is a number; with `weight_decay: null` the default argument of `get_model` is used.
 4. Reference the file (without `.py`) from your config: `ML_model: DNN_my_model`.
 
 When using a legacy binary model with a multi-class config (`num_classes > 2`), `ml_train` raises an explicit error and points you at `DNN_multiclass_model`.

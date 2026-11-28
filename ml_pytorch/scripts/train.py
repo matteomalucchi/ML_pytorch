@@ -472,12 +472,15 @@ def main():
 
     get_model_sig = _inspect.signature(ML_model.get_model)
     # optimizer and weight decay of the config, passed to get_model as the
-    # learning rate schedule (an ML_model.py of an older training, used with
-    # --load-model / --eval-model, may not accept them: it then keeps its own)
+    # learning rate schedule. weight_decay null is not passed, so the default
+    # of get_model is used (the value the model hard-coded before, so that the
+    # older trainings are unchanged). An ML_model.py of an older training,
+    # used with --load-model / --eval-model, may not accept them: it then
+    # keeps its own optimizer.
     optimizer_kwargs = {
         k: cfg[k]
         for k in ["optimizer", "weight_decay"]
-        if k in get_model_sig.parameters
+        if k in get_model_sig.parameters and cfg[k] is not None
     }
     ignored = [
         f"{k}: {cfg[k]}"
@@ -525,9 +528,11 @@ def main():
         f"Optimizer: {type(optimizer).__name__}, weight decay "
         f"{optimizer.defaults.get('weight_decay')}"
         + (
-            " (set by the model file, which does not take it from the config)"
-            if "weight_decay" not in optimizer_kwargs
-            else " (PyTorch default)" if cfg.weight_decay is None else ""
+            ""
+            if "weight_decay" in optimizer_kwargs
+            else " (default of the model, weight_decay null in the config)"
+            if "weight_decay" in get_model_sig.parameters
+            else " (set by the model file, which does not take it from the config)"
         )
     )
     # models defining export_logdiff_model export also the per-fold log-weight
