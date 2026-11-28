@@ -1,832 +1,112 @@
 # ML_pytorch
 
-Repository with basic machine learning algorithms implemented in PyTorch.
+DNN trainings in PyTorch for the HH→4b analysis: signal-vs-background classifiers, ggF-vs-VBF classifiers and background reweighting (morphing). Binary and multi-class classification are supported.
 
-The coffea files used as inputs are based on the output of [PocketCoffea](https://github.com/PocketCoffea/PocketCoffea/tree/main). In particular, the framework was developed based on the output of the
-[AnalysisConfigs](https://github.com/matteomalucchi/AnalysisConfigs) repository, which is a collection of analysis configurations for the PocketCoffea framework.
+The inputs are the outputs of [PocketCoffea](https://github.com/PocketCoffea/PocketCoffea/tree/main), produced with the configurations of [AnalysisConfigs](https://github.com/matteomalucchi/AnalysisConfigs). The trained models are exported to ONNX to be used back in PocketCoffea.
 
-The framework supports both **binary classification** (signal vs background) and **multi-class classification** with an arbitrary number of classes — see [Configuration files](#configuration-files) below.
+## Documentation
+
+| Page | Content |
+| --- | --- |
+| [Configuration](docs/configuration.md) | config files, classes, input variables, models, `ml_train` options |
+| [Training on Slurm](docs/slurm_training.md) | `run_training.sh`: many trainings / GPUs / nodes, copy to `/pnfs`, resource monitor |
+| [K-fold training](docs/kfold_training.md) | k-fold trainings, splitting by event number, resuming failed folds, combined ONNX models |
+| [Boosted HH4b](docs/boosted_hh4b.md) | multiclass background morphing with ttbar subtraction, sig/bkg classifier |
 
 ## Installation
 
-To create the micromamba environment, you can use the following command:
+On a GPU node:
 
 ```bash
-salloc --account gpu_gres --job-name "InteractiveJob" --cpus-per-task 4 --mem-per-cpu 3000 --time 01:00:00  -p gpu --gres=gpu:1
+salloc --account gpu_gres --job-name "InteractiveJob" --cpus-per-task 4 --mem-per-cpu 3000 --time 01:00:00 -p gpu --gres=gpu:1
 micromamba env create -f ML_pytorch_env.yml
 micromamba activate ML_pytorch
-
-# install the package in editable mode
 pip install -e .
 ```
 
-`requirements.txt` also installs the `HEPPlotter` class from the
-[AnalysisConfigs](https://github.com/matteomalucchi/AnalysisConfigs) repository,
-which is used by all the plotting scripts (see
-[Plotting with HEPPlotter](#plotting-with-hepplotter)).
-
-### Update HEPPlotter
-
-> [!IMPORTANT]
-> To Install the `HEPPlotter` class you can use
->
-> ```bash
-> pip install --upgrade  --no-cache-dir git+https://github.com/matteomalucchi/AnalysisConfigs.git
-> ```
->
-> This command should be executed every time you want to pull from the AnalysisConfigs repository and update the `HEPPlotter`.
-> If it doesn't update, you should first uninstall it with `pip uninstall configs` and then install it again with the command above.
-
-## Connect to node with a gpu
-
-To connect to a node with a gpu, you can use the following command:
+The plotting uses the `HEPPlotter` class of [AnalysisConfigs](https://github.com/matteomalucchi/AnalysisConfigs), installed with the requirements. To update it:
 
 ```bash
-# connect to a node with a gpu
-salloc --account gpu_gres --job-name "InteractiveJob" --cpus-per-task 4 --mem-per-cpu 3000 --time 01:00:00  -p gpu --gres=gpu:1
-# activate the environment
-micromamba activate ML_pytorch
-# check which gpu is available
-echo $CUDA_VISIBLE_DEVICES # or echo $SLURM_JOB_GPUS
+pip install --upgrade --no-cache-dir git+https://github.com/matteomalucchi/AnalysisConfigs.git
 ```
 
-## Examples
+If it does not update, run `pip uninstall configs` first.
 
-To execute an example training, evaluate the model on the test set, plot the history and plot the signal/background histograms, you can use the following command:
+## Quick start
+
+Interactively on a GPU node:
 
 ```bash
-ml_train  -c configs/example_DNN_config_ggF_VBF.yml
+salloc --account gpu_gres --job-name "InteractiveJob" --cpus-per-task 4 --mem-per-cpu 3000 --time 01:00:00 -p gpu --gres=gpu:1
+micromamba activate ML_pytorch
+ml_train -c configs/hh4b_ggF_VBF/example_DNN_config_ggF_VBF.yml -o out/example
+```
+
+This trains the model, evaluates it on the test set and makes the plots. On the cluster, submit it with Slurm instead (see [Training on Slurm](docs/slurm_training.md)):
+
+```bash
+./jobs/run_training.sh -c /full/path/config.yml -o /full/path/outdir [-n 20 -g 4 --ratio]
 ```
 
 ## Repository layout
 
 ```
 ml_pytorch/
-├── defaults/                # default config, input-variable lists, preprocessing fns
-│   ├── default_configs.yml
-│   └── sig_bkg_dnn_input_variables.py, ...
-├── models/                  # DNN architectures (importable by name from configs)
-│   ├── DNN_model.py                       # binary, 1-node sigmoid + BCELoss
-│   ├── DNN_softmax_reweight_model.py      # binary, 2-node softmax + CrossEntropy
-│   ├── DNN_sigmoid_reweight_model.py      # binary, sigmoid w/ batchnorm + dropout
-│   └── DNN_multiclass_model.py            # multi-class, num_classes-node softmax
-├── scripts/                 # console entry points (train, sig_bkg_eval, plot_history, ...)
-└── utils/                   # dataset loader, training loop, learning-rate schedules
-configs/                     # YAML configuration files grouped by use case
+├── defaults/   # default config values, input-variable lists, preprocessing functions
+├── models/     # DNN architectures, selected by name with ML_model
+├── scripts/    # command-line tools (ml_train, ml_sb, ml_onnx, ...)
+└── utils/      # dataset loading, training loop, learning-rate schedules
+configs/        # YAML configs, grouped by use case
+jobs/           # Slurm scripts (run_training.sh)
+docs/           # documentation
 ```
 
-## Configuration files
+## Command-line tools
 
-Configurations are YAML files consumed by `ml_train`. Examples live under `configs/`. The framework supports **two layouts** for declaring training samples; the dataset loader auto-detects which is in use.
-
-### Binary (legacy) layout
-
-Use this when you have exactly two classes (signal vs background):
-
-```yaml
-signal_sample:    [GluGlutoHHto4B_spanet_skimmed]
-signal_dataset:   [GluGlutoHHto4B_spanet_kl-1p00_kt-1p00_c2-0p00_2022_postEE]
-signal_region:    [4b_signal_region]
-
-background_sample:  [DATA_JetMET_JMENano_E_skimmed, DATA_JetMET_JMENano_F_skimmed]
-background_dataset: [DATA_JetMET_JMENano_E_2022_postEE_EraE, DATA_JetMET_JMENano_F_2022_postEE_EraF]
-background_region:  [2b_signal_region_postW]
-
-input_variables: sig_bkg_dnn_input_variables   # module name in ml_pytorch/defaults/
-ML_model: DNN_softmax_reweight_model           # module name in ml_pytorch/models/
-data_format: coffea                            # one of: coffea, parquet, root
-data_dirs: [/path/to/coffea/output/]
-
-batch_size: 512
-epochs: 50
-learning_rate: 1e-3
-learning_rate_schedule: e5_drop75              # constant, linear, eX_dropYY or wX_cosineYY (warm-up + cosine decay, e.g. w5_cosine01), see ml_pytorch/utils/learning_rate_schedules.py and ml_pytorch/defaults/default_configs.yml
-
-train_fraction: 0.7
-val_fraction: 0.2
-test_fraction: 0.1
-
-early_stopping: True
-patience: 5
-min_delta: 1e-5
-eval_param: "loss"                             # or "acc"
-```
-
-Internally background is mapped to class index `0` and signal to class index `1`, matching the previous behaviour of all existing configs and saved models.
-
-### Multi-class layout
-
-For three or more classes, replace the `signal_*` / `background_*` blocks with a `classes` mapping. Each entry becomes one output node:
-
-```yaml
-input_variables: sig_bkg_dnn_input_variables
-ML_model: DNN_multiclass_model
-data_format: coffea
-data_dirs: [/path/to/coffea/output/]
-
-classes:
-  background:
-    sample:  [DATA_JetMET_JMENano_E_skimmed, DATA_JetMET_JMENano_F_skimmed, DATA_JetMET_JMENano_G_skimmed]
-    region:  [2b_signal_region_postW]
-    dataset: [DATA_JetMET_JMENano_E_2022_postEE_EraE, DATA_JetMET_JMENano_F_2022_postEE_EraF, DATA_JetMET_JMENano_G_2022_postEE_EraG]
-    lbl: 0
-  ggF_HH:
-    sample:  [GluGlutoHHto4B_spanet_skimmed]
-    region:  [4b_signal_region]
-    dataset: [GluGlutoHHto4B_spanet_kl-1p00_kt-1p00_c2-0p00_2022_postEE]
-    lbl: 1
-  VBF_HH:
-    sample:  [VBF_HHto4B]
-    region:  [4b_signal_region]
-    dataset: [VBFHHto4B_CV_1_C2V_1_C3_1_2022_postEE]
-    lbl: 2
-
-batch_size: 512
-epochs: 50
-learning_rate: 1e-3
-learning_rate_schedule: e5_drop75
-train_fraction: 0.7
-val_fraction: 0.2
-test_fraction: 0.1
-```
-
-Notes on the `classes` block:
-
-* Each class needs `sample`, `region`, `dataset` (same semantics as the legacy keys) and a `lbl` integer.
-* Classes are ordered by ascending `lbl`, and that order becomes the **internal class index** (`0..C-1`) used both as the `CrossEntropyLoss` target and as the value stored in the saved score arrays. The user-provided `lbl` is kept as a label/identifier and shown in plot legends (`"className (lbl=...)"`).
-* `num_classes` is derived from the size of the block, so adding a class is purely a config change provided the model accepts a `num_classes` argument (see below).
-* `undersample`, `oversample_split` and `split_oversample` are signal-vs-background concepts and are only supported when there are exactly two classes.
-
-A ready-to-edit multi-class example is provided at `configs/hh4b_sig_bkg_classifier/example_DNN_config_multiclass.yml`.
-
-### Other useful config keys
-
-| key | meaning |
-|---|---|
-| `input_variables` | either a list of branch names or the name of a module in `ml_pytorch/defaults/` providing a `dnn_input_variables` `OrderedDict` |
-| `preprocess_variables_functions` | mapping `{var: [func_name, [args...]]}` resolved against `ml_pytorch/defaults/preprocess_variables_functions.py` |
-| `data_format` | `coffea`, `parquet`, or `root` |
-| `data_dirs` | list of directories containing the input files (`.coffea` files / parquet config) |
-| `parquet_dir` | parquet only: directory of the parquet files to use instead of the `save_chunk` one in the `config.json` of `data_dirs` (single `data_dir` only) |
-| `oversample_split`, `split_oversample`, `undersample` | binary-only class balancing strategies |
-| `eval`, `roc`, `histos`, `history`, `onnx` | toggle the post-training outputs |
-| `gpus` | comma-separated GPU indices, or unset for CPU |
-| `seed` | seed of all the randomness (python, numpy and torch, also on GPU): event shuffling, splits, folds, oversampling, weight initialisation and dropout. Resumed trainings (`--load-model`) continue exactly as uninterrupted ones, since the checkpoints store the random generator, scheduler and early-stopper states. Bitwise identical on CPU; on GPU also needs `deterministic` |
-| `k_folds`, `fold`, `kfold_split`, `kfold_event_column`, `kfold_onnx`, `onnx_ratio`, `kfold_cache` | k-fold training, see [K-fold training](#k-fold-training) |
-| `shuffle_train` | reshuffle the training events at every epoch (default `False`; also with `data_on_gpu` and k-fold). The permutations come from the torch generator seeded with `seed`, so they are reproducible, also for resumed trainings. Validation and test are never shuffled |
-| `n_best_checkpoints` | number of best-epoch checkpoints (`state_dict/model_<epoch>_state_dict.pt`) kept on disk (default `5`): when a new best epoch is saved the oldest ones are removed. The last-epoch checkpoint is always kept as well. `0` keeps all of them |
-| `deterministic` | use only deterministic algorithms, so that trainings with the same seed are identical also on GPU (slower) |
-| `pad_value` | value marking padded entries (missing objects); must match the PocketCoffea fill value. Used to pad the missing objects and the `None` values of the inputs when loading the dataset, to not count padded objects when creating a missing `<collection>_N` from parquet files and, in `MaskedBatchNorm1d`, to exclude padded entries from the normalisation statistics |
-| `pad_fill_value` | `MaskedBatchNorm1d` only: value assigned to padded entries at the output of the layer, or `"learn"` for a learnable per-feature value. The real values there are standardised and then scaled/shifted by the learnable weight and bias, so 0 corresponds to the mean of the real values only at initialisation; a fixed value does not follow the learned scale/shift |
-| `pad_indicators` | `MaskedBatchNorm1d` only: append one 0/1 "is real" flag per feature (doubles the inputs to the first linear layer) |
-
-The default values used when a key is omitted are listed in `ml_pytorch/defaults/default_configs.yml`.
-
-## DNN architecture files
-
-Models live in `ml_pytorch/models/` and are referenced by the `ML_model` key in the YAML config (the filename without `.py`). Each file must expose:
-
-* a `torch.nn.Module` subclass implementing `forward`;
-* a top-level `get_model(...)` factory returning `(model, loss_fn, optimizer, scheduler)`;
-* optionally an `export_model(model)` method on the module that wraps the network for ONNX export (e.g. to apply a softmax inside the exported graph).
-
-### Binary models — legacy signature
-
-Binary models (1-node sigmoid + `BCELoss`, or 2-node softmax + `CrossEntropyLoss`) keep the original `get_model` signature:
-
-```python
-def get_model(input_size, device, lr, lr_schedule, n_epochs):
-    model = DNN(input_size).to(device)
-    loss_fn = torch.nn.CrossEntropyLoss(reduction="none")  # or BCELoss for 1 node
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-    scheduler = get_lr_scheduler(lr_schedule, optimizer, n_epochs)
-    return model, loss_fn, optimizer, scheduler
-```
-
-You can use any of these models with the binary (legacy) config layout — see `DNN_model.py`, `DNN_softmax_reweight_model.py`, `DNN_sigmoid_reweight_model.py` and variants.
-
-### Multi-class models — `num_classes` signature
-
-A multi-class model must accept an extra `num_classes` parameter so the size of the output layer can be driven by the YAML. `ml_pytorch/scripts/train.py` introspects the function signature and dispatches automatically: a model with `num_classes` in its signature gets `num_classes` passed in, a legacy binary model does not.
-
-A minimal example (`ml_pytorch/models/DNN_multiclass_model.py`) is provided:
-
-```python
-from torch import nn
-import torch
-
-from ml_pytorch.utils.learning_rate_schedules import get_lr_scheduler
-
-
-class DNN(nn.Module):
-    def __init__(self, dim_in: int, num_classes: int):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(dim_in, 64), nn.ReLU(), nn.Dropout(0.2),
-            nn.Linear(64, 64),     nn.ReLU(), nn.Dropout(0.2),
-            nn.Linear(64, 64),     nn.ReLU(), nn.Dropout(0.2),
-            nn.Linear(64, num_classes),       # multi-class logits
-        )
-
-    def forward(self, x):
-        return self.net(x)
-
-    def export_model(self, model):
-        # ONNX wrapper that applies softmax inside the graph
-        class ONNXWrappedModel(torch.nn.Module):
-            def __init__(self, m):
-                super().__init__()
-                self.m = m
-            def forward(self, x):
-                return torch.nn.functional.softmax(self.m(x), dim=1)
-        return ONNXWrappedModel(model)
-
-
-def get_model(input_size, num_classes, device, lr, lr_schedule, n_epochs):
-    model = DNN(input_size, num_classes).to(device)
-    # raw logits + CrossEntropyLoss for single-label multi-class
-    loss_fn = torch.nn.CrossEntropyLoss(reduction="none")
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-4)
-    scheduler = get_lr_scheduler(lr_schedule, optimizer, n_epochs)
-    return model, loss_fn, optimizer, scheduler
-```
-
-To create your own architecture:
-
-1. Add a new file in `ml_pytorch/models/`, e.g. `DNN_my_model.py`.
-2. Define a `torch.nn.Module` whose `__init__` takes `dim_in` (and `num_classes` if multi-class).
-3. Define `get_model(input_size, [num_classes,] device, lr, lr_schedule, n_epochs)` returning `(model, loss_fn, optimizer, scheduler)`. Use `reduction="none"` on the loss — the training loop applies per-event weights manually.
-4. Reference the file (without `.py`) from your config: `ML_model: DNN_my_model`.
-
-When using a legacy binary model with a multi-class config (`num_classes > 2`), `ml_train` raises an explicit error and points you at `DNN_multiclass_model`.
-
-## Input variable files
-
-Lists of input branches live in `ml_pytorch/defaults/`, each exposing a `dnn_input_variables` `OrderedDict` mapping output column name → `[collection, leaf]`. Reference them from a config either as a literal list of branch names:
-
-```yaml
-input_variables: [JetGood_pt, JetGood_eta, JetGood_phi, JetGood_mass, JetGood_btagPNetB]
-```
-
-or as the name of a module under `ml_pytorch/defaults/`:
-
-```yaml
-input_variables: sig_bkg_dnn_input_variables
-```
-
-In the second form the columns are resolved via `create_DNN_columns_list(run2, dnn_input_variables)` in `ml_pytorch/utils/tools.py`, which also handles the `Run2` branch-name suffix when the config sets `run2: True`.
-
-## `ml_train` options
-
-`ml_train` is the main entry point for training and evaluation. All options below override the corresponding config-file values when provided.
-
-```
-ml_train [OPTIONS]
-
-  -c, --config FILE            Path to the YAML configuration file
-  -o, --output-dir DIR         Output directory (overrides config)
-  -d, --data-dirs DIR [DIR…]   Data directories (overrides config)
-  -b, --batch-size INT         Batch size
-  -e, --epochs INT             Number of epochs
-  -n, --num-workers INT        Number of DataLoader workers
-  -s, --seed STR               Seed for shuffling and weight initialisation
-  -g, --gpus STR               GPU indices, comma-separated (e.g. "0,1")
-
-K-fold training (see K-fold training)
-  -k, --k-folds INT            Number of folds (0 or 1: no k-folding)
-  -f, --fold INT               Train only this fold (default: all the folds, then merge)
-  --kfold-split {random,event} Assign the folds randomly or by event number % k_folds
-  --onnx-ratio                 Also build the average-of-ratios k-fold ONNX model
-  --kfold-cache DIR            Load the events once in DIR and memory-map them in all the folds
-  --kfold-prepare              Only prepare the k-fold cache and exit
-  --kfold-onnx {average,event,median} Final k-fold ONNX model: average over the folds, fold event % k_folds, or median over the folds of the weight
-
-Evaluation / output
-  -ev, --eval                  Evaluate the model on the test set (no training)
-  -em, --eval-model PATH       Path to an existing model to evaluate instead of training
-  -l,  --load-model PATH       Load a checkpoint and continue training from it (model,
-                                optimizer and learning rate scheduler state; for older
-                                checkpoints without the scheduler state the schedule is
-                                continued from the checkpoint epoch)
-  -mp, --ml-model-path PATH    Path to the ML_model.py file used with --load-model/--eval-model
-                                (default: <output_dir>/ML_model.py)
-  --onnx                       Export the best model to ONNX format after training
-  -sm, --save-model            Save the full model object next to the state dict
-  -s-n, --save-numpy           Save numpy arrays of the output scores
-  --overwrite                  Overwrite an existing output directory
-
-Plots
-  --histos                     Plot signal/background output distributions
-  --roc                        Plot the ROC curve
-  --history                    Plot the training-loss history
-  --input-plots                Plot input-variable distributions before training (default: on)
-  --no-input-plots             Skip the input-variable plots
-  --input-plots-dir DIR        Subdirectory for input-variable plots (default: input_variables)
-  --input-plots-bins INT       Number of histogram bins for input-variable plots
-  --input-plots-log            Also save input-variable plots with a log y axis
-
-Comet ML logging
-  -ct,  --comet-token STR      Comet API token
-  -cn,  --comet-name STR       Comet username
-  -cw,  --comet-workspace STR  Comet workspace (overrides auto-derived name)
-  -ctg, --comet-tags TAG […]   Comet experiment tags
-  --pin-memory                 Pin memory for faster GPU data transfer
-
-Performance
-  --data-on-gpu                Keep the whole datasets on the GPU (default: on)
-  --no-data-on-gpu             Use the standard DataLoaders (copy every batch to the GPU)
-```
-
-### Run only evaluation (no training)
-
-To evaluate an already-trained model without running a new training, use `-ev` together with `-em`:
-
-```bash
-# Evaluate an existing model on the test set and produce all plots
-ml_train -c configs/example_DNN_config_ggF_VBF.yml \
-  -ev -em <output_dir>/best_model_state_dict.pt \
-  --histos --roc --history
-
-# Evaluate and export to ONNX
-ml_train -c configs/example_DNN_config_ggF_VBF.yml \
-  -ev -em <output_dir>/best_model_state_dict.pt \
-  --onnx -o <output_dir>
-```
-
-`-ev` skips all training epochs; `-em` points to the saved state-dict (`.pt` file). The config file is still required to reconstruct the model architecture and locate the test data.
-
-## K-fold training
-
-With `k_folds: K` (K ≥ 2, or `-k K`) the events are split into K folds and K models are trained: the model of fold `k` is **tested on fold `k`** and trained/validated on all the other events. Every event therefore gets an unbiased (out-of-fold) score, and the K models can be combined into a single ONNX model.
-
-```yaml
-k_folds: 5
-kfold_split: random          # or: event
-kfold_event_column: event    # used with kfold_split: event
-onnx_ratio: False            # also build the average-of-ratios ONNX (reweighting)
-kfold_onnx: average          # final ONNX model: average | event | median (see Outputs)
-train_fraction: 0.8          # the non-test events are split into training and
-val_fraction: 0.2            # validation with the ratio train : val
-```
-
-* **Splitting.** With `kfold_split: random` the events are assigned randomly to the folds, after the seeded shuffle. With `kfold_split: event` the fold of an event is `event % K`, computed from the `kfold_event_column` column (it must be saved in the input files). With `K = 2` this is the even/odd split. `test_fraction` is not used; the sum of the three fractions is still the fraction of the events read from the files.
-* **Seeds.** The event shuffle and the folds depend only on `seed`, so they are identical for all the folds (and for folds trained in separate jobs). The weight initialisation and dropout of fold `k` use their own random stream, seeded with numpy's `SeedSequence([seed, k])`. The streams are statistically independent and different for every fold and every seed, so every fold starts from different, independently drawn weights.
-* **Oversampling.** The test fold is never oversampled, so every event gets exactly one out-of-fold score; its events get the class-balancing weights instead. The events of the other folds are oversampled in one of two orders:
-  * `oversample_split`: oversample first, then split into training and validation. Copies of the same event can therefore be in both training and validation.
-  * `split_oversample`: split into training and validation first, then oversample each of them separately.
-
-  `undersample` drops events before the split, as usual. For every dataset the number of events (and of distinct events), the sums of the weights and the class weights of each class are printed, together with the number of events shared between training, validation and test.
-
-### Running
-
-```bash
-# all the folds one after the other, then merged
-ml_train -c configs/hh4b_sig_bkg_classifier/example_DNN_config_kfold.yml -k 5 -o out/kfold
-
-# a single fold (e.g. in a separate job), then merge the folds
-ml_train -c config.yml -k 5 --fold 3 -o out/kfold/fold_3
-ml_kfold_merge -i out/kfold -c config.yml -k 5 [--ratio]
-
-# only (re)build the combined ONNX models, e.g. the median of the ratios, skipping
-# the fold metrics, the out-of-fold evaluation and the plots (no events loaded)
-ml_kfold_merge -i out/kfold --ratio --kfold-onnx median --onnx-only
-
-# Slurm: the folds in parallel (here on 1 node) and merged at the end
-./jobs/run_training.sh -c /full/path/config.yml -o /full/path/out/kfold -k 5 [--ratio] [-p NODES]
-```
-
-All the folds use the same `seed`. `--load-model`/`--eval-model` work for one fold at a time (with `--fold`).
-
-**K-fold cache.** With `kfold_cache: <dir>` (`--kfold-cache`), the events are loaded, shuffled and assigned to the folds only once (`ml_train --kfold-prepare`). They are saved in `<dir>` as `.npy` files, and every fold memory-maps them. The pages of a memory-mapped file are shared by all the processes of a node, so the events take the RAM once however many folds run in parallel. Each fold only holds the indices of its training, validation and test events; oversampling repeats indices, not events.
-
-`ml_train -k K` and `run_training.sh --k-folds K` use the cache automatically (`--no-kfold-cache` to disable it in the script).
-* **Where it lives:** in a temporary directory (`$TMPDIR`, node-local on the batch nodes). It is not written to the output disk, and it is removed when the training ends. In `run_training.sh` every job or array task prepares its own cache on its node.
-* **What is kept in the output directory:** only the record of the split in `<output dir>/kfold_split/`, which holds `k.npy` (kl, dataset index and fold of every event) and the metadata. This is for reproducibility.
-* **Reuse:** a cache given with `kfold_cache` is reused only if it was made with the same data, fractions, oversampling, seed, `k_folds` and `kfold_split`; otherwise `ml_train` stops. The batches are exactly the same as without the cache.
-
-**Out-of-fold scores without files.** The fold trainings don't save any score arrays. The merge evaluates the best ONNX model of every fold on its test events in memory, using the cache if it still exists or loading the events again into a temporary directory. It does the same on a random 1/(K-1) of each fold's training events, for the train/test comparison in the plots.
-
-With `-s-n/--save-numpy` all the scores are saved: `fold_<k>/score_lbl_array.npz` by every fold, and `kfold/score_lbl_array_oof.npz` by the merge. Without it, none are written.
-
-**Checks of the split.** The merge stops with an error if any of these fails:
-* every fold directory is the right fold of the same split (same data, fractions, oversampling, seed, `k_folds` and `kfold_split`);
-* every fold was trained with the test events expected from the split. Each fold writes the number and a sha256 fingerprint of its test events to `fold_<k>/kfold_fold_info.json`;
-* the test folds are disjoint and together contain every event exactly once.
-
-The weight initialisation of every fold is independent (seed `SeedSequence([seed, fold])`, recorded as `weights_seed` in `kfold_fold_info.json`).
-
-### K-fold in several jobs
-
-A single job with all the folds needs a whole node to be free. To start the folds as GPUs become available instead, split the work into several jobs. `run_training.sh` then works in three steps:
-
-1. **Prepare (CPU, no GPU).** A job on the CPU queue (`-p standard --account=t3` by default, `--cpu-partition`/`--cpu-account` to change them) loads the events once and makes the fold split. The events go into a shared cache, `<outdir>/kfold_cache_shared` (`--cache-dir` to change it), which has to be on a disk that all the nodes see. The record of the split goes to `<outdir>/kfold_split`.
-2. **Train the folds (GPU).** Each fold job copies the shared cache to its node-local `$TMPDIR`, memory-maps it, and trains its folds on its GPUs, as above. The local copy is removed when the job ends. Since the events are loaded only once, a fold job needs only about one copy of the events in RAM plus a few GB per fold.
-3. **Merge (CPU, no GPU).** A job on the CPU queue merges the folds, with the out-of-fold scores, the checks and the ONNX models, and then removes the shared cache (`--keep-cache` to keep it).
-
-Automatic: submit the three steps at once, chained with Slurm dependencies. The fold jobs are an array with `--folds-per-job` folds each, and Slurm starts every task as soon as its GPUs are free:
-
-```bash
-# 20 jobs of 1 fold on 1 GPU each
-./run_training.sh -c /full/path/config.yml -o /full/path/out -k 20 --prepare-job -g 1 --cpus 4 --mem-per-cpu 6000 \
-  --cpu-cpus 8 --cpu-mem-per-cpu 16000
-
-# 5 jobs of 4 folds on 2 GPUs each
-./run_training.sh -c /full/path/config.yml -o /full/path/out -k 20 --prepare-job --folds-per-job 4 -g 2 --cpus 8
-```
-
-By hand: prepare once, then submit the folds in as many pieces as you want (`--folds` takes ranges and lists), and merge when they are all done:
-
-```bash
-./run_training.sh -c /full/path/config.yml -o /full/path/out -k 20 --prepare-only
-./run_training.sh -c /full/path/config.yml -o /full/path/out -k 20 --folds 0-7 -g 8 --cpus 32
-./run_training.sh -c /full/path/config.yml -o /full/path/out -k 20 --folds 8-11,15 -g 2 --cpus 8
-./run_training.sh -c /full/path/config.yml -o /full/path/out -k 20 --folds 12-14,16-19 -g 4 --cpus 16
-./run_training.sh -c /full/path/config.yml -o /full/path/out -k 20 --merge-only
-```
-
-**Freeing the GPUs fold by fold.** Slurm cannot give back part of the GPUs of a running job: a job with 8 GPUs keeps all 8 until its last training ends. To have each GPU freed as soon as its folds are done, run the folds as separate jobs, e.g. one job of 1 GPU per fold. The automatic workflows below do this:
-
-```bash
-# everything in one command: prepare (CPU) -> 20 one-fold GPU jobs -> merge (CPU)
-./run_training.sh -c /full/path/config.yml -o /full/path/out -k 20 --prepare-job -g 1 --cpus 4 --mem-per-cpu 6000
-
-# or: prepare first (here on a GPU node), then all the fold jobs and the merge after it
-./run_training.sh -c /full/path/config.yml -o /full/path/out -k 20 --prepare-only --prepare-gpu   # -> job id P
-./run_training.sh -c /full/path/config.yml -o /full/path/out -k 20 --fold-jobs --after P -g 1 --cpus 4 --mem-per-cpu 6000
-```
-
-`--fold-jobs` submits the fold jobs as an array (`--folds-per-job` folds each) and the merge after them, from an existing shared cache or after the prepare job given with `--after`. Each array task is a separate Slurm job: it starts when its GPUs are free and frees them when it ends.
-
-If one big job is still preferred, `--slots-per-gpu S` keeps the GPUs busy until the queue of folds is empty. It runs at most `S` trainings per GPU, and each time one ends, the next fold starts on the GPU that just freed up, instead of a fixed round-robin assignment. `--separate-merge` runs the merge as a separate CPU job, so the GPUs are released as soon as the last fold ends. For example, 20 folds on one 8-GPU node:
-
-```bash
-./run_training.sh -c /full/path/config.yml -o /full/path/out -k 20 -g 8 --cpus 40 --mem-per-cpu 6000 --slots-per-gpu 2 --separate-merge
-```
-
-**When something goes wrong.** The merge waits for all the fold jobs to succeed (`afterok`). If a fold job fails or hits its time limit, the merge stays pending forever (`squeue` shows `DependencyNeverSatisfied`).
-1. Find the failed folds with `sacct -j <array id>` or the `slurm-<id>_<task>.out` logs in the output directory.
-2. Cancel the blocked merge with `scancel <merge id>`; the job ids are printed at submission.
-3. Resubmit the unfinished folds and the merge:
-
-   ```bash
-   ./run_training.sh -c /full/path/config.yml -o /full/path/out -k 20 --missing-folds -g 1 --cpus 4 --mem-per-cpu 6000
-   ```
-
-   `--missing-folds` finds the folds without a finished best model (`fold_<k>/state_dict/model_best_epoch_*.onnx`) and resubmits only those, with `--load-last`, so an interrupted fold resumes from its last checkpoint exactly as if it had not stopped. It then submits the merge after them. If all the folds are done, it submits only the merge.
-
-   The shared cache is still there because the merge has not run. If it is gone, prepare it again with `--prepare-only`: the same config and seed give exactly the same split. Then use `--missing-folds --after <prepare id>`.
-
-For full manual control, `--folds LIST` (with `--load-last` to resume) trains given folds, and `--merge-only` merges. Both accept `--after`.
-
-**The prepare job on a GPU node.** `--prepare-gpu` runs the prepare job on the GPU partition (`-p gpu --account=gpu_gres`, 1 GPU), e.g. when the CPU queue is busy or its nodes have too little memory. The preparation is CPU and I/O work, so the GPU stays idle during it. `--merge-gpu` does the same for the merge.
-
-**By hand,** e.g. to resubmit one specific fold: `--folds LIST --after <id>` submits one job with these folds, waiting for the given jobs. `--merge-only --after <id1>:<id2>:...` submits the merge after them.
-
-Notes:
-* **Same options everywhere:** use the same config, `-s`, `-k` and extra `ml_train` options in all the steps. A fold job refuses a shared cache made with a different config, and the merge checks that the folds are the folds of the same split.
-* **Resources:** `--time`, `--mem-per-cpu`, `--cpus` and `-g` set the resources of the fold jobs; `--cpu-time`, `--cpu-mem-per-cpu` and `--cpu-cpus` those of the prepare and merge jobs. The prepare job needs the memory of loading all the events, about what a single fold needed before the cache.
-* **Other options:** `--ratio`, `--alpha`, `--save-roc` and `--load-last` work as for the single job. With `--load-last`, a `--folds` job skips the folds that are already finished and resumes the others.
-* **Same results:** they are identical to the single job. In the tests, the fold checkpoints were bit-identical with the same seed and the same number of threads per fold.
-* **Disk:** the shared cache takes one copy of the events (≈ 15 GB for the 2024 parking config) until the merge removes it.
-
-### Outputs
-
-* `fold_<k>/`: a normal training output for each fold, plus `kfold_fold_info.json`. The test scores (plots, and `score_lbl_array.npz` with `--save-numpy`) are the scores of the events of fold `k`, with no event dropped.
-* `kfold_split/`: the record of the split (`k.npy` and the metadata).
-* `kfold/kfold_summary.yml`: best epoch and validation/test loss and accuracy of each fold, with their mean and standard deviation.
-* `kfold/`: the histograms, ROC and calibration curves of the out-of-fold scores of all the events. With `--save-numpy` it also holds `score_lbl_array_oof.npz`, which contains `score_lbl_array_test`, `fold_test` (the fold of each event) and the training scores.
-* `kfold_onnx/folds/model_fold<k>.onnx`: the best model of each fold.
-* `kfold_onnx/kfold_<type>_<combination>.onnx`: the combined models. The type says what the model computes:
-
-  | type | output | built |
-  | --- | --- | --- |
-  | `classifier` | the scores of the classifier | always |
-  | `morphing_ratio` | the ratio of the outputs, `p/(1-p)` for one output node or `p1/p0` for two, for the binary background reweighting (equivalent to `ml_onnx -ar`) | with `onnx_ratio: True` or `--ratio` |
-  | `morphing_ttbar_subtracted` | the 4-node multiclass morphing weight with the ttbar subtraction, `relu(r0 - alpha r2) / relu(r1 - alpha_den r3)` (equivalent to `ml_onnx -ar -mc`, see [Boosted HH4b: multiclass background morphing](#boosted-hh4b-multiclass-background-morphing)) | with `morphing_alpha` (`--alpha`) |
-
-  The combination says how the folds are combined:
-
-  | combination | inputs | outputs |
-  | --- | --- | --- |
-  | `average` | `args_0`, the input variables `(N, n_features)` float32 | the average over the folds (`avg_score` or `avg_w`). For the ratio and the morphing, the weight of every fold is computed first and then averaged, as `ml_onnx -ar` / `-ar -mc` do (for the morphing, the mean of `relu(r_0 - α r_2) / (relu(r_1 - α_den r_3) + eps)`, not the average numerator over the average denominator). Use it for events that were not used in the training |
-  | `median` | `args_0` | for each event, the **median over the folds of the weight** of each fold (`med_w`); only for `morphing_ratio` and `morphing_ttbar_subtracted`. The scores, numerators and denominators are not changed. Unlike the average, one fold with an outlying weight (e.g. a near-zero denominator) cannot move it. For an even K it is the mean of the two middle weights, and with K = 2 it is equal to the average |
-  | `all_folds` | `args_0` | the output of every fold separately, not averaged (`score_fold_<k>` or `w_fold_<k>`) |
-  | `event_fold` | `args_0` and `event`, the event number `(N,)` int64 | the output of the fold `event % K`, the model that was **not** trained on the event. Use it for the events that were used in the training (e.g. the training regions); only with `kfold_split: event` |
-
-* **The final model** is the combined model chosen with `kfold_onnx`: `kfold_<type>_average.onnx`, `kfold_<type>_median.onnx` or `kfold_<type>_event_fold.onnx`, with type `morphing_ttbar_subtracted` with `morphing_alpha`, `morphing_ratio` with `onnx_ratio`, otherwise `classifier`. It is recorded, with its inputs, in `kfold/kfold_summary.yml` (`final_onnx`); no extra copy is written.
-  * `kfold_onnx: average` (default) gives the average over the folds. Use it when the model is applied to events that were not used in the training, e.g. the background reweighting applied in a separate region.
-  * `kfold_onnx: median` gives the median over the folds of the weight, as an alternative to the average for events that were not used in the training. It needs `onnx_ratio` or `morphing_alpha`, otherwise there is no weight and the merge stops with an error.
-  * `kfold_onnx: event` gives the event-number-aware model and needs `kfold_split: event`. Use it when the model is also applied to the training events, e.g. the sig/bkg or ggF/VBF classifiers. Events whose number was never seen in the training can be evaluated by any fold, so the same model works for them too.
-
-The combined models are checked against the per-fold models with onnxruntime when they are built. To use the per-fold models by hand with `K = 2`, apply `model_fold0.onnx` to the **even** events and `model_fold1.onnx` to the **odd** events.
-
-## Training on a cluster with Slurm
-
-`jobs/run_training.sh` is a self-submitting script that runs any config, any number of trainings (seeds or k-folds) on any number of Slurm nodes/GPUs, with ONNX aggregation, optional copy of the output to `/pnfs` and a resource usage monitor. See [docs/slurm_training.md](docs/slurm_training.md) for all the options, examples, the copy to `/pnfs`, the resource monitor, speed tips and the legacy per-use-case scripts.
-
-```bash
-cd jobs/
-./run_training.sh -c /full/path/config.yml -o /full/path/outdir [-n 20 -g 4 --ratio]
-```
-
-## Boosted HH4b: multiclass background morphing
-
-> [!NOTE]
-> The multiclass support was developed on the branch
-> [`claude/add-multiclass-support-mgeOZ`](https://github.com/thierryharte/ML_pytorch/tree/claude/add-multiclass-support-mgeOZ)
-> of `thierryharte/ML_pytorch` and will be merged soon. This repository is compatible with it.
->
-> The full boosted workflow (PocketCoffea runs, closure plots, category optimisation, datacards) is described in the
-> [boosted README of AnalysisConfigs](https://github.com/matteomalucchi/AnalysisConfigs/blob/main/configs/VBF_HH4b_boosted/README.md).
-
-The boosted analysis estimates the QCD background with an ABCD method. The plane is defined by the TXbb of the
-subleading Higgs candidate and by the Higgs mass:
-
-|  | mass sideband | mass window |
-| --- | --- | --- |
-| **high TXbb** | C: `boosted_signal_sideband_region_C` | D: `boosted_signal_region_D` (signal region) |
-| **low TXbb** | A: `boosted_control_sideband_region_A` | B: `boosted_control_region_B` |
-
-The morphing DNN is trained from A (denominator) to a neighbouring region (numerator) and applied in PocketCoffea to
-the region next to D. By default the morphing goes along the TXbb (numerator C, applied to B); with
-`bkg_morphing_direction: "mass"` in the PocketCoffea config it goes along the mass (numerator B, applied to C).
-
-Since ttbar is not negligible in these regions, the morphing model is a 4-class classifier, so that the ttbar
-contribution can be subtracted from the data.
-
-### Config
-
-The four classes have to be in this `lbl` order (the class names are only labels):
-
-| `lbl` | Class | Region (TXbb direction) |
-| --- | --- | --- |
-| 0 | data, numerator | `boosted_signal_sideband_region_C` |
-| 1 | data, denominator | `boosted_control_sideband_region_A` |
-| 2 | ttbar MC, numerator | `boosted_signal_sideband_region_C` |
-| 3 | ttbar MC, denominator | `boosted_control_sideband_region_A` |
-
-e.g. (shortened from
-[`1e-3_e20drop95_minDelta1em5_boosted_reweighting_btagging_reweight_50GeV_lower_band_wps.yml`](configs/hh4b_bkg_reweighting/boosted_vbf/1e-3_e20drop95_minDelta1em5_boosted_reweighting_btagging_reweight_50GeV_lower_band_wps.yml)):
-
-```yaml
-input_variables: bkg_morphing_dnn_boosted_bdt_inputs_50GeV_wps
-ML_model: DNN_multiclass_model
-data_format: parquet
-data_dirs: [/work/tharte/datasets/samples_vbf_boosted/other_group/<pocketcoffea_output>/]
-
-classes:
-  data_A:     # numerator data (region C)
-    sample: [DATA_JetMET0_HH4bBoosted, DATA_JetMET1_HH4bBoosted]
-    region: [boosted_signal_sideband_region_C]
-    dataset: [DATA_JetMET0_HH4bBoosted_2024_EraC, ...]
-    lbl: 0
-  data_B:     # denominator data (region A)
-    sample: [DATA_JetMET0_HH4bBoosted, DATA_JetMET1_HH4bBoosted]
-    region: [boosted_control_sideband_region_A]
-    dataset: [DATA_JetMET0_HH4bBoosted_2024_EraC, ...]
-    lbl: 1
-  ttbar_A:    # numerator ttbar (region C)
-    sample: [TTto2L2Nu, TTtoLNu2Q, TTto4Q]
-    region: [boosted_signal_sideband_region_C]
-    dataset: [TTto2L2Nu_2024, TTtoLNu2Q_2024, TTto4Q_2024]
-    lbl: 2
-  ttbar_B:    # denominator ttbar (region A)
-    sample: [TTto2L2Nu, TTtoLNu2Q, TTto4Q]
-    region: [boosted_control_sideband_region_A]
-    dataset: [TTto2L2Nu_2024, TTtoLNu2Q_2024, TTto4Q_2024]
-    lbl: 3
-```
-
-### Training
-
-The 20 trainings are run as for the resolved morphing (the config path is relative to
-`configs/hh4b_bkg_reweighting/`):
-
-```bash
-cd jobs/
-sbatch run_20_trainings_in_4_parallel.sh boosted_vbf/<config_name>.yml [<output_folder>]
-```
-
-### Compute the ttbar fraction alpha
-
-The classes are balanced to the same total weight during the training, so each ttbar output node is normalised as if
-ttbar were all of the data. The ttbar node has to be scaled back by its physical fraction in data,
-$\alpha = N_{t\bar{t}} / N_\mathrm{data}$. Compute it in the folder with the PocketCoffea output the DNN was trained
-on (the `data_dirs` of the config):
-
-```bash
-cd <pocketcoffea_output>
-python /work/tharte/datasets/ML_pytorch_matteo/ml_pytorch/scripts/compute_alpha.py
-```
-
-The output looks like this:
-
-```text
-region                            N_data      N_ttbar     alpha    MCstat
-boosted_signal_region_D             2361        661.3    0.2801    0.0040
-boosted_signal_sideband_region_C   21744       2343.8    0.1078    0.0008
-boosted_control_region_B           46741      19818.3    0.4240    0.0011
-boosted_control_sideband_region_A 545355      60568.0    0.1111    0.0002
-```
-
-The value needed is the `alpha` of the numerator region: region C for the TXbb direction (here `0.1078`),
-region B for the mass direction.
-
-`ml_alpha -c <config>` reads the directory and the regions from the training config. The directory is the first
-`data_dirs`; the numerator and denominator are the regions of the classes with `lbl` 0 and 1. It prints the table
-and the two alphas, and `--json <file>` saves them.
-
-**Automatically with `run_training.sh`.** With `--alpha`, the post-processing computes alpha with `ml_alpha` (saved
-in `<outdir>/alpha.json`) and passes it to the conversion:
-* `ml_onnx -ar -mc -al <alpha> -ald <alpha_den>` for the trainings with several seeds;
-* `ml_kfold_merge --alpha <alpha> --alpha-den <alpha_den>` with `--k-folds`. The final model,
-  `kfold_onnx/kfold_morphing_ttbar_subtracted_average.onnx`, is then the morphing weight averaged over the folds (or, with `kfold_onnx: median`,
-  `kfold_onnx/kfold_morphing_ttbar_subtracted_median.onnx`, the median over the folds of the weight of each fold).
-
-`alpha_den` is `0.0` (no ttbar subtraction in the denominator) unless `--alpha-den-computed` is given; then the
-computed alpha of the denominator region is used.
-
-```bash
-./run_training.sh -c /full/path/boosted_vbf/<config>.yml -o /full/path/out -n 20 -p 4 --alpha
-./run_training.sh -c /full/path/boosted_vbf/<config>.yml -o /full/path/out -k 20 -g 8 --cpus 40 --alpha
-```
-
-### Merge the 20 models with the ttbar subtraction
-
-Run `ml_onnx` in multiclass mode inside the `best_models` folder of the training output:
-
-```bash
-cd <output_folder>/best_models
-ml_onnx -i ./ -o ./ -ar -v <input_variables> -mc -al <alpha_num> -ald <alpha_den>
-
-# e.g.
-ml_onnx -i ./ -o ./ -ar -v bkg_morphing_dnn_boosted_bdt_inputs_50GeV -mc -al 0.1078 -ald 0.0
-```
-
-| Option | Meaning |
+| Command | Use |
 | --- | --- |
-| `-ar` | average the ratios of the outputs of all the models in the folder |
-| `-v` | input-variables module used for the training (or `--config <config_file>` to read it from the config) |
-| `-mc` | 4-node multiclass model, in the class order above |
-| `-al` | alpha of the numerator region |
-| `-ald` | alpha of the denominator region; `0.0` switches off the ttbar subtraction in the denominator |
-
-The morphing weight of each model is
-
-$$w = \frac{\mathrm{relu}(r_0 - \alpha\, r_2)}{\mathrm{relu}(r_1 - \alpha_\mathrm{den}\, r_3)},$$
-
-i.e. the ttbar-subtracted data in the numerator region over the (ttbar-subtracted) data in the denominator region,
-and the weights of all the models are averaged. The result is saved as `best_models/average_model_from_onnx.onnx`,
-which is the `bkg_morphing_dnn` model to use in PocketCoffea.
-
-## Boosted HH4b: signal-vs-background classifier
-
-The boosted signal-vs-background DNN is a single multiclass model with the classes QCD (data), TTbar, VBF and ggF,
-e.g.
-[`boosted/1e-3_e20drop95_minDelta1em5_boosted_signal_background_classifier_50GeV.yml`](configs/hh4b_sig_bkg_classifier/boosted/1e-3_e20drop95_minDelta1em5_boosted_signal_background_classifier_50GeV.yml).
-Its `data_dirs` should point to the PocketCoffea output produced with the morphing model above. The config path
-is relative to `configs/hh4b_sig_bkg_classifier/`:
-
-```bash
-cd jobs/
-sbatch run_sig_bkg_classifier.sh boosted/1e-3_e20drop95_minDelta1em5_boosted_signal_background_classifier_50GeV.yml
-```
-
-The output goes to `out/sig_bkg_classifier/<config_name>/`, separately from the morphing trainings in
-`out/bkg_reweighting/`. The ONNX model to use as `sig_bkg_dnn` in PocketCoffea is
-`state_dict/model_best_epoch_<n>.onnx`. PocketCoffea saves its four class scores and the
-`sig_bkg_dnn_score_ggFvsBKG` / `sig_bkg_dnn_score_VBFvsBKG` discriminants, which are then used to optimise the
-signal categories.
+| `ml_train` | train and evaluate a model (see [Configuration](docs/configuration.md#ml_train-command-line-options)) |
+| `ml_sb -i <training_dir>` | ROC curves and overtraining plots (`-klb 1.0` or `-klb full` for given background kl values) |
+| `ml_history -i <log_file>` | plot the training history |
+| `ml_input_vars -c <config> -o <dir>` | plot the input variable distributions |
+| `ml_onnx` | combine the ONNX models of several trainings (`-ar` for reweighting) |
+| `ml_kfold_merge`, `ml_kfold_weight_diag` | merge / check a k-fold training (see [K-fold training](docs/kfold_training.md)) |
+| `ml_alpha -c <config>` | ttbar fraction for the boosted morphing (see [Boosted HH4b](docs/boosted_hh4b.md)) |
 
 ## Outputs of a training
 
-Each training run writes to `${output_dir}` (default `/work/$USER/out_ML_pytorch/<config_name>/`):
+Each training writes to the output directory (default `/work/$USER/out_ML_pytorch/<config_name>/`):
 
-* `config_parameters.yml` — full resolved config (defaults + CLI + YAML) snapshot.
-* `ML_model.py` — copy of the model file used, so a saved run can be re-loaded with `-l`/`--load-model` even after the file in `ml_pytorch/models/` changes.
-* `<input_variables>.py` — copy of the input variables module from `ml_pytorch/defaults/`, when `input_variables` is given as a module name.
-* `logger_<name>.log` — training log with epoch-by-epoch loss / accuracy / learning rate.
-* `state_dict/model_<epoch>_state_dict.pt` — checkpoints of the last `n_best_checkpoints` (default 5) best epochs and of the last epoch; older best-epoch checkpoints are removed automatically.
-* `state_dict/model_best_epoch_<n>.onnx` — ONNX export of the best model (and one for the last epoch).
-* `score_lbl_array.npz` — saved with `--save-numpy`. Contains:
-  * `score_lbl_array_train`, `score_lbl_array_test`: `[scores..., label, weight, kl]` per event. For binary the score block is a single column, for multi-class it has `num_classes` columns.
-  * `train_test_fractions`, `num_classes`, `class_info` (list of `{name, lbl, class_idx}` dicts).
-* Plots: `sig_bkg_distributions_*`, `roc_curve_*`, training history, etc.
-* Calibration curves (`calibration_bkgkl_*/`): they are computed on class-normalised histograms. The event weights of each class are scaled to unit area, so the curves don't depend on the relative number of events of the classes in the test dataset, and a classifier trained on balanced classes lies on the diagonal when it is well calibrated. Each class is normalised for one-vs-rest, and the two classes of the pair for the pairwise curves. The Brier score uses the same weights. `sklearn.calibration.calibration_curve` has no event weights, so a weighted histogram is used instead.
+| File | Content |
+| --- | --- |
+| `config_parameters.yml` | the full config used (defaults + YAML + command line) |
+| `ML_model.py`, `<input_variables>.py` | copies of the model and of the input variables used, to reload the training later |
+| `logger_<name>.log` | training log, epoch by epoch |
+| `state_dict/model_<epoch>_state_dict.pt` | checkpoints of the best epochs and of the last one |
+| `state_dict/model_best_epoch_<n>.onnx` | **the ONNX model to use in PocketCoffea** |
+| `input_variables/` | distributions of the input variables per class |
+| plots | score distributions with train/test ratio (overtraining check), ROC curves, calibration curves, loss history |
+| `score_lbl_array.npz` | the output scores, labels and weights (only with `--save-numpy`) |
 
-## Additional scripts
+For multi-class models, `ml_sb` produces one-vs-rest and one-vs-one ROC curves and the score distributions of every output node. With `--save-roc` the ROC points are saved too, to replot them later.
 
-The training will produce the ONNX model to be used in PocketCoffea for background morphing, as well as plots with the training history, the ROC curve and an overtraining check (one plot per class, see [Plotting with HEPPlotter](#plotting-with-hepplotter)).
+The input-variable plots can be configured or switched off in the config (`input_plots`, `input_plots_bins`, `input_plots_log`) or with `--no-input-plots`.
 
-These plots can be produced using the following command:
+## Comet logging
 
-```bash
-# Plot the history of a training
-ml_history -i <training_log_file>
-
-# Plot the ROC curve and overtraining check (all background kl inclusive)
-ml_sb -i <training_directory>
-
-# Plot only for a specific background kl value (creates bkgkl_<value>/ subdirectory)
-ml_sb -i <training_directory> -klb 1.0
-
-# Plot for every available background kl value
-ml_sb -i <training_directory> -klb full
-
-# Plot the input variable distributions of signal and background
-ml_input_vars -c <config_file> -o <output_directory>
-```
-
-
-## Input variable distributions
-
-Before the training starts, the normalized distributions of the input variables
-for signal and background are plotted in the CMS style, together with a
-signal/background ratio panel. The plots are saved in the `input_variables`
-subdirectory of the output directory of the training.
-
-This step is enabled by default and can be steered either from the config file
-or from the command line:
-
-```yaml
-# config file
-input_plots: True             # produce the input variable plots
-input_plots_dir: input_variables  # subdirectory of the output directory
-input_plots_bins: 30          # number of bins of the histograms
-input_plots_log: False        # save also the histograms with a log y axis
-```
-
-```bash
-# disable the input variable plots for a training
-ml_train -c configs/example_DNN_config_ggF_VBF.yml --no-input-plots
-
-# change the binning and save also the log-scale version
-ml_train -c configs/example_DNN_config_ggF_VBF.yml --input-plots-bins 50 --input-plots-log
-```
-
-The same plots can be produced standalone (without running a training) with:
-
-```bash
-ml_input_vars -c configs/example_DNN_config_ggF_VBF.yml -o <output_directory>
-```
-
-Each plot is named after its input variable. If the number of columns of the
-feature array differs from the number of `input_variables`, the script raises
-a `ValueError` explaining the mismatch (number of columns vs variables and
-the list of variables), since it means the feature array is not built
-correctly in `ml_pytorch/utils/dataset.py`.
-
-### Multi-class evaluation outputs
-
-When `ml_sb` (the `sig_bkg_eval` script) detects more than one score column in `score_lbl_array.npz`, it automatically switches to multi-class mode and produces:
-
-* `roc_curve_one_vs_rest.{png,pdf}` — for each class *i*, the ROC of "is class *i*" using the score of output node *i*.
-* `roc_curve_one_vs_one.{png,pdf}` — for each ordered pair `(a, b)`, the ROC of "class *a* vs class *b*" using events with true label `∈ {a, b}` and the score of node *a*.
-* `score_distribution_class_<i>.{png,pdf}` (+ `_log`) — distribution of output node *i*'s score, split by true class, for train and test.
-* with `--save-roc` (`save_roc: True`), the saved ROC points (`tpr_fpr*.npz`: `tpr`, `fpr`, `auc`), so that arbitrary class combinations can be replotted later.
-
-The binary path (single score column) is unchanged and still produces `sig_bkg_distributions_kl_*` and `roc_curve_kl_*`.
-
-All the overtraining plots (`sig_bkg_distributions_kl_*`, `score_distribution_class_<i>`, `sig_over_bkg_*`) include a ratio panel with the test / training ratio of each class separately (via the HEPPlotter `ratio_reference` style key), with the training uncertainty drawn as a band around 1.
-
-## COMET integration
-
-Additionally, there are now options to send the metrics of the training to [COMET](https://www.comet.com/site) (academics accounts are available for free):
-To set it up together with the files mentioned above:
-
-```bash
-# Open the file with the editor of your choice
-vim jobs/comet_token.key
-# in the first line write your username, and in the second line, write your token (to be retrieved on the website):
-# <uname>
-# <token>
-```
-
-The scripts will read this file if it exists and automatically sends the information to `ml_pytorch`
-
-Per-epoch metrics logged: `loss_epoch_train`, `loss_epoch_val`, `accuracy_epoch_train`, `accuracy_epoch_val` and `learning_rate` (the learning rate used during that epoch, i.e. before the scheduler step).
-
-### Comet workspace
-
-The **Comet workspace** is derived automatically from the name of the directory containing the config file, with underscores replaced by hyphens. For example, a config saved under `configs/hh4b_ggF_VBF/` maps to the workspace `hh4b-ggF-VBF`, accessible at:
+The metrics of every epoch (loss, accuracy, learning rate) can be sent to [Comet](https://www.comet.com/site) (free academic accounts). Create `jobs/comet_token.key` with your user name on the first line and your API token on the second:
 
 ```
-https://www.comet.com/hh4b-ggf-vbf#projects
+<username>
+<token>
 ```
 
-Within that workspace, each experiment is grouped into a **project** named after the config file (without extension), e.g. `DNN_config_ggF_VBF`.
-
-**Existing workspaces:**
+If the file exists, the logging is enabled automatically. The Comet workspace is the name of the directory of the config, with `_` replaced by `-`, and the project is the config file name:
 
 | Config directory | Comet workspace |
-|---|---|
+| --- | --- |
 | `configs/hh4b_bkg_reweighting/` | [hh4b-bkg-reweighting](https://www.comet.com/hh4b-bkg-reweighting#projects) |
 | `configs/hh4b_ggF_VBF/` | [hh4b-ggf-vbf](https://www.comet.com/hh4b-ggf-vbf#projects) |
 | `configs/hh4b_sig_bkg_classifier/` | [hh4b-sig-bkg-classifier](https://www.comet.com/hh4b-sig-bkg-classifier#projects) |
 
-To add a new workspace:
-1. Go to [comet.com](https://www.comet.com) and create the workspace manually from the website.
-2. Name it to match the parent directory of your config file (underscores → hyphens), e.g. `configs/hh4b_sig_bkg_classifier/` → workspace `hh4b-sig-bkg-classifier` → `https://www.comet.com/hh4b-sig-bkg-classifier#projects`.
-3. Add it to the table above.
-
-The workspace can also be overridden explicitly with `--comet-workspace <name>` when calling `ml_train`.
+For a new config directory, create the workspace on the Comet website first and add it to this table. `--comet-workspace <name>` overrides the workspace.

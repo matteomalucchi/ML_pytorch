@@ -1,5 +1,4 @@
-# Example configuration for a k-fold training (see the "K-fold training"
-# section of the README).
+# Example configuration for a k-fold training (see docs/kfold_training.md).
 #
 # The events are split into k_folds folds by event number (event % k_folds,
 # here 2 folds: even and odd events). The model of fold k is trained on the

@@ -36,7 +36,7 @@ background_dataset:
 
 # with the k-folding the oversampling is done after the split into folds, in
 # the training and validation datasets only (the test fold is not oversampled)
-oversample_split: True
+split_oversample: True
 
 # K-fold training: 20 folds assigned randomly (no event number needed). The
 # morphing weights are applied to the events of a separate region, so the

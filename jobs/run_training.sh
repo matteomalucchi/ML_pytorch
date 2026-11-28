@@ -43,7 +43,26 @@
 #   --no-slurm              Run directly without Slurm (for local testing)
 #   -- EXTRA                Additional arguments forwarded to ml_train
 #
-# K-fold in several jobs (see the README, "K-fold in several jobs"): the events
+# Exit code: the job exits non-zero if any training or the merge /
+# post-processing fails (the other trainings still run to the end, then the
+# failed ones are listed with how to resubmit them). The merge is then not
+# run, and the Slurm jobs chained after it (afterok) do not start.
+#
+# K-fold status: at the end of every k-fold job that trains or merges folds
+# (also if it fails), OUTDIR/kfold_status.txt is (re)written with the folds
+# that finished (they have a best ONNX model, fold_<k>/state_dict/
+# *best_epoch*.onnx) and those that did not (with the exit code if the fold
+# failed in this job, and the last checkpoint epoch), plus the --missing-folds
+# command to resume them. With several fold jobs, each one rewrites it when it
+# ends, so folds still running in other jobs appear as not finished.
+#
+# GPU memory: every training gets ML_TRAININGS_PER_GPU, the number of trainings
+# sharing its GPU at the same time (all at once: the most trainings on one GPU;
+# with --slots-per-gpu: the slots), and keeps its datasets on the GPU
+# (data_on_gpu) only if they fit in GPU memory / ML_TRAININGS_PER_GPU, minus
+# the margin data_on_gpu_margin_gb / data_on_gpu_margin_frac of the config.
+#
+# K-fold in several jobs (see docs/kfold_training.md): the events
 # are loaded once by a CPU job into a shared cache, then the folds are trained
 # by small GPU jobs that copy it to their node, then a CPU job merges them.
 #   --prepare-job           Submit the CPU prepare job, an array of GPU jobs
@@ -72,7 +91,13 @@
 #                           each) and the merge after them, from an existing
 #                           shared cache or after the prepare job (--after)
 #   --missing-folds         Resubmit only the folds without a finished model
-#                           (resuming from their checkpoints) and the merge
+#                           (resuming from their checkpoints) and the merge;
+#                           without the shared cache, a prepare job first
+#
+# Resuming a k-fold training (--load-last, --missing-folds): the events are
+# loaded again, but the fold of every event is taken from the split saved in
+# OUTDIR/kfold_split by the first preparation (ml_train --kfold-reuse-split),
+# after checking that the events are the same; a mismatch is an error.
 #   --slots-per-gpu INT     Run at most INT trainings per GPU at a time; the
 #                           others start when a GPU frees up (default: 0 = all
 #                           at once)
@@ -195,6 +220,16 @@ Optional:
   --no-slurm              Run directly without Slurm (for testing; forces NODES=1)
   -- EXTRA                Extra arguments forwarded to ml_train
 
+Exit code: non-zero if any training or the merge / post-processing fails. The
+other trainings still run to the end, then the failed ones are listed with the
+command to resubmit them; the merge is not run, and the Slurm jobs chained
+after this one (afterok) do not start.
+
+K-fold status: every k-fold job that trains or merges folds writes, when it
+ends (also if it fails), OUTDIR/kfold_status.txt with the folds that finished
+(best ONNX model in fold_<k>/state_dict) and those that did not (exit code if
+failed in this job, last checkpoint epoch) and the --missing-folds command.
+
 K-fold in several jobs (the events are loaded once by a CPU job into a shared
 cache, the folds are trained by small GPU jobs that copy it to their node, and
 a CPU job merges them):
@@ -232,12 +267,18 @@ a CPU job merges them):
   --missing-folds         Recovery: resubmit only the folds that have no
                           finished model yet (with --load-last, so interrupted
                           folds resume from their last checkpoint) and the
-                          merge after them
+                          merge after them. If the shared cache is gone (e.g.
+                          after a single job), a prepare job is submitted
+                          first. The folds are always those of the split saved
+                          in OUTDIR/kfold_split (also with -k ... --load-last)
 
 Occupancy of a single job with several GPUs:
   --slots-per-gpu INT     Run at most INT trainings per GPU at a time; when one
                           ends, the next one starts on the GPU that freed up
-                          (default: 0, all the trainings at once)
+                          (default: 0, all the trainings at once). Every
+                          training keeps its datasets on the GPU (data_on_gpu)
+                          only if they fit in GPU memory / trainings per GPU
+                          (INT, or with 0 the most trainings on one GPU)
   --separate-merge        Merge (or post-process) in a separate CPU job after
                           the training job, instead of inside it, so the GPUs
                           are released as soon as the last training ends
@@ -727,16 +768,22 @@ if [[ -z "${SLURM_JOB_ID:-}" && "$NO_SLURM" != true ]]; then
             echo "K-fold merge job ($(queue_name "$MERGE_GPU")): ${MERGE_JOB_ID}${AFTER:+, after ${AFTER}}"
             exit 0
         fi
-        if [[ -z "$AFTER" && ! -f "${SHARED_CACHE_DIR}/kfold_cache_meta.json" ]]; then
-            echo "Error: the folds ${MISSING[*]} are not finished but there is no shared k-fold cache in ${SHARED_CACHE_DIR}."
-            echo "Prepare it again (same config and seed, the split is identical) and resubmit after it:"
-            echo "  $0 -c $CONFIG_FILE -o $OUT_DIR -k $K_FOLDS --prepare-only   # -> job id P"
-            echo "  $0 -c $CONFIG_FILE -o $OUT_DIR -k $K_FOLDS --missing-folds --after P -g ${GPUS_PER_NODE}"
-            exit 1
-        fi
         echo "Unfinished folds: ${MISSING[*]} (they resume from their last checkpoint)"
         FOLDS=$(IFS=,; echo "${MISSING[*]}")
         LOAD_LAST=true
+        if [[ -z "$AFTER" && ! -f "${SHARED_CACHE_DIR}/kfold_cache_meta.json" ]]; then
+            # no shared cache (e.g. the folds ran in one job, whose cache was
+            # in its temporary directory): load the events again in a prepare
+            # job, with the folds taken from the saved split (--load-last ->
+            # --kfold-reuse-split), and start the folds after it
+            split_msg="with the saved split ${KFOLD_SPLIT_DIR}"
+            if [[ ! -f "${KFOLD_SPLIT_DIR}/k.npy" ]]; then
+                echo "Warning: no record of the k-fold split in ${KFOLD_SPLIT_DIR}: the split is computed again from the config and the seed."
+                split_msg="split computed again"
+            fi
+            AFTER=$(submit_cpu_job ml_kfold_prepare prepare_shared "" "$PREPARE_GPU") || exit 1
+            echo "No shared k-fold cache in ${SHARED_CACHE_DIR}: prepare job ($(queue_name "$PREPARE_GPU")) ${AFTER}, ${split_msg}"
+        fi
         N_MISSING_JOBS=$(( (${#MISSING[@]} + FOLDS_PER_JOB - 1) / FOLDS_PER_JOB ))
         TRAIN_JOB_ID=$(submit_fold_jobs "$AFTER" "$N_MISSING_JOBS") || exit 1
         echo "Fold jobs: array ${TRAIN_JOB_ID}, ${N_MISSING_JOBS} job(s) of ${FOLDS_PER_JOB} fold(s) on ${GPUS_PER_NODE} GPU(s) each${AFTER:+, after ${AFTER}}"
@@ -840,23 +887,43 @@ run_one_training() {
     # Find latest checkpoint for resuming
     local load_model_args=()
     if [[ "$LOAD_LAST" == true ]]; then
-        for ((epoch=200; epoch>=1; epoch--)); do
-            local ckpt="${model_dir}/model_${epoch}_state_dict.pt"
-            if [[ -f "$ckpt" ]]; then
-                load_model_args=(--load-model "$ckpt")
-                echo "Seed ${seed}: resuming from epoch ${epoch} (${ckpt})"
-                break
-            fi
+        # the checkpoint of the highest epoch
+        local ckpt epoch last_epoch=-1
+        shopt -s nullglob
+        for ckpt in "$model_dir"/model_*_state_dict.pt; do
+            epoch="${ckpt##*/model_}"; epoch="${epoch%_state_dict.pt}"
+            [[ "$epoch" =~ ^[0-9]+$ && "$epoch" -gt "$last_epoch" ]] && last_epoch="$epoch"
         done
+        shopt -u nullglob
+        if [[ "$last_epoch" -ge 0 ]]; then
+            ckpt="${model_dir}/model_${last_epoch}_state_dict.pt"
+            load_model_args=(--load-model "$ckpt")
+            echo "Seed ${seed}: resuming from epoch ${last_epoch} (${ckpt})"
+        fi
     fi
 
     local config_tag
     config_tag=$(basename "$CONFIG_FILE" .yml)
 
+    # Isolate this training to its one physical GPU: Slurm sets
+    # CUDA_VISIBLE_DEVICES to all the GPUs allocated to the job, and $gpu is
+    # only the local index among them (0..n_gpus-1). Without restricting it
+    # per process, every training's CUDA context is still created on device 0
+    # of that full list before switching to its assigned device, piling up
+    # one stray context per training on the same physical GPU. Re-exporting
+    # CUDA_VISIBLE_DEVICES to just the assigned physical id makes that GPU
+    # device 0 from this subprocess's point of view.
+    local physical_gpu="$gpu"
+    if [[ -n "${CUDA_VISIBLE_DEVICES:-}" ]]; then
+        local visible_gpus
+        IFS=',' read -r -a visible_gpus <<< "$CUDA_VISIBLE_DEVICES"
+        physical_gpu="${visible_gpus[$gpu]}"
+    fi
+
     local train_args=(
         -o "$run_dir"
         --eval --onnx --roc --histos --history
-        --gpus "$gpu" -n "$num_workers"
+        --gpus 0 -n "$num_workers"
         -c "$CONFIG_FILE"
         "${load_model_args[@]}"
     )
@@ -881,8 +948,44 @@ run_one_training() {
         )
     fi
 
-    echo "Starting training: seed=${seed} on GPU ${gpu} -> ${run_dir}"
-    ml_train "${train_args[@]}" "${comet_args[@]}"
+    echo "Starting training: seed=${seed} on GPU ${gpu} (physical ${physical_gpu}) -> ${run_dir}"
+    # ML_TRAININGS_PER_GPU: number of trainings sharing this GPU at the same
+    # time (set by launch_trainings), used by ml_train for the GPU memory
+    # budget of data_on_gpu (GPU memory / trainings per GPU)
+    CUDA_VISIBLE_DEVICES="$physical_gpu" ML_TRAININGS_PER_GPU="${TRAININGS_PER_GPU:-1}" \
+        ml_train "${train_args[@]}" "${comet_args[@]}"
+}
+
+# Name of a training in the messages: the fold for the k-fold, else the seed
+training_label() {
+    if [[ "$K_FOLDS" -ge 2 ]]; then
+        echo "fold_$(( $1 - INIT_SEED ))"
+    else
+        echo "seed_$1"
+    fi
+}
+
+# Run one training in the background (arguments of run_one_training) and
+# record its exit code in LAUNCH_STATUS_DIR/<seed>, so that it is known also
+# if the shell has already reaped the process (wait -n)
+run_one_training_bg() {
+    (
+        run_one_training "$@"
+        rc=$?
+        echo "$rc" > "${LAUNCH_STATUS_DIR}/$1"
+        exit "$rc"
+    ) &
+}
+
+# Exit code of the training $1, whose "wait" returned $2: the recorded one if
+# there is one (otherwise the training was killed before it could record it)
+training_rc() {
+    local f="${LAUNCH_STATUS_DIR}/$1"
+    if [[ -s "$f" ]]; then
+        cat "$f"
+    else
+        echo "$2"
+    fi
 }
 
 # ─── K-fold cache: load the events once for all the folds ────────────────────
@@ -898,6 +1001,10 @@ run_prepare() {
         --kfold-cache "$cache_dir" --kfold-split-dir "$KFOLD_SPLIT_DIR"
         --kfold-prepare
     )
+    # resumed k-fold training: the events are loaded again, but the folds are
+    # taken from the record of the split saved by the first preparation
+    # (OUTDIR/kfold_split), after checking that the events are the same
+    [[ "$LOAD_LAST" == true ]] && prepare_args+=(--kfold-reuse-split)
     [[ ${#EXTRA_ARGS[@]} -gt 0 ]] && prepare_args+=("${EXTRA_ARGS[@]}")
     echo "Preparing the k-fold cache in ${cache_dir}..."
     mark_phase kfold_prepare
@@ -953,20 +1060,44 @@ launch_trainings() {
     # (see data_on_gpu in the config)
     local num_workers=$(( cpus_per_training - 1 ))
 
-    local i
+    # trainings sharing one GPU at the same time, passed to ml_train
+    # (ML_TRAININGS_PER_GPU) for the GPU memory budget of data_on_gpu: all at
+    # once, the most on one GPU (conservative, the same for all the GPUs);
+    # with --slots-per-gpu, the slots per GPU
     if [[ "$max_parallel" -ge "$n_trainings" ]]; then
-        echo "Launching ${n_trainings} training(s) (seeds/folds ${seeds[*]}) in parallel on ${n_gpus} GPU(s), ${cpus_per_training} CPU(s) per training"
+        TRAININGS_PER_GPU=$(( (n_trainings + n_gpus - 1) / n_gpus ))
+    else
+        TRAININGS_PER_GPU="$SLOTS_PER_GPU"
+    fi
+    local budget_msg="up to ${TRAININGS_PER_GPU} training(s) per GPU (data_on_gpu budget = GPU memory / ${TRAININGS_PER_GPU})"
+
+    # exit codes of the trainings (see run_one_training_bg)
+    LAUNCH_STATUS_DIR=$(mktemp -d "${TMPDIR:-/tmp}/ml_train_status_XXXXXX")
+    local -a failed=()
+    local i rc
+    if [[ "$max_parallel" -ge "$n_trainings" ]]; then
+        echo "Launching ${n_trainings} training(s) (seeds/folds ${seeds[*]}) in parallel on ${n_gpus} GPU(s), ${budget_msg}, ${cpus_per_training} CPU(s) per training"
+        local -a sim_pids=()
         for ((i=0; i<n_trainings; i++)); do
-            run_one_training "${seeds[$i]}" "$(run_path "${seeds[$i]}")" "$(( i % n_gpus ))" "$num_workers" &
+            run_one_training_bg "${seeds[$i]}" "$(run_path "${seeds[$i]}")" "$(( i % n_gpus ))" "$num_workers"
+            sim_pids[$i]=$!
         done
-        wait
+        # wait for all of them, also if some fail
+        for ((i=0; i<n_trainings; i++)); do
+            wait "${sim_pids[$i]}"
+            rc=$?
+            rc=$(training_rc "${seeds[$i]}" "$rc")
+            TRAINING_RC[${seeds[$i]}]="$rc"
+            [[ "$rc" -ne 0 ]] && failed+=("$(training_label "${seeds[$i]}") (rc ${rc})")
+        done
+        report_failed_trainings "${failed[@]}"
         return
     fi
 
     # Dynamic scheduling: at most SLOTS_PER_GPU trainings per GPU; when one
     # ends, the next training starts on the GPU with the fewest running ones,
     # so no GPU stays idle while trainings are waiting
-    echo "Launching ${n_trainings} training(s) (seeds/folds ${seeds[*]}) on ${n_gpus} GPU(s), at most ${SLOTS_PER_GPU} per GPU at a time (${max_parallel} in parallel), ${cpus_per_training} CPU(s) per training"
+    echo "Launching ${n_trainings} training(s) (seeds/folds ${seeds[*]}) on ${n_gpus} GPU(s), at most ${SLOTS_PER_GPU} per GPU at a time (${max_parallel} in parallel), ${budget_msg}, ${cpus_per_training} CPU(s) per training"
     local -a gpu_running=() pids=() pid_gpu=()
     local g best pid k
     for ((g=0; g<n_gpus; g++)); do gpu_running[$g]=0; done
@@ -977,6 +1108,10 @@ launch_trainings() {
             for k in "${!pids[@]}"; do
                 if ! kill -0 "${pids[$k]}" 2>/dev/null; then
                     wait "${pids[$k]}" 2>/dev/null
+                    rc=$?
+                    rc=$(training_rc "${seeds[$k]}" "$rc")
+                    TRAINING_RC[${seeds[$k]}]="$rc"
+                    [[ "$rc" -ne 0 ]] && failed+=("$(training_label "${seeds[$k]}") (rc ${rc})")
                     gpu_running[${pid_gpu[$k]}]=$(( gpu_running[${pid_gpu[$k]}] - 1 ))
                     unset 'pids[k]' 'pid_gpu[k]'
                 fi
@@ -987,13 +1122,41 @@ launch_trainings() {
             [[ ${gpu_running[$g]} -lt ${gpu_running[$best]} ]] && best=$g
         done
         echo "Starting seed/fold ${seeds[$i]} on GPU ${best} ($(( gpu_running[best] + 1 )) running on it)"
-        run_one_training "${seeds[$i]}" "$(run_path "${seeds[$i]}")" "$best" "$num_workers" &
+        run_one_training_bg "${seeds[$i]}" "$(run_path "${seeds[$i]}")" "$best" "$num_workers"
         pid=$!
         pids[$i]=$pid
         pid_gpu[$i]=$best
         gpu_running[$best]=$(( gpu_running[best] + 1 ))
     done
-    wait
+    # wait for the remaining ones, also if some fail
+    for k in "${!pids[@]}"; do
+        wait "${pids[$k]}" 2>/dev/null
+        rc=$?
+        rc=$(training_rc "${seeds[$k]}" "$rc")
+        TRAINING_RC[${seeds[$k]}]="$rc"
+        [[ "$rc" -ne 0 ]] && failed+=("$(training_label "${seeds[$k]}") (rc ${rc})")
+    done
+    report_failed_trainings "${failed[@]}"
+}
+
+# End of launch_trainings: remove the exit codes and, if some trainings failed
+# (given as arguments), print them with how to recover and return 1
+report_failed_trainings() {
+    rm -rf "$LAUNCH_STATUS_DIR"
+    [[ $# -eq 0 ]] && return 0
+    local IFS=","
+    echo "Error: $# training(s) failed:${*/#/ }"
+    if [[ "$K_FOLDS" -ge 2 ]]; then
+        echo "To finish the k-fold training (the finished folds are kept, the others resume from"
+        echo "their last checkpoint, with exactly the saved split ${KFOLD_SPLIT_DIR}, then the merge):"
+        if [[ "$MODE" == train ]]; then
+            echo "  rerun the same command adding --load-last (all in one job again), or"
+        fi
+        echo "  $0 -c $CONFIG_FILE -o $OUT_DIR -k $K_FOLDS --missing-folds -g ${GPUS_PER_NODE}   (one GPU job per --folds-per-job folds)"
+    else
+        echo "Rerun the same command with --load-last to resume the unfinished trainings (the finished ones are skipped)."
+    fi
+    return 1
 }
 
 # ─── Post-processing: collect best models + ONNX aggregation ──────────────────
@@ -1039,7 +1202,8 @@ run_postproc() {
         local model_dir
         model_dir="$(run_path "$seed")/state_dict"
         local best_model
-        best_model=$(ls "$model_dir"/*best_epoch*.onnx 2>/dev/null | head -n 1)
+        # not the <model>_logdiff.onnx of onnx_logdiff
+        best_model=$(ls "$model_dir"/*best_epoch*.onnx 2>/dev/null | grep -v '_logdiff\.onnx$' | head -n 1)
         if [[ -n "$best_model" ]]; then
             cp "$best_model" "${best_models_dir}/best_model_run${tag}.onnx"
             echo "  run${tag}: copied $(basename "$best_model")"
@@ -1067,6 +1231,75 @@ MONITOR_DIR="${OUT_DIR}/resource_usage"
 MONITOR_PID=""
 MONITOR_PHASE_FILE=""
 REMOVE_ON_EXIT=""
+# exit code of every training launched by this job, by seed (launch_trainings)
+declare -A TRAINING_RC=()
+
+# ─── K-fold status file ──────────────────────────────────────────────────────
+# OUT_DIR/kfold_status.txt: the folds that finished (they have a best ONNX
+# model) and those that did not, from the files in OUT_DIR (so it also covers
+# the folds of the other jobs), with the exit codes of the folds of this job.
+# Written atomically (temporary file + mv), since several fold jobs may end at
+# the same time; it is also printed in the log.
+write_kfold_status() {
+    local job_rc="$1"
+    [[ "$K_FOLDS" -ge 2 ]] || return 0
+    local status_file="${OUT_DIR}/kfold_status.txt"
+    local tmp_file="${status_file}.tmp.$$"
+    local -a done_lines=() missing_lines=() missing_folds=()
+    local f seed model_dir best ckpt epoch last_epoch info
+    for ((f=0; f<K_FOLDS; f++)); do
+        seed=$(( INIT_SEED + f ))
+        model_dir="${OUT_DIR}/fold_${f}/state_dict"
+        # the best model, not the <model>_logdiff.onnx of onnx_logdiff
+        best=$(ls "$model_dir"/*best_epoch*.onnx 2>/dev/null | grep -v '_logdiff\.onnx$' | head -n 1)
+        if [[ -n "$best" ]]; then
+            done_lines+=("  fold_${f}  $(basename "$best")")
+            continue
+        fi
+        missing_folds+=("$f")
+        last_epoch=-1
+        shopt -s nullglob
+        for ckpt in "$model_dir"/model_*_state_dict.pt; do
+            epoch="${ckpt##*/model_}"; epoch="${epoch%_state_dict.pt}"
+            [[ "$epoch" =~ ^[0-9]+$ && "$epoch" -gt "$last_epoch" ]] && last_epoch="$epoch"
+        done
+        shopt -u nullglob
+        if [[ -n "${TRAINING_RC[$seed]:-}" ]]; then
+            info="failed in this job (rc ${TRAINING_RC[$seed]})"
+        elif [[ -d "${OUT_DIR}/fold_${f}" ]]; then
+            info="not finished (failed, or still running in another job)"
+        else
+            info="not started"
+        fi
+        if [[ "$last_epoch" -ge 0 ]]; then
+            info+=", last checkpoint: epoch ${last_epoch}"
+        else
+            info+=", no checkpoint"
+        fi
+        missing_lines+=("  fold_${f}  ${info}")
+    done
+
+    local job="${SLURM_ARRAY_JOB_ID:-${SLURM_JOB_ID:-local $$}}${SLURM_ARRAY_TASK_ID:+_${SLURM_ARRAY_TASK_ID}}"
+    {
+        echo "K-fold status of ${OUT_DIR}"
+        echo "Written at the end of job ${job} (mode ${MODE}, exit code ${job_rc}) on $(date '+%Y-%m-%d %H:%M:%S')"
+        echo
+        echo "Finished (best ONNX model): ${#done_lines[@]}/${K_FOLDS}"
+        [[ ${#done_lines[@]} -gt 0 ]] && printf '%s\n' "${done_lines[@]}"
+        echo
+        echo "Failed / not finished (no best ONNX model): ${#missing_lines[@]}/${K_FOLDS}"
+        if [[ ${#missing_lines[@]} -gt 0 ]]; then
+            printf '%s\n' "${missing_lines[@]}"
+            echo
+            echo "Resume them (from their last checkpoint) and merge with:"
+            echo "  ${SCRIPT_DIR}/run_training.sh -c ${CONFIG_FILE} -o ${OUT_DIR} -k ${K_FOLDS} --missing-folds -g ${GPUS_PER_NODE}"
+        fi
+    } > "$tmp_file" && mv -f "$tmp_file" "$status_file"
+    echo
+    echo "=== K-fold status (${status_file}) ==="
+    cat "$status_file" 2>/dev/null
+    return 0
+}
 
 mark_phase() {
     [[ -n "$MONITOR_PHASE_FILE" ]] && echo "$(date +%s) $*" >> "$MONITOR_PHASE_FILE"
@@ -1116,6 +1349,9 @@ stop_monitor() {
 on_exit() {
     local rc=$?
     stop_monitor "$rc"
+    # k-fold status of all the folds (not after the prepare job, which trains
+    # none), before the copy so that it is copied too
+    [[ "$MODE" != prepare_shared ]] && write_kfold_status "$rc"
     if [[ -n "$REMOVE_ON_EXIT" ]]; then
         echo "Removing the k-fold cache ${REMOVE_ON_EXIT}"
         rm -rf "$REMOVE_ON_EXIT"
@@ -1183,12 +1419,19 @@ case "$MODE" in
         # starting its folds (every array task prepares its own, on its node)
         [[ "$USE_KFOLD_CACHE" == true ]] && run_prepare
 
-        launch_trainings $(seq "$NODE_START" "$NODE_END")
+        TRAIN_FAILED=false
+        launch_trainings $(seq "$NODE_START" "$NODE_END") || TRAIN_FAILED=true
+        if [[ "$TRAIN_FAILED" == true ]]; then
+            # no post-processing (the k-fold merge would fail on the missing
+            # folds anyway): the job fails, and so do the jobs after it
+            echo "Node ${TASK_ID}: some trainings failed, skipping the post-processing."
+            exit 1
+        fi
         echo "Node ${TASK_ID}: all trainings complete."
 
         # For single-node multi-training: run postproc inline (no separate job)
         if [[ "$N_TRAININGS" -gt 1 && "$NODES" -eq 1 && ( "$SEPARATE_MERGE" != true || "$NO_SLURM" == true ) ]]; then
-            run_postproc
+            run_postproc || exit 1
             COPY_AT_END=true
         fi
         # a single training is the last job too (otherwise the post-processing
@@ -1197,7 +1440,8 @@ case "$MODE" in
         ;;
 
     postproc)
-        run_postproc && COPY_AT_END=true
+        run_postproc || exit 1
+        COPY_AT_END=true
         ;;
 
     prepare_shared)
@@ -1224,15 +1468,21 @@ case "$MODE" in
             JOB_FOLDS=($(seq "$FIRST" "$LAST"))
         fi
         copy_shared_cache
-        launch_trainings $(for f in "${JOB_FOLDS[@]}"; do echo $(( INIT_SEED + f )); done)
+        launch_trainings $(for f in "${JOB_FOLDS[@]}"; do echo $(( INIT_SEED + f )); done) || exit 1
         echo "Folds ${JOB_FOLDS[*]} complete."
         ;;
 
     train_folds_merge)
         # --fold-jobs / --missing-folds with --no-slurm: the folds, then the merge
         if [[ -n "$FOLD_LIST" ]]; then
+            # no shared cache (e.g. after a single job): load the events again,
+            # with the saved split if resuming (--load-last / --missing-folds)
+            if [[ ! -f "${SHARED_CACHE_DIR}/kfold_cache_meta.json" ]]; then
+                mkdir -p "$(dirname "$SHARED_CACHE_DIR")"
+                run_prepare "$SHARED_CACHE_DIR" keep
+            fi
             copy_shared_cache
-            launch_trainings $(for f in $FOLD_LIST; do echo $(( INIT_SEED + f )); done)
+            launch_trainings $(for f in $FOLD_LIST; do echo $(( INIT_SEED + f )); done) || exit 1
         fi
         [[ -d "$SHARED_CACHE_DIR" ]] && MERGE_CACHE_DIR="$SHARED_CACHE_DIR"
         run_postproc || exit 1
@@ -1263,7 +1513,7 @@ case "$MODE" in
         for ((first=0; first<K_FOLDS; first+=FOLDS_PER_JOB)); do
             last=$(( first + FOLDS_PER_JOB - 1 ))
             [[ "$last" -ge "$K_FOLDS" ]] && last=$(( K_FOLDS - 1 ))
-            launch_trainings $(seq $(( INIT_SEED + first )) $(( INIT_SEED + last )))
+            launch_trainings $(seq $(( INIT_SEED + first )) $(( INIT_SEED + last ))) || exit 1
         done
         MERGE_CACHE_DIR="$SHARED_CACHE_DIR"
         run_postproc || exit 1

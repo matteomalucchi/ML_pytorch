@@ -6,6 +6,9 @@ fold k. This script:
     the out-of-fold scores of all the events, and plots them (score histograms,
     ROC and calibration curves); they are saved
     (<main_dir>/kfold/score_lbl_array_oof.npz) only with --save-numpy
+  - with history: True, plots the training / validation loss / accuracy of
+    all the folds (<main_dir>/kfold/history_<train|val>_<loss|accuracy>),
+    read from the fold_<k>/history.npz saved by every fold
   - checks that the test folds are disjoint, cover all the events and are
     those the folds were trained with
   - summarises the metrics of the folds with their mean and standard
@@ -15,7 +18,12 @@ fold k. This script:
     ratios of the outputs (reweighting) and, with kfold_split event, the model
     that evaluates every event with the model of the fold event % k_folds;
     with the ratio (reweighting) or the multiclass morphing weight, also the
-    per-event median over the folds of the weight
+    per-event median over the folds of the weight; with the per-fold
+    _logdiff.onnx models (models defining export_logdiff_model), also
+    the combinations of the folds in log space of the per-fold log-weights
+    z_1 - z_0 (geometric mean and median), and with weight_log_clamp the
+    weights are bounded to [exp(-c), exp(c)] (the fraction of clamped events
+    is written to kfold_summary.yml)
 With --onnx-only only the combined ONNX models are built (no events loaded).
 """
 
@@ -35,6 +43,7 @@ from omegaconf import OmegaConf
 
 from ml_pytorch.utils.lumitext import get_lumitext
 from ml_pytorch.utils.onnx_tools import (
+    build_kfold_logdiff_models,
     build_kfold_models,
     build_multiclass_morphing_models,
     save_onnx_model,
@@ -56,6 +65,11 @@ logger = logging.getLogger(__name__)
 #   all_folds : the output of every fold separately, not averaged (outputs
 #               <name>_fold_<k>)
 #   event_fold: the output of the fold event % k_folds (inputs args_0, event)
+#   logaverage: exp(mean over the folds of the log-weight z_1 - z_0 of every
+#               fold), i.e. the geometric mean of the weights (_logdiff.onnx,
+#               only morphing_ratio)
+#   logmedian : exp(median over the folds of the log-weight) (_logdiff.onnx,
+#               only morphing_ratio)
 KFOLD_ONNX_TYPES = {
     "": "classifier",
     "_ratio": "morphing_ratio",
@@ -73,14 +87,33 @@ KFOLD_ONNX_NAMES = {
     # there is no median of the classifier scores
     if not (combination == "median" and suffix == "")
 }
+# combinations of the folds in log space of the per-fold log-weights
+# (_logdiff.onnx per fold), only for the binary reweighting
+KFOLD_ONNX_NAMES.update(
+    {
+        f"{combination}_ratio": f"kfold_morphing_ratio_{combination}.onnx"
+        for combination in ["logaverage", "logmedian"]
+    }
+)
+KFOLD_ONNX_CHOICES = ["average", "event", "median", "logaverage", "logmedian"]
 
 
-def final_onnx_key(kfold_onnx, ratio, morphing=False):
+def final_onnx_key(kfold_onnx, ratio, morphing=False, logdiff=False):
     """Key in KFOLD_ONNX_NAMES of the final model chosen with kfold_onnx."""
-    if kfold_onnx not in ["average", "event", "median"]:
+    if kfold_onnx not in KFOLD_ONNX_CHOICES:
         raise ValueError(
-            f"kfold_onnx must be average, event or median, got {kfold_onnx}"
+            f"kfold_onnx must be one of {KFOLD_ONNX_CHOICES}, got {kfold_onnx}"
         )
+    if kfold_onnx in ["logaverage", "logmedian"]:
+        # combination of the per-fold log-weights z_1 - z_0
+        if not logdiff or morphing:
+            raise ValueError(
+                f"kfold_onnx: {kfold_onnx} combines the per-fold log-weights of "
+                "the _logdiff.onnx models: the folds must be trained with a model "
+                "that defines export_logdiff_model (e.g. "
+                "DNN_softmax_reweight_model_maskedBN1D_logdiff), no morphing_alpha"
+            )
+        return f"{kfold_onnx}_ratio"
     if kfold_onnx == "median" and not (morphing or ratio):
         # the median is taken over the folds of the weight of each fold
         raise ValueError(
@@ -170,11 +203,13 @@ def check_fold_configs(fold_dirs):
     logger.info(f"Checked that the {len(fold_dirs)} folds are the folds of the same split")
 
 
-def get_kfold_data(cfg):
+def get_kfold_data(cfg, main_dir=None):
     """(cfg, arrays, meta, temp_dir) of the events of the k-fold training:
     the memory-mapped k-fold cache if it still exists (e.g. the merge runs in
     the same job as the folds), otherwise the events are loaded again into a
-    temporary cache (temp_dir, to be removed by the caller)."""
+    temporary cache (temp_dir, to be removed by the caller), with the folds
+    taken from the record of the split (kfold_split_dir, by default
+    <main_dir>/kfold_split) if there is one."""
     from ml_pytorch.utils.dataset import kfold_cache_exists, load_data, open_kfold_cache
     from ml_pytorch.utils.tools import resolve_input_variables
 
@@ -192,7 +227,19 @@ def get_kfold_data(cfg):
         prepare_cfg = OmegaConf.create(OmegaConf.to_container(cfg))
         prepare_cfg.kfold_cache = temp_dir
         prepare_cfg.kfold_prepare = True
-        prepare_cfg.kfold_split_dir = None
+        # rebuild exactly the split of the folds: checked against (and taken
+        # from) the record of the split saved by the first preparation, if
+        # there is one (not rewritten); otherwise not saved again
+        from ml_pytorch.utils.dataset import kfold_split_record_exists
+
+        split_dir = cfg.get("kfold_split_dir", None) or (
+            os.path.join(main_dir, "kfold_split") if main_dir else None
+        )
+        if split_dir and kfold_split_record_exists(split_dir):
+            prepare_cfg.kfold_split_dir = split_dir
+            prepare_cfg.kfold_reuse_split = True
+        else:
+            prepare_cfg.kfold_split_dir = None
         load_data(prepare_cfg, prepare_cfg.seed)
         cache_dir = temp_dir
     arrays, meta = open_kfold_cache(cache_dir, cfg)
@@ -242,16 +289,123 @@ def check_fold_info(fold_dir, fold, test_rows, n_events):
             )
 
 
-def merge_scores(cfg, fold_dirs, out_dir, save=False):
+def fold_log_weights(onnx_file, arrays, rows, logdiff, chunk_size=500_000):
+    """Log of the per-fold weight of the events ``rows`` (sorted), float64:
+    the output z_1 - z_0 of a _logdiff.onnx model (``logdiff``), or the log
+    of the ratio of the outputs of the softmax model (p / (1 - p) for 1 node,
+    p1 / p0 for 2; +-inf where the ratio is 0 or inf)."""
+    session = ort.InferenceSession(onnx_file, providers=["CPUExecutionProvider"])
+    input_name = session.get_inputs()[0].name
+    out = []
+    for start in range(0, len(rows), chunk_size):
+        fts = np.asarray(arrays["fts"][rows[start : start + chunk_size]])
+        o = session.run(None, {input_name: fts[:, :-1].astype(np.float32)})[0]
+        if logdiff:
+            out.append(o.astype(np.float64).reshape(-1))
+        else:
+            o = o.astype(np.float64)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                out.append(np.log(ratio_of_outputs(o)).reshape(-1))
+    return np.concatenate(out) if out else np.zeros(0)
+
+
+def clamped_fraction(log_w, c):
+    """Fractions of the events whose weight exp(log_w) is clamped by
+    weight_log_clamp c (below exp(-c), above exp(c) and in total)."""
+    n = max(1, len(log_w))
+    low = int(np.sum(log_w < -c))
+    high = int(np.sum(log_w > c))
+    return {
+        "low": low / n,
+        "high": high / n,
+        "total": (low + high) / n,
+        "n_events": int(len(log_w)),
+    }
+
+
+def weight_clamp_fractions(
+    fold_dirs, arrays, test_rows, fold_id, weight_log_clamp, logdiff, event_split,
+    n_events_combined=1_000_000,
+):
+    """Fraction of the events whose weight is clamped by weight_log_clamp c,
+    on the k-fold data (written to kfold_summary.yml, weight_clamp):
+      - oof_fold: the weight of the fold the event is a test event of (the
+        out-of-fold weight; with kfold_split event it is the event model), on
+        all the events;
+      - average_ratio, median_ratio and, with the logdiff models, logaverage_ratio
+        and logmedian_ratio: the weight of the combined models (numpy
+        reference, computed before the clamp), on a random subset of
+        n_events_combined events, every one evaluated with all the folds (with
+        kfold_split event also event_ratio, the fold event % k_folds).
+    The per-fold log-weights are the _logdiff.onnx outputs if available,
+    otherwise the log of the ratio of the softmax outputs."""
+    c = float(weight_log_clamp)
+    files = [find_best_onnx(d, logdiff=logdiff) for d in fold_dirs]
+    oof = np.concatenate(
+        [
+            fold_log_weights(f, arrays, np.sort(rows), logdiff)
+            for f, rows in zip(files, test_rows)
+        ]
+    )
+    result = {
+        "weight_log_clamp": c,
+        "w_min": float(np.exp(-c)),
+        "w_max": float(np.exp(c)),
+        "log_weights": "logdiff" if logdiff else "log(p1 / p0)",
+        "oof_fold": clamped_fraction(oof, c),
+    }
+
+    n_events = len(fold_id)
+    rng = np.random.default_rng(1)
+    rows = np.sort(
+        rng.choice(n_events, min(n_events, n_events_combined), replace=False)
+    )
+    log_w = np.array([fold_log_weights(f, arrays, rows, logdiff) for f in files])
+    with np.errstate(over="ignore", invalid="ignore"):
+        w = np.exp(log_w)
+        combined = {
+            "average_ratio": np.log(np.mean(w, axis=0)),
+            "median_ratio": np.log(np.median(w, axis=0)),
+        }
+    if logdiff:
+        combined["logaverage_ratio"] = np.mean(log_w, axis=0)
+        combined["logmedian_ratio"] = np.median(log_w, axis=0)
+    if event_split:
+        combined["event_ratio"] = np.choose(fold_id[rows], log_w)
+    for key, value in combined.items():
+        result[key] = clamped_fraction(value, c)
+    for key, value in result.items():
+        if isinstance(value, dict):
+            logger.info(
+                f"weight_log_clamp {c}: clamped fraction of {key}: "
+                f"{value['total']:.3e} (low {value['low']:.3e}, high "
+                f"{value['high']:.3e}, {value['n_events']} events)"
+            )
+    return result
+
+
+def merge_scores(
+    cfg,
+    fold_dirs,
+    out_dir,
+    save=False,
+    weight_log_clamp=None,
+    logdiff=False,
+    n_clamp_events=1_000_000,
+):
     """Out-of-fold scores of all the events: every fold model is evaluated in
     memory on its test events (and on a random fraction 1/(K-1) of its
     distinct training events, about one score per event in total, for the
     comparison with the training dataset in the plots). Also check that the
     test folds are disjoint, cover all the events and are those the folds were
-    trained with. The scores are saved to out_dir only if ``save``."""
+    trained with. The scores are saved to out_dir only if ``save``. With
+    ``weight_log_clamp`` the fractions of clamped weights (see
+    weight_clamp_fractions) are returned in ``weight_clamp``."""
     from ml_pytorch.utils.dataset import kfold_indices
 
-    cfg, arrays, meta, temp_dir = get_kfold_data(cfg)
+    cfg, arrays, meta, temp_dir = get_kfold_data(
+        cfg, main_dir=os.path.dirname(os.path.normpath(fold_dirs[0]))
+    )
     try:
         k_folds = cfg.k_folds
         n_events = meta["n_events"]
@@ -262,7 +416,7 @@ def merge_scores(cfg, fold_dirs, out_dir, save=False):
         counts = np.bincount(fold_id, minlength=k_folds)
 
         rng = np.random.default_rng(0)
-        test, train = [], []
+        test, train, test_rows = [], [], []
         for k, fold_dir in enumerate(fold_dirs):
             fold_cfg = OmegaConf.create(OmegaConf.to_container(cfg))
             fold_cfg.fold = k
@@ -272,6 +426,7 @@ def merge_scores(cfg, fold_dirs, out_dir, save=False):
             if len(test_idx) != counts[k] or (fold_id[test_idx] != k).any():
                 raise ValueError(f"The test events of fold {k} are not the events of fold {k}")
             check_fold_info(fold_dir, k, test_idx, n_events)
+            test_rows.append(test_idx)
 
             onnx_file = find_best_onnx(fold_dir)
             test.append(evaluate_onnx(onnx_file, arrays, np.sort(test_idx)))
@@ -283,6 +438,18 @@ def merge_scores(cfg, fold_dirs, out_dir, save=False):
                 )
             )
             logger.info(f"Fold {k}: evaluated {len(test_idx)} out-of-fold events")
+        weight_clamp = None
+        if weight_log_clamp is not None:
+            weight_clamp = weight_clamp_fractions(
+                fold_dirs,
+                arrays,
+                test_rows,
+                fold_id,
+                weight_log_clamp,
+                logdiff,
+                cfg.kfold_split == "event",
+                n_clamp_events,
+            )
     finally:
         if temp_dir is not None:
             shutil.rmtree(temp_dir, ignore_errors=True)
@@ -313,17 +480,52 @@ def merge_scores(cfg, fold_dirs, out_dir, save=False):
         out_file = f"{out_dir}/score_lbl_array_oof.npz"
         np.savez(out_file, **merged)
         logger.info(f"Saved the out-of-fold scores of {n_oof} events in {out_file}")
+    if weight_clamp is not None:
+        merged["weight_clamp"] = weight_clamp
     return merged
 
 
-def find_best_onnx(fold_dir):
-    onnx_files = sorted(glob.glob(f"{fold_dir}/state_dict/model_best_epoch_*.onnx"))
+def folds_have_logdiff(fold_dirs):
+    """True if the best model of every fold has its _logdiff.onnx model (the
+    per-fold log-weight z_1 - z_0, exported by ml_train for the models that
+    define export_logdiff_model), False if none has it."""
+    has = [
+        os.path.exists(find_best_onnx(d)[: -len(".onnx")] + "_logdiff.onnx")
+        for d in fold_dirs
+    ]
+    if any(has) and not all(has):
+        raise FileNotFoundError(
+            "Only some folds have the _logdiff.onnx model of their best epoch: "
+            f"missing in {[d for d, h in zip(fold_dirs, has) if not h]}"
+        )
+    if all(has):
+        logger.info("Using the per-fold log-weight models (_logdiff.onnx)")
+    return all(has)
+
+
+def find_best_onnx(fold_dir, logdiff=False):
+    """Best model ONNX of a fold (softmax outputs) or, with ``logdiff``, the
+    _logdiff.onnx model of the same epoch (log-weight z_1 - z_0)."""
+    onnx_files = sorted(
+        f
+        for f in glob.glob(f"{fold_dir}/state_dict/model_best_epoch_*.onnx")
+        # the _logdiff.onnx models (log-weights) are not the best model
+        if not f.endswith("_logdiff.onnx")
+    )
     if not onnx_files:
         raise FileNotFoundError(
             f"No best model ONNX found in {fold_dir}/state_dict (train with onnx: True)"
         )
     if len(onnx_files) > 1:
         logger.warning(f"Several best models in {fold_dir}, using {onnx_files[-1]}")
+    if logdiff:
+        logdiff_file = onnx_files[-1][: -len(".onnx")] + "_logdiff.onnx"
+        if not os.path.exists(logdiff_file):
+            raise FileNotFoundError(
+                f"No {logdiff_file} (exported only by the models that define "
+                "export_logdiff_model)"
+            )
+        return logdiff_file
     return onnx_files[-1]
 
 
@@ -367,8 +569,33 @@ def morphing_weights(fold_out, event, k_folds, alpha, alpha_den):
     }
 
 
-def check_kfold_models(fold_files, kfold_files, n_features, k_folds, morphing=None):
-    """Compare the combined models with the per-fold models on random inputs."""
+def clip_weight(w, weight_log_clamp):
+    """numpy reference of the clip of the weight to [exp(-c), exp(c)]."""
+    if weight_log_clamp is None:
+        return w
+    return np.clip(w, np.exp(-weight_log_clamp), np.exp(weight_log_clamp))
+
+
+def exp_clamped(log_w, weight_log_clamp):
+    """numpy reference of exp(clamp(log_w, -c, c))."""
+    if weight_log_clamp is not None:
+        log_w = np.clip(log_w, -weight_log_clamp, weight_log_clamp)
+    return np.exp(log_w)
+
+
+def check_kfold_models(
+    fold_files,
+    kfold_files,
+    n_features,
+    k_folds,
+    morphing=None,
+    logdiff_files=None,
+    weight_log_clamp=None,
+):
+    """Compare the combined models with the per-fold models on random inputs.
+    With ``logdiff_files`` (the per-fold _logdiff.onnx models) also check that
+    exp(logdiff) = p1 / p0 of every fold and the log-space combinations; the
+    weight models are checked with the clamp ``weight_log_clamp``."""
     rng = np.random.default_rng(0)
     x = rng.normal(size=(100, n_features)).astype(np.float32)
     # large event numbers, which are not exact in float32
@@ -386,10 +613,35 @@ def check_kfold_models(fold_files, kfold_files, n_features, k_folds, morphing=No
         expected.update(morphing_weights(fold_out, event, k_folds, *morphing))
     if any(k in kfold_files for k in ["average_ratio", "median_ratio", "event_ratio"]):
         fold_ratios = [ratio_of_outputs(o) for o in fold_out]
-        expected["average_ratio"] = np.mean(fold_ratios, axis=0)
-        expected["median_ratio"] = np.median(fold_ratios, axis=0)
-        expected["event_ratio"] = np.choose(event % k_folds, fold_ratios)
+        expected["average_ratio"] = clip_weight(
+            np.mean(fold_ratios, axis=0), weight_log_clamp
+        )
+        expected["median_ratio"] = clip_weight(
+            np.median(fold_ratios, axis=0), weight_log_clamp
+        )
+        expected["event_ratio"] = clip_weight(
+            np.choose(event % k_folds, fold_ratios), weight_log_clamp
+        )
         expected["all_folds_ratio"] = fold_ratios
+    if logdiff_files:
+        from ml_pytorch.utils.tools import check_logdiff_onnx
+
+        for fold_file, logdiff_file in zip(fold_files, logdiff_files):
+            check_logdiff_onnx(fold_file, logdiff_file, x)
+        # float64, as the reference of the float32 ONNX graphs
+        fold_logdiff = [
+            run_onnx(f, [x]).astype(np.float64) for f in logdiff_files
+        ]
+        expected["logaverage_ratio"] = exp_clamped(
+            np.mean(fold_logdiff, axis=0), weight_log_clamp
+        )
+        expected["logmedian_ratio"] = exp_clamped(
+            np.median(fold_logdiff, axis=0), weight_log_clamp
+        )
+        # with the logdiff models the event model is built from the log-weights
+        expected["event_ratio"] = exp_clamped(
+            np.choose(event % k_folds, fold_logdiff), weight_log_clamp
+        )
 
     for key, model_file in kfold_files.items():
         inputs = [x, event] if key.startswith("event") else [x]
@@ -417,14 +669,27 @@ def check_kfold_models(fold_files, kfold_files, n_features, k_folds, morphing=No
 
 
 def merge_onnx(
-    fold_dirs, out_dir, ratio, event_split, kfold_onnx="average", alpha=None, alpha_den=0.0
+    fold_dirs,
+    out_dir,
+    ratio,
+    event_split,
+    kfold_onnx="average",
+    alpha=None,
+    alpha_den=0.0,
+    logdiff=False,
+    weight_log_clamp=None,
 ):
     """Copy the best model of each fold and build the combined models.
     Returns their files and the key of the one chosen with kfold_onnx (the
     model to use, recorded in the summary). With ``alpha`` (4-node multiclass
     morphing models) it is the morphing weight with the ttbar subtraction (see
     build_multiclass_morphing_models). With kfold_onnx median it is the median
-    over the folds of the weight."""
+    over the folds of the weight. With ``logdiff`` (_logdiff.onnx models) the
+    per-fold _logdiff.onnx models are copied too (folds/model_fold<k>_logdiff
+    .onnx) and the log-space combinations (logaverage, logmedian and, with
+    kfold_split event, the event model) are built from them. With
+    ``weight_log_clamp`` c the final weight models are bounded to
+    [exp(-c), exp(c)]."""
     folds_dir = f"{out_dir}/folds"
     os.makedirs(folds_dir, exist_ok=True)
     fold_files = []
@@ -433,6 +698,13 @@ def merge_onnx(
         shutil.copy(find_best_onnx(d), fold_file)
         fold_files.append(fold_file)
         logger.info(f"Fold {k}: copied the best model to {fold_file}")
+    logdiff_files = []
+    if logdiff:
+        for k, d in enumerate(fold_dirs):
+            logdiff_file = f"{folds_dir}/model_fold{k}_logdiff.onnx"
+            shutil.copy(find_best_onnx(d, logdiff=True), logdiff_file)
+            logdiff_files.append(logdiff_file)
+            logger.info(f"Fold {k}: copied the best logdiff model to {logdiff_file}")
 
     onnx_models = [onnx.load(f) for f in fold_files]
     graph_input = onnx_models[0].graph.input[0]
@@ -452,12 +724,32 @@ def merge_onnx(
                 f"multiclass morphing give the ttbar fraction alpha)"
             )
         ratio = False
+    if logdiff and n_outputs != 2:
+        raise ValueError(
+            f"The _logdiff.onnx models are for the 2-node softmax reweighting, the model has "
+            f"{n_outputs} outputs"
+        )
     # fail before building the models if the chosen final model does not exist
-    final_key = final_onnx_key(kfold_onnx, ratio, morphing)
+    final_key = final_onnx_key(kfold_onnx, ratio, morphing, logdiff)
 
     combined = build_kfold_models(
-        onnx_models, n_features, ratio=ratio, event_split=event_split
+        onnx_models,
+        n_features,
+        ratio=ratio,
+        event_split=event_split,
+        weight_log_clamp=weight_log_clamp,
     )
+    if logdiff:
+        # the event model of the weight is replaced by the one built from the
+        # log-weights
+        combined.update(
+            build_kfold_logdiff_models(
+                [onnx.load(f) for f in logdiff_files],
+                n_features,
+                event_split=event_split,
+                weight_log_clamp=weight_log_clamp,
+            )
+        )
     if morphing:
         logger.info(f"Multiclass morphing with alpha {alpha}, alpha_den {alpha_den}")
         combined.update(
@@ -475,6 +767,8 @@ def merge_onnx(
         n_features,
         len(fold_dirs),
         morphing=(alpha, alpha_den) if morphing else None,
+        logdiff_files=logdiff_files,
+        weight_log_clamp=weight_log_clamp,
     )
 
     logger.info(
@@ -484,7 +778,15 @@ def merge_onnx(
     return kfold_files, final_key
 
 
-def merge_kfold(main_dir, cfg, ratio=None, plots=True, save_numpy=False, onnx_only=False):
+def merge_kfold(
+    main_dir,
+    cfg,
+    ratio=None,
+    plots=True,
+    save_numpy=False,
+    onnx_only=False,
+    n_clamp_events=1_000_000,
+):
     """With ``onnx_only`` only the combined ONNX models are built: the fold
     metrics, the out-of-fold scores and the plots are skipped, and only the
     final model of the existing kfold_summary.yml is updated."""
@@ -495,11 +797,21 @@ def merge_kfold(main_dir, cfg, ratio=None, plots=True, save_numpy=False, onnx_on
     event_split = cfg.kfold_split == "event"
     if cfg.kfold_onnx == "event" and not event_split:
         raise ValueError("kfold_onnx: event needs kfold_split: event")
-    if cfg.onnx and cfg.kfold_onnx == "median":
-        # before the (long) evaluation of the out-of-fold scores
-        final_onnx_key("median", ratio, cfg.get("morphing_alpha", None) is not None)
-
     fold_dirs = get_fold_dirs(main_dir, k_folds)
+    # the per-fold log-weights z_1 - z_0 are used if all the folds exported
+    # them (models defining export_logdiff_model)
+    logdiff = folds_have_logdiff(fold_dirs) if cfg.onnx else False
+    weight_log_clamp = cfg.get("weight_log_clamp", None)
+    if weight_log_clamp is not None:
+        weight_log_clamp = float(weight_log_clamp)
+        if weight_log_clamp <= 0:
+            raise ValueError(f"weight_log_clamp must be positive, got {weight_log_clamp}")
+    if cfg.onnx and cfg.kfold_onnx in ["median", "logaverage", "logmedian"]:
+        # before the (long) evaluation of the out-of-fold scores
+        final_onnx_key(
+            cfg.kfold_onnx, ratio, cfg.get("morphing_alpha", None) is not None, logdiff
+        )
+
     kfold_dir = f"{main_dir}/kfold"
     os.makedirs(kfold_dir, exist_ok=True)
 
@@ -516,9 +828,27 @@ def merge_kfold(main_dir, cfg, ratio=None, plots=True, save_numpy=False, onnx_on
         fold_metrics = [read_fold_metrics(d) for d in fold_dirs]
         summary = summarise_metrics(fold_metrics)
 
-        merged = merge_scores(
-            cfg, fold_dirs, kfold_dir, save=bool(save_numpy or cfg.get("save_numpy", False))
+        # fraction of clamped weights, only for the binary reweighting
+        clamp_info = (
+            weight_log_clamp
+            if (
+                weight_log_clamp is not None
+                and ratio
+                and cfg.get("morphing_alpha", None) is None
+            )
+            else None
         )
+        merged = merge_scores(
+            cfg,
+            fold_dirs,
+            kfold_dir,
+            save=bool(save_numpy or cfg.get("save_numpy", False)),
+            weight_log_clamp=clamp_info,
+            logdiff=logdiff,
+            n_clamp_events=n_clamp_events,
+        )
+        if "weight_clamp" in merged:
+            summary["weight_clamp"] = merged.pop("weight_clamp")
 
     if not onnx_only and plots and (cfg.histos or cfg.roc):
         from ml_pytorch.scripts.sig_bkg_eval import (
@@ -539,6 +869,12 @@ def merge_kfold(main_dir, cfg, ratio=None, plots=True, save_numpy=False, onnx_on
             save_roc=bool(cfg.get("save_roc", False)),
         )
 
+    if not onnx_only and plots and cfg.get("history", False):
+        # history of all the folds, from the fold_<k>/history.npz of every fold
+        from ml_pytorch.scripts.plot_history import plot_history_folds
+
+        plot_history_folds(fold_dirs, kfold_dir, lumitext=get_lumitext(cfg))
+
     if cfg.onnx:
         alpha = cfg.get("morphing_alpha", None)
         kfold_files, final_key = merge_onnx(
@@ -549,6 +885,8 @@ def merge_kfold(main_dir, cfg, ratio=None, plots=True, save_numpy=False, onnx_on
             cfg.kfold_onnx,
             alpha=alpha,
             alpha_den=cfg.get("morphing_alpha_den", 0.0) or 0.0,
+            logdiff=logdiff,
+            weight_log_clamp=weight_log_clamp,
         )
         for key, f in kfold_files.items():
             logger.info(f"K-fold ONNX model ({key}): {f}")
@@ -563,6 +901,11 @@ def merge_kfold(main_dir, cfg, ratio=None, plots=True, save_numpy=False, onnx_on
                 ["args_0", "event"] if final_key.startswith("event") else ["args_0"]
             ),
         }
+        if logdiff or weight_log_clamp is not None:
+            # recorded only when used, so that the summary of the default
+            # configuration does not change
+            summary["final_onnx"]["logdiff_models"] = logdiff
+            summary["final_onnx"]["weight_log_clamp"] = weight_log_clamp
 
     OmegaConf.save(OmegaConf.create(summary), summary_file)
     logger.info(f"K-fold summary saved in {summary_file}:\n{OmegaConf.to_yaml(summary)}")
@@ -599,8 +942,8 @@ def main():
     parser.add_argument(
         "--kfold-onnx",
         default=None,
-        choices=["average", "event", "median"],
-        help="Final ONNX model (overrides config): average over the folds, model of the fold event %% k_folds, or median over the folds of the weight (needs --ratio or --alpha)",
+        choices=KFOLD_ONNX_CHOICES,
+        help="Final ONNX model (overrides config): average over the folds, model of the fold event %% k_folds, median over the folds of the weight (needs --ratio or --alpha), or geometric mean (logaverage) / median (logmedian) over the folds of the per-fold weights computed in log space (need the per-fold _logdiff.onnx models)",
     )
     parser.add_argument(
         "-al",
@@ -634,6 +977,12 @@ def main():
     )
     parser.add_argument(
         "--no-plots", action="store_true", help="Do not plot the out-of-fold scores"
+    )
+    parser.add_argument(
+        "--clamp-events",
+        default=1_000_000,
+        type=int,
+        help="With weight_log_clamp: number of random events on which all the folds are evaluated to compute the fraction of clamped weights of the combined models (default 1000000; the per-fold out-of-fold weights use all the events)",
     )
     parser.add_argument(
         "--onnx-only",
@@ -681,6 +1030,7 @@ def main():
         plots=not args.no_plots,
         save_numpy=args.save_numpy,
         onnx_only=args.onnx_only,
+        n_clamp_events=args.clamp_events,
     )
 
 
